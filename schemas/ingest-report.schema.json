@@ -1,0 +1,358 @@
+{
+  "$defs": {
+    "Decision": {
+      "additionalProperties": false,
+      "description": "A choice the pipeline made that a reader may need to audit.\n\nDeterministic by construction: no timings, no counters, nothing that varies between\ntwo identical runs. The spec asks for the report's decision subsection to be\nsemantically stable even though the report as a whole is exempt (INV-02).\n\n``subject`` is what the decision was about — a track id, a source path, a segment\nid — and is what makes two decisions with the same ``code`` orderable.",
+      "properties": {
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "detail": {
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "details": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Details",
+          "type": "object"
+        },
+        "subject": {
+          "minLength": 1,
+          "title": "Subject",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "subject",
+        "detail"
+      ],
+      "title": "Decision",
+      "type": "object"
+    },
+    "Deliverable": {
+      "additionalProperties": false,
+      "description": "A file this run produced, and its hash.",
+      "properties": {
+        "relative_path": {
+          "title": "Relative Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "relative_path",
+        "sha256",
+        "size_bytes"
+      ],
+      "title": "Deliverable",
+      "type": "object"
+    },
+    "OverallStatus": {
+      "enum": [
+        "complete",
+        "partial",
+        "failed"
+      ],
+      "title": "OverallStatus",
+      "type": "string"
+    },
+    "Provenance": {
+      "additionalProperties": false,
+      "description": "Deterministic facts about the inputs and the software.\n\nINV-03: nothing in here may vary between two identical runs. No timestamps, no\ndurations, no cache counters, no hostname. Those live in :class:`Telemetry`, and\n``tests/test_report.py`` asserts that no field here is time-typed.",
+      "properties": {
+        "config_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Config Hash",
+          "type": "string"
+        },
+        "deliverables": {
+          "items": {
+            "$ref": "#/$defs/Deliverable"
+          },
+          "title": "Deliverables",
+          "type": "array"
+        },
+        "model_identity": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Model Identity",
+          "type": "object"
+        },
+        "package_versions": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Package Versions",
+          "type": "object"
+        },
+        "tool_versions": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Tool Versions",
+          "type": "object"
+        }
+      },
+      "required": [
+        "config_hash"
+      ],
+      "title": "Provenance",
+      "type": "object"
+    },
+    "ReportWarning": {
+      "additionalProperties": false,
+      "description": "Something the operator should look at that did not stop the run.",
+      "properties": {
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "details": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Details",
+          "type": "object"
+        },
+        "message": {
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "ReportWarning",
+      "type": "object"
+    },
+    "StageName": {
+      "description": "The executable stage DAG, in dependency order.\n\nDeclaration order is the serialization order — see :data:`STAGE_ORDER`. Report\nfinalization is not here: it is an always-run internal sink, not a stage that can\nitself be skipped.",
+      "enum": [
+        "inspect",
+        "reconstruct",
+        "activity",
+        "transcribe",
+        "render",
+        "mix"
+      ],
+      "title": "StageName",
+      "type": "string"
+    },
+    "StageReport": {
+      "additionalProperties": false,
+      "description": "One stage's outcome.",
+      "properties": {
+        "errors": {
+          "items": {
+            "$ref": "#/$defs/StructuredError"
+          },
+          "title": "Errors",
+          "type": "array"
+        },
+        "skip_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Skip Reason"
+        },
+        "stage": {
+          "$ref": "#/$defs/StageName"
+        },
+        "status": {
+          "$ref": "#/$defs/StageStatus"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/ReportWarning"
+          },
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "stage",
+        "status"
+      ],
+      "title": "StageReport",
+      "type": "object"
+    },
+    "StageStatus": {
+      "enum": [
+        "complete",
+        "failed",
+        "skipped"
+      ],
+      "title": "StageStatus",
+      "type": "string"
+    },
+    "StructuredError": {
+      "additionalProperties": false,
+      "description": "A failure a caller can branch on without parsing prose.",
+      "properties": {
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "details": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Details",
+          "type": "object"
+        },
+        "message": {
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "StructuredError",
+      "type": "object"
+    },
+    "Telemetry": {
+      "additionalProperties": false,
+      "description": "Per-run measurements. Legitimately different every time.\n\nThe report as a whole is exempt from byte-stability precisely because of this\nsection; its provenance and decisions must still be semantically stable (INV-02).",
+      "properties": {
+        "cache_hits": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Cache Hits",
+          "type": "integer"
+        },
+        "cache_misses": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Cache Misses",
+          "type": "integer"
+        },
+        "finished_at": {
+          "format": "date-time",
+          "title": "Finished At",
+          "type": "string"
+        },
+        "stage_seconds": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/StageName"
+          },
+          "title": "Stage Seconds",
+          "type": "object"
+        },
+        "started_at": {
+          "format": "date-time",
+          "title": "Started At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "started_at",
+        "finished_at"
+      ],
+      "title": "Telemetry",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The structured record of one run.",
+  "properties": {
+    "decisions": {
+      "items": {
+        "$ref": "#/$defs/Decision"
+      },
+      "title": "Decisions",
+      "type": "array"
+    },
+    "overall_status": {
+      "$ref": "#/$defs/OverallStatus"
+    },
+    "provenance": {
+      "$ref": "#/$defs/Provenance"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
+    "stages": {
+      "items": {
+        "$ref": "#/$defs/StageReport"
+      },
+      "title": "Stages",
+      "type": "array"
+    },
+    "telemetry": {
+      "$ref": "#/$defs/Telemetry"
+    }
+  },
+  "required": [
+    "session_id",
+    "overall_status",
+    "stages",
+    "provenance",
+    "telemetry"
+  ],
+  "title": "IngestReport",
+  "type": "object"
+}

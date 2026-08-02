@@ -776,7 +776,9 @@ the exact commands/parameters used for FFmpeg outputs. Do not include secrets.
 
 The report must include `overall_status`, a status for every stage (`complete`,
 `failed`, or `skipped`), structured errors, and the hashes of every deliverable that
-was successfully produced. Write/update it atomically even on partial failure. If ASR
+was successfully produced, other than the report itself — a file cannot contain the
+hash of its own final bytes (ADR-0003). Write/update it atomically even on partial
+failure. If ASR
 fails but mixing succeeds, retain the MP3 and report, mark the transcript stage
 failed, and make the top-level `process` command exit nonzero so automation cannot
 mistake partial output for full success.

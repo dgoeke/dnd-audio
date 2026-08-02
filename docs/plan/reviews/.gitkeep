@@ -1,3 +1,8 @@
 # Review records land here: M<N>-plan-<stamp>.md and M<N>-code-<stamp>.md
 # Written by scripts/codex-review.sh. Kept as history — they show what was
 # challenged and what was rejected, which the closeouts summarize but do not quote.
+#
+# The script saves two files. The .raw.md is the reviewer's whole session and is
+# gitignored: it quotes every file the reviewer read, LOCAL.md included, and this
+# repository is public. The committed one is the distilled findings, with no
+# hostname, username, or absolute home path.

@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "session_id": "2026-08-15",
+  "title": "Session 01",
+  "duration_s": 14432.417,
+  "speakers": [
+    {
+      "speaker_id": "alice",
+      "speaker_name": "Alice",
+      "track_id": "tx-a"
+    }
+  ],
+  "segments": [
+    {
+      "segment_id": "seg_000123",
+      "start_s": 4821.44,
+      "end_s": 4824.91,
+      "speaker_id": "alice",
+      "speaker_name": "Alice",
+      "track_id": "tx-a",
+      "text": "We should go back to Zephyrine.",
+      "overlap": true,
+      "words": [
+        {
+          "start_s": 4821.44,
+          "end_s": 4821.68,
+          "text": "We"
+        }
+      ],
+      "provenance": {
+        "asr_model": "Qwen/Qwen3-ASR-1.7B",
+        "asr_model_revision": "<resolved Hugging Face commit>",
+        "alignment_status": "aligned",
+        "source_candidate_id": "candidate_000456"
+      }
+    }
+  ]
+}

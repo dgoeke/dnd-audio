@@ -105,6 +105,7 @@ _Owner: M1, M2._
 **INV-13 — Fatal and recoverable are distinguished explicitly.**
 Every stage reports `complete`, `failed`, or `skipped`; the report carries
 `overall_status`, structured errors, and hashes of every deliverable actually
-produced. It is written atomically even on partial failure. Partial success never
-exits zero.
+produced **other than the report itself** — a file cannot contain the hash of its
+own final bytes (ADR-0003). It is written atomically even on partial failure.
+Partial success never exits zero.
 _Owner: M0 (report skeleton), every milestone thereafter._

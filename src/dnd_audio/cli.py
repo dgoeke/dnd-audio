@@ -1,0 +1,174 @@
+"""The `dnd-audio` command line.
+
+Every command the spec names is registered here from M0 onward, so the surface is
+stable and a caller can discover it before the stages behind it exist. Everything
+except `doctor` raises ``NotImplementedError`` with a ``DEFERRED: M<n>`` annotation at
+the raise site — deliberately visible to ``scripts/scan_placeholders.py``. Hiding
+placeholder work behind a bespoke exception type would defeat the check that exists to
+find it.
+
+Stage boundaries, from the spec:
+
+* ``inspect``   — discover and validate sources, write the manifest.
+* ``ingest``    — timeline maps, lossless working path, 16 kHz derivatives.
+* ``transcribe``— activity, ASR, alignment, normalized transcript records.
+* ``mix``       — automix and MP3. Never requires ASR or `transcribe` output (INV-09).
+* ``render``    — regenerate transcript files from cached records. No ASR, no mixer.
+* ``process``   — dependency-aware orchestration; the two branches fail independently.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Annotated
+
+import typer
+
+from dnd_audio import __version__
+from dnd_audio.determinism import canonical_json
+from dnd_audio.doctor import CheckStatus, overall_status, run_checks
+from dnd_audio.errors import DndAudioError, ExitCode
+
+__all__ = ["app", "main"]
+
+SessionDir = Annotated[
+    Path,
+    typer.Argument(
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        readable=True,
+        help="Session directory: the one holding session.yaml and raw/.",
+    ),
+]
+
+app = typer.Typer(
+    name="dnd-audio",
+    help=(
+        "Local audio ingestion and transcription for long tabletop-RPG sessions. "
+        "Nothing here sends audio anywhere."
+    ),
+    no_args_is_help=True,
+    add_completion=False,
+)
+
+models_app = typer.Typer(
+    help="Model management. `fetch` is the only command permitted to touch the network.",
+    no_args_is_help=True,
+)
+app.add_typer(models_app, name="models")
+
+
+@app.command()
+def process(session_dir: SessionDir) -> None:
+    """Run every applicable stage, then always finalize the report."""
+    # DEFERRED: M5
+    raise NotImplementedError(f"`process` orchestrates both branches from M5 ({session_dir})")
+
+
+@app.command()
+def inspect(session_dir: SessionDir) -> None:
+    """Discover and validate sources; write the deterministic manifest."""
+    # DEFERRED: M1
+    raise NotImplementedError(f"`inspect` lands in M1 ({session_dir})")
+
+
+@app.command()
+def ingest(session_dir: SessionDir) -> None:
+    """Build the timeline, the lossless working path, and the 16 kHz derivatives."""
+    # DEFERRED: M2
+    raise NotImplementedError(f"`ingest` lands in M2 ({session_dir})")
+
+
+@app.command()
+def transcribe(session_dir: SessionDir) -> None:
+    """Run activity attribution and ASR; write normalized transcript records."""
+    # DEFERRED: M4
+    raise NotImplementedError(f"`transcribe` lands in M4 ({session_dir})")
+
+
+@app.command()
+def mix(session_dir: SessionDir) -> None:
+    """Automix the synchronized tracks and encode session.mp3."""
+    # DEFERRED: M5
+    raise NotImplementedError(f"`mix` lands in M5 ({session_dir})")
+
+
+@app.command()
+def render(session_dir: SessionDir) -> None:
+    """Regenerate transcript.json and transcript.md from cached records."""
+    # DEFERRED: M4
+    raise NotImplementedError(f"`render` lands in M4 ({session_dir})")
+
+
+@models_app.command("fetch")
+def models_fetch() -> None:
+    """Download models and record their resolved snapshot revisions."""
+    # DEFERRED: M6b
+    raise NotImplementedError("`models fetch` lands in M6b")
+
+
+@app.command()
+def doctor(
+    path: Annotated[
+        Path,
+        typer.Argument(
+            help="Directory to check for writability and free space. Defaults to the "
+            "working directory.",
+        ),
+    ] = Path(),
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Emit the results as canonical JSON instead of a table."),
+    ] = False,
+) -> None:
+    """Check this host without touching session audio.
+
+    GPU and model-availability checks arrive with M6a and M6b.
+    """
+    results = run_checks(path)
+    status = overall_status(results)
+
+    if as_json:
+        typer.echo(
+            canonical_json(
+                {
+                    "version": __version__,
+                    "status": status.value,
+                    "checks": [
+                        {"name": r.name, "status": r.status.value, "detail": r.detail}
+                        for r in results
+                    ],
+                }
+            ),
+            nl=False,
+        )
+    else:
+        width = max(len(result.name) for result in results)
+        for result in results:
+            colour = {
+                CheckStatus.OK: typer.colors.GREEN,
+                CheckStatus.WARN: typer.colors.YELLOW,
+                CheckStatus.FAIL: typer.colors.RED,
+            }[result.status]
+            marker = typer.style(f"{result.status.value:>4}", fg=colour)
+            typer.echo(f"  {marker}  {result.name:<{width}}  {result.detail}")
+
+    if status is CheckStatus.FAIL:
+        raise typer.Exit(code=ExitCode.FATAL)
+
+
+def main() -> None:
+    """Console-script entry point.
+
+    Turns the two failure shapes into distinct exit codes so a caller never has to
+    parse text to tell "not built yet" from "your session is broken" (INV-13).
+    """
+    try:
+        app()
+    except NotImplementedError as exc:
+        typer.secho(f"not implemented yet: {exc}", fg=typer.colors.YELLOW, err=True)
+        raise SystemExit(ExitCode.NOT_IMPLEMENTED) from exc
+    except DndAudioError as exc:
+        typer.secho(f"error: {exc}", fg=typer.colors.RED, err=True)
+        raise SystemExit(ExitCode.FATAL) from exc

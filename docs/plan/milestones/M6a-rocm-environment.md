@@ -53,6 +53,14 @@ without any Qwen code yet.
 - Depends on **OQ-008**. If the stable gfx1151 index does not yield a working
   build, the fallback is another explicitly tested gfx1151 build — record the
   search in an ADR rather than leaving it in shell history.
+- **`nix develop .#fhs --command CMD` silently runs nothing and exits 0.**
+  `buildFHSEnv`'s shellHook `exec`s into `bwrap` before your command is reached, so you
+  get no output, no error, and a success exit code. This wasted time in M0. Use
+  `nix run .#fhs -- -c 'CMD'` — `packages.fhs` exists for exactly this — or an
+  interactive session. Anything scripted against the FHS shell must use the wrapper.
+- The FHS shell's `targetPkgs` list is modelled on the host's ComfyUI service and was
+  never validated against a real ROCm install. Treat it as a starting point to refine,
+  not as a tested set.
 - Do not reuse or modify ComfyUI's venv.
 - This milestone is where "it works on my machine" is most tempting. The lock-file
   assertion is what makes it reproducible.
