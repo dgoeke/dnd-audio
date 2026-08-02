@@ -21,6 +21,15 @@ spec explicitly forbids inventing a layout.
 **Evidence:** Raw `ffprobe` JSON + RIFF chunk inventory from a real file.
 **Needs:** H1 · **Blocks:** M1, M2 · **Status:** open
 
+**What M1 built while waiting.** Both halves of the assumption are reachable through
+FFprobe on a hand-built file: a `bext` time reference surfaces as `format.tags
+.time_reference`, and an `INFO`/`ISMP` entry surfaces as `format.tags.timecode`. Each is
+a *named strategy* in `dnd_audio.inspection.starttime`, and every source's manifest entry
+records which strategy fired, which declined, why, and the assumptions the winner rests
+on. Answering this becomes reading one real manifest: if neither tag appears, the
+declined list says so in the file's own words, and the RIFF inventory beside it shows
+what the file does contain.
+
 ## OQ-002 — Is the `TX01`/`TX02` filename component unique across three kits?
 **Assumption:** No. It is a receiver-assigned pairing-order identifier, so two kits
 can both produce `TX01`. Directory identity is authoritative (INV-11).
@@ -47,13 +56,23 @@ is a timecode tag plus configured frame rate.
 
 ## OQ-005 — Are there DJI-private or iXML chunks, and do they carry timing?
 **Assumption:** There may be; the generic RIFF inventory captures ID/offset/size
-regardless, with bounded textual payloads retained and larger ones hashed.
+regardless, with bounded textual payloads retained and every payload hashed in full.
 **Why it matters:** If timing lives only in a private chunk, the strategy chain
 needs a DJI-specific parser rather than standard BWF handling.
 **Evidence:** RIFF chunk inventory from the fixture.
 **Also matters for:** M7 — a compressor that cannot reproduce an unknown private
 chunk byte-for-byte fails the archival hash check.
 **Needs:** H1 · **Blocks:** M1, M7 · **Status:** open
+
+**Half-answered in M1, about FFprobe rather than about DJI.** Measured against FFmpeg
+8.0: a WAV carrying both an `iXML` chunk and a four-byte-named private chunk produces
+`ffprobe -show_format -show_streams` output mentioning **neither**. So whatever DJI
+writes, FFprobe is not the thing that will surface it. `dnd_audio.inspection.riff` walks
+the container itself and records every chunk's id, header offset, size, and a SHA-256 of
+its complete payload, so when a real file arrives the private chunk is already visible
+and the remaining question is only what its bytes *mean*.
+`tests/test_riff.py::TestIndependenceFromFfprobe` runs both tools over the same file and
+asserts the asymmetry, so this stops being true loudly rather than quietly.
 
 ## OQ-006 — How much do the three kits' sample clocks drift over a full session?
 **Assumption:** Small enough that timeline sync without affine drift correction is
@@ -101,6 +120,17 @@ one-sample duration tolerance in M2's gate.
 **Evidence:** Compare `ffprobe` output against a decoded sample count on a real
 file and on synthetic fixtures.
 **Needs:** M1 (synthetic), H1 (real) · **Blocks:** M2 · **Status:** open
+
+**Synthetic half answered in M1, and the approach changed as a result.** No decode is
+needed for either half: the RIFF `data` chunk size divided by the block alignment is
+exact by construction for PCM, and M1 already walks the container. So the *data chunk*
+is the source and `duration_ts` is the cross-check, rather than the other way round.
+Across all twelve canonical-fixture files the two agree exactly
+(`tests/test_probe.py::TestExactSampleCount`). Their agreement is recorded per source in
+the manifest as `container.sample_count_agrees`, and a disagreement raises a
+`sample_count_disagreement` warning — so H1 answers the real half by reading the
+manifest rather than by running an experiment. A `data` size that is not a whole number
+of frames falls back to `duration_ts` instead of flooring, which would invent a sample.
 
 ## OQ-012 — Do all three receivers hold identical timecode after the LTC jam?
 **Assumption:** Yes, and they stay matched for the session while powered.
