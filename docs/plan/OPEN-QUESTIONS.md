@@ -216,3 +216,28 @@ timecode day *is* 86 400 seconds and the question does not arise.
 **Evidence:** The displayed timecode on all three receivers after the LTC jam, recorded
 against wall-clock time, cross-checked with the `bext` origination time in the files.
 **Needs:** H1 · **Blocks:** nothing directly · **Status:** open
+
+## OQ-017 — What separates real speech from lav bleed at a real table?
+**Assumption:** Bleed arriving at another wearer's lav is both *much quieter* than that
+wearer's own voice and *strongly correlated* with the speaker's own track, so a candidate is
+obvious bleed only when a competing track's source score exceeds it by
+`activity.bleed.min_score_margin` **and** their normalized speech-band cross-correlation
+reaches `activity.bleed.min_correlation` within `activity.correlation_max_lag_ms` — with a
+veto: a candidate whose band-limited level is within `activity.bleed.veto_db` of its own
+track's speech reference is never suppressed, because a lav hearing its wearer at the
+wearer's normal level is not hearing someone else.
+**Why it matters:** Every default in `activity.vad`, `activity.bleed`, and
+`activity.scoring` is a number chosen against synthetic audio whose bleed is a delayed,
+attenuated copy of the same signal — which is the *easy* case. Real bleed crosses a room,
+reflects, and arrives filtered, so its correlation against the source track is lower and its
+level depends on where two people are sitting. Set the thresholds too aggressively and real
+overlapped speech disappears, which the spec says is worse than extra ASR compute; set them
+too leniently and every utterance is transcribed six times.
+**Evidence:** Measured, on a real recording: the distribution of band-limited level
+difference between a speaker's own lav and the others during solo speech, and the
+distribution of peak normalized correlation and its lag for those same intervals. The
+pipeline already records exactly these numbers for every candidate pair in
+`work/activity.json` and in the report, so answering this is reading one real session's
+graph rather than running an experiment.
+**Needs:** H2 or the first real session · **Blocks:** nothing (threshold tuning) ·
+**Status:** open

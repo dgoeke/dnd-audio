@@ -7,8 +7,8 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 
 ## Right now
 
-- **Current milestone:** M3 — Activity (not started)
-- **Branch:** `main`
+- **Current milestone:** M3 — Activity (in progress)
+- **Branch:** `milestone/M3-activity`
 - **Last closed milestone:** M2 — Timeline
 - **Gate status at HEAD:** passes, zero skips (8 checks, 923 tests)
 - **Blocked on:** nothing for M3. **H1 is still the oldest outstanding item in the
@@ -25,7 +25,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | M0  | Foundation                 | closed      | `67b70ed` |
 | M1  | Inspection                 | closed      | `fd16931` |
 | M2  | Timeline                   | closed      | `f33ad6d` |
-| M3  | Activity                   | not started | —         |
+| M3  | Activity                   | in progress | —         |
 | M4  | Fake transcript            | not started | —         |
 | M5  | Automix                    | not started | —         |
 | M6a | ROCm environment           | not started | —         |
