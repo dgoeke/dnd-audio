@@ -79,7 +79,11 @@ if [ -f pyproject.toml ]; then
         step "ruff check"        uv run --no-sync ruff check .
         step "ruff format"       uv run --no-sync ruff format --check .
         step "type check"        bash -c "$TYPE_CHECK"
-        step "pytest (offline, cpu)" uv run --no-sync pytest -m 'not host_smoke' -q
+        # `allow_network` is excluded alongside `host_smoke`: it is the socket block's
+        # own escape hatch, reserved for `models fetch` (INV-06). Running an opted-out
+        # test here would make "the gate is offline" false the moment one exists.
+        step "pytest (offline, cpu)" \
+            uv run --no-sync pytest -m 'not host_smoke and not allow_network' -q
 
         if [ -f uv.lock ]; then
             step "lock is current" uv lock --check --offline

@@ -117,10 +117,15 @@ class TestMarkerWiring:
         assert {"host_smoke", "allow_network"} <= declared
         assert "--strict-markers" in options["addopts"]
 
-    def test_the_gate_excludes_host_smoke(self, repo_root: Path) -> None:
-        """Registering the marker means nothing if the gate still runs those tests."""
+    def test_the_gate_excludes_both_markers(self, repo_root: Path) -> None:
+        """Registering a marker means nothing if the gate still runs those tests.
+
+        `allow_network` matters as much as `host_smoke`: it is the socket block's own
+        escape hatch, so a suite that runs opted-out tests is not the offline suite
+        INV-05 describes.
+        """
         gate = (repo_root / "scripts" / "gate.sh").read_text(encoding="utf-8")
-        assert "-m 'not host_smoke'" in gate
+        assert "-m 'not host_smoke and not allow_network'" in gate
 
     def test_the_gate_never_invokes_nix(self, repo_root: Path) -> None:
         """On a cold store that would need the network (ADR-0002)."""

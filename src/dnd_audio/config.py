@@ -143,6 +143,30 @@ class TrackConfig(_Strict):
     def _check_input(cls, value: str) -> str:
         return _validate_relative_path(value)
 
+    @model_validator(mode="after")
+    def _input_must_be_the_track_directory(self) -> TrackConfig:
+        """INV-11, made structural rather than merely asserted.
+
+        Without this, `track_id: tx-a` with `input: raw/tx-f` validates happily and
+        every word Frank says is attributed to Alice — a whole session mis-attributed
+        by one transposed letter, with nothing downstream able to notice. Tying the two
+        together means the directory really is the identity, which is what the
+        invariant claims.
+
+        The directory may live anywhere in the session; only its final component is
+        constrained.
+        """
+        directory = PurePosixPath(self.input).name
+        if directory != self.track_id:
+            message = (
+                f"track {self.track_id!r} reads from {self.input!r}, whose directory is "
+                f"{directory!r}. The input directory's name is the track's identity "
+                f"(INV-11), so these must match — rename the directory or fix the "
+                f"track_id, but do not cross them."
+            )
+            raise ValueError(message)
+        return self
+
 
 class AsrConfig(_Strict):
     """Model identity and inference parameters. Every field affects output."""
@@ -249,10 +273,25 @@ class RecoveryConfig(_Strict):
 
     @field_validator("source_time_overrides")
     @classmethod
-    def _check_keys(cls, value: dict[str, SourceTimeOverride]) -> dict[str, SourceTimeOverride]:
-        for key in value:
-            _validate_relative_path(key)
-        return value
+    def _normalize_keys(cls, value: dict[str, SourceTimeOverride]) -> dict[str, SourceTimeOverride]:
+        """Normalize the keys, and reject two spellings of the same path.
+
+        Validating without keeping the normalized form leaves `raw/tx-a/f.wav` and
+        `raw//tx-a/./f.wav` as distinct keys: they hash differently (INV-08) and a
+        lookup by the discovered path finds only one of them, so an override written
+        the second way silently does nothing.
+        """
+        normalized: dict[str, SourceTimeOverride] = {}
+        for key, override in value.items():
+            canonical = _validate_relative_path(key)
+            if canonical in normalized:
+                message = (
+                    f"two source_time_overrides refer to the same file {canonical!r}; "
+                    f"only one can apply"
+                )
+                raise ValueError(message)
+            normalized[canonical] = override
+        return normalized
 
 
 class SessionConfig(_Strict):
@@ -275,8 +314,10 @@ class SessionConfig(_Strict):
 
     @model_validator(mode="after")
     def _check_roster(self) -> SessionConfig:
+        # No separate duplicate-input check: `TrackConfig` requires the input
+        # directory to be named for its track, so distinct track ids already imply
+        # distinct inputs. A check nothing can reach is a check nothing tests.
         self._reject_duplicates("track_id", [track.track_id for track in self.tracks])
-        self._reject_duplicates("input", [track.input for track in self.tracks])
         self._reject_duplicates(
             "receiver_id/receiver_channel",
             [f"{track.receiver_id}:{track.receiver_channel}" for track in self.tracks],
@@ -360,10 +401,19 @@ def resolved_config(config: SessionConfig) -> dict[str, Any]:
     omits a default is indistinguishable here from one that states it. The schema
     version travels with it, so changing what a field *means* invalidates caches even
     when no value changed.
+
+    The roster and the active-track list are sorted here, though not in the model: both
+    are sets keyed by ``track_id``, so reordering them in the file changes nothing about
+    the output and must not invalidate a cache. The file keeps its own order, which is
+    what error messages and human readers see.
     """
+    session = config.model_dump(mode="json")
+    session["tracks"] = sorted(session["tracks"], key=lambda track: str(track["track_id"]))
+    if isinstance(session["active_tracks"], list):
+        session["active_tracks"] = sorted(session["active_tracks"])
     return {
         "config_schema_version": CONFIG_SCHEMA_VERSION,
-        "session": config.model_dump(mode="json"),
+        "session": session,
     }
 
 

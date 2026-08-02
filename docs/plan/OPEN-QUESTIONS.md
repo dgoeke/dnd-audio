@@ -109,3 +109,16 @@ the start is a capture-procedure problem the pipeline should detect and warn abo
 **Evidence:** Displayed timecode/rate on all three receivers recorded after the
 jam procedure, cross-checked against the files' embedded timecode.
 **Needs:** H1 · **Blocks:** nothing directly · **Status:** open
+
+## OQ-013 — How much working disk does a full session actually consume?
+**Assumption:** Roughly 25 GiB for a four-hour six-transmitter session — about 15 GiB of
+48 kHz float32 working audio, 5 GiB of 16 kHz derivatives, and 3 GiB of mix
+intermediate — so `doctor` warns below 40 GiB free. The arithmetic is in
+`src/dnd_audio/doctor.py`; how many intermediates actually survive on disk is a guess
+about a pipeline that does not exist yet.
+**Why it matters:** `doctor` runs before a session, and a threshold set too low turns
+the warning into noise that fires once the disk is already gone. M2 owns the real
+preflight, which knows the actual session length instead of assuming four hours.
+**Evidence:** Measure `work/` after the first complete run.
+**Needs:** M2 (preflight), H2 or the first real session (real numbers) ·
+**Blocks:** nothing · **Status:** open

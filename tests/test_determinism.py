@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
@@ -72,8 +73,13 @@ class TestWriteAtomic:
         write_atomic(target, "content")
         assert [p.name for p in tmp_path.iterdir()] == ["artifact.json"]
 
-    def test_a_failed_write_leaves_the_previous_file_intact(self, tmp_path: Path) -> None:
-        """INV-13: the report is written even on partial failure — but never half-written."""
+    def test_serialization_failure_never_reaches_the_file(self, tmp_path: Path) -> None:
+        """A value that cannot be serialized must not disturb what is already there.
+
+        This one does *not* prove atomicity: `canonical_json` raises before
+        `write_atomic` is entered, so no temp file is ever created. That is worth a
+        test of its own, and worth not mistaking for the harder property below.
+        """
         target = tmp_path / "artifact.json"
         write_atomic(target, "original")
 
@@ -85,6 +91,79 @@ class TestWriteAtomic:
 
         assert target.read_text(encoding="utf-8") == "original"
         assert [p.name for p in tmp_path.iterdir()] == ["artifact.json"]
+
+    @pytest.mark.parametrize("failing", ["fsync", "replace", "write"])
+    def test_a_failure_during_the_write_leaves_the_previous_file_intact(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failing: str
+    ) -> None:
+        """INV-13: written atomically even on partial failure — the real proof.
+
+        Each case forces a failure *after* `mkstemp` has already created the temp
+        file, which is the only way to reach the cleanup branch. Replacing the whole
+        implementation with `path.write_bytes(payload)` fails all three: the original
+        would be truncated, and the `replace` case would leave a stray temp file.
+        """
+        target = tmp_path / "artifact.json"
+        write_atomic(target, "original")
+
+        boom = OSError("no space left on device")
+
+        if failing == "fsync":
+            monkeypatch.setattr(
+                "dnd_audio.determinism.os.fsync", lambda _fd: (_ for _ in ()).throw(boom)
+            )
+        elif failing == "replace":
+            monkeypatch.setattr(Path, "replace", lambda _self, _target: (_ for _ in ()).throw(boom))
+        else:
+            original_fdopen = os.fdopen
+
+            def failing_write(fd: int, mode: str) -> Any:
+                handle = original_fdopen(fd, mode)
+
+                class Failing:
+                    def __enter__(self) -> Failing:
+                        return self
+
+                    def __exit__(self, *_args: object) -> None:
+                        handle.close()
+
+                    def write(self, _payload: bytes) -> int:
+                        raise boom
+
+                return Failing()
+
+            monkeypatch.setattr("dnd_audio.determinism.os.fdopen", failing_write)
+
+        with pytest.raises(OSError, match="no space left"):
+            write_atomic(target, "replacement that must not land")
+
+        assert target.read_text(encoding="utf-8") == "original"
+        assert [p.name for p in tmp_path.iterdir()] == ["artifact.json"], (
+            "a temporary file survived the failure"
+        )
+
+    def test_the_failure_test_would_catch_a_non_atomic_write(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Prove the test above can fail, by giving it a naive implementation.
+
+        A direct truncating write destroys the previous contents the moment it opens
+        the file, which is exactly the regression the atomic path exists to prevent.
+        """
+        target = tmp_path / "artifact.json"
+        target.write_text("original", encoding="utf-8")
+
+        def naive_write(path: Path, data: str | bytes) -> None:
+            payload = data.encode("utf-8") if isinstance(data, str) else data
+            with path.open("wb") as handle:
+                handle.write(payload[:4])
+                message = "no space left on device"
+                raise OSError(message)
+
+        with pytest.raises(OSError, match="no space left"):
+            naive_write(target, "replacement that must not land")
+
+        assert target.read_text(encoding="utf-8") != "original"
 
     def test_accepts_bytes_and_text_alike(self, tmp_path: Path) -> None:
         text_target = tmp_path / "text"
@@ -176,10 +255,22 @@ class TestMillisecondQuantization:
         assert value == 4821.44
         assert json.loads(canonical_json({"start_s": value}))["start_s"] == value
 
-    def test_public_seconds_is_exactly_the_quantizer(self) -> None:
-        for numerator in range(0, 5000, 37):
-            seconds = Fraction(numerator, 48_000)
-            assert public_seconds(seconds) == to_milliseconds(seconds) / 1000
+    @pytest.mark.parametrize(
+        ("seconds", "expected"),
+        [
+            (Fraction(0), 0.0),
+            (Fraction(1), 1.0),
+            (Fraction(1, 3), 0.333),
+            (Fraction(-1, 3), -0.333),
+            (Fraction(2, 3), 0.667),
+            (Fraction(4821440, 1000), 4821.44),
+            # 4821.44 s at 48 kHz, exactly.
+            (Fraction(231_429_120, 48_000), 4821.44),
+        ],
+    )
+    def test_public_seconds_known_values(self, seconds: Fraction, expected: float) -> None:
+        """Hand-computed, not derived from the function under test."""
+        assert public_seconds(seconds) == expected
 
     def test_accepts_whole_seconds_as_int(self) -> None:
         assert to_milliseconds(7) == 7000

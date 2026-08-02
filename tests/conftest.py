@@ -26,6 +26,10 @@ complexity here; if that changes, this is the comment to revisit.
 only command INV-06 permits to touch the network. It is deliberately *not* tied to
 ``host_smoke``: needing a GPU is not a reason to need the internet, and a real Qwen
 smoke test runs against models that were already fetched.
+
+``./scripts/gate.sh`` excludes ``allow_network`` as well as ``host_smoke``. Without
+that, an opted-out test would still run in the suite the gate calls offline, and the
+invariant would hold only until the first test used its own escape hatch.
 """
 
 from __future__ import annotations
@@ -46,12 +50,17 @@ _LOCAL_ONLY_FAMILIES = frozenset({getattr(socket, "AF_UNIX", None)}) - {None}
 #: Socket methods that can move bytes to another host.
 _BLOCKED_SOCKET_METHODS = ("connect", "connect_ex", "sendto", "sendmsg")
 
-#: Module-level functions that resolve names or open connections.
+#: Module-level functions that resolve names or open connections. Reverse lookups
+#: (`gethostbyaddr`, `getnameinfo`) go out through NSS and DNS exactly like forward
+#: ones, so leaving them open would leave a hole the forward-lookup block only appears
+#: to close.
 _BLOCKED_MODULE_FUNCTIONS = (
     "create_connection",
     "getaddrinfo",
+    "gethostbyaddr",
     "gethostbyname",
     "gethostbyname_ex",
+    "getnameinfo",
 )
 
 

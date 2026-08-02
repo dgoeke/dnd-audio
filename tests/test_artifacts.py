@@ -18,12 +18,15 @@ from jsonschema import Draft202012Validator
 
 from dnd_audio.artifacts.manifest import Manifest, ManifestSource, ManifestTrack
 from dnd_audio.artifacts.report import (
+    STAGE_ORDER,
+    Decision,
     IngestReport,
     OverallStatus,
     Provenance,
     StageName,
     StageReport,
     StageStatus,
+    StructuredError,
     Telemetry,
 )
 from dnd_audio.artifacts.transcript import (
@@ -36,6 +39,8 @@ from dnd_audio.artifacts.transcript import (
 from dnd_audio.config import load_session_config
 from dnd_audio.determinism import public_seconds
 from dnd_audio.schema_export import SCHEMA_DIRNAME
+
+TESTS_DATA = Path(__file__).resolve().parent / "data"
 
 
 @pytest.fixture
@@ -125,18 +130,36 @@ def _sample_transcript() -> Transcript:
 
 
 def _sample_report(instant: dt.datetime) -> IngestReport:
+    """A partial run: the transcript branch failed, the mix branch survived (INV-09)."""
+    failed = StructuredError(code="asr_unavailable", message="the transcriber raised")
+    outcomes = {
+        StageName.INSPECT: StageReport(stage=StageName.INSPECT, status=StageStatus.COMPLETE),
+        StageName.RECONSTRUCT: StageReport(
+            stage=StageName.RECONSTRUCT, status=StageStatus.COMPLETE
+        ),
+        StageName.ACTIVITY: StageReport(stage=StageName.ACTIVITY, status=StageStatus.COMPLETE),
+        StageName.TRANSCRIBE: StageReport(
+            stage=StageName.TRANSCRIBE, status=StageStatus.FAILED, errors=[failed]
+        ),
+        StageName.RENDER: StageReport(
+            stage=StageName.RENDER,
+            status=StageStatus.SKIPPED,
+            skip_reason="transcription failed, so there is nothing to render",
+        ),
+        StageName.MIX: StageReport(stage=StageName.MIX, status=StageStatus.COMPLETE),
+    }
     return IngestReport(
         session_id="2026-08-15",
         overall_status=OverallStatus.PARTIAL,
-        stages=[
-            StageReport(stage=StageName.INSPECT, status=StageStatus.COMPLETE),
-            StageReport(
-                stage=StageName.RENDER,
-                status=StageStatus.SKIPPED,
-                skip_reason="transcription failed, so there is nothing to render",
-            ),
-        ],
+        stages=[outcomes[stage] for stage in STAGE_ORDER],
         provenance=Provenance(config_hash="d" * 64, tool_versions={"ffmpeg": "8.0"}),
+        decisions=[
+            Decision(
+                code="orig_selected",
+                subject="tx-a",
+                detail="both orig and edit present; the edit variant was ignored",
+            )
+        ],
         telemetry=Telemetry(started_at=instant, finished_at=instant),
     )
 
@@ -157,6 +180,30 @@ class TestAgainstCheckedInSchemas:
     def test_session_config(self, schema_dir: Path, valid_session_yaml: Path) -> None:
         payload = load_session_config(valid_session_yaml).model_dump(mode="json")
         _validator(schema_dir, "session-config.schema.json").validate(payload)
+
+    def test_the_specs_own_transcript_example_validates(self, schema_dir: Path) -> None:
+        """Independent ground truth: a document this code did not produce.
+
+        Every other check in this class validates output built from the same models
+        the schemas were generated from. `tests/data/transcript-spec-example.json` is
+        transcribed from the spec's Output schemas section instead, so it fails if the
+        schema drifts away from the contract rather than merely away from the code —
+        a renamed field, a newly required one, an enum value dropped.
+        """
+        example = json.loads(
+            (TESTS_DATA / "transcript-spec-example.json").read_text(encoding="utf-8")
+        )
+        _validator(schema_dir, "transcript.schema.json").validate(example)
+
+    def test_the_specs_example_also_loads_into_the_model(self) -> None:
+        """And the model accepts it, not only the schema generated from the model."""
+        example = json.loads(
+            (TESTS_DATA / "transcript-spec-example.json").read_text(encoding="utf-8")
+        )
+        transcript = Transcript.model_validate(example)
+        assert transcript.segments[0].text == "We should go back to Zephyrine."
+        assert transcript.segments[0].words[0].start_s == 4821.44
+        assert transcript.duration_s == 14432.417
 
     def test_the_schemas_actually_reject_something(self, schema_dir: Path) -> None:
         """A schema that accepts everything would make the tests above meaningless."""

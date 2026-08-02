@@ -78,6 +78,11 @@ def write_atomic(path: Path, data: str | bytes) -> None:
 
     The temporary file is created in the destination directory — a rename across
     filesystems is not atomic — and is removed if anything fails before the rename.
+
+    ``data`` is held in memory in full, which is right for the JSON artifacts this is
+    built for and wrong for audio. INV-07 forbids materializing a session-length
+    waveform, so M2's working-audio writes need their own streamed path rather than
+    this one; they are not text and do not need canonical serialization anyway.
     """
     payload = data.encode("utf-8") if isinstance(data, str) else data
     directory = path.parent

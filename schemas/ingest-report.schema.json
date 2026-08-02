@@ -1,5 +1,40 @@
 {
   "$defs": {
+    "Decision": {
+      "additionalProperties": false,
+      "description": "A choice the pipeline made that a reader may need to audit.\n\nDeterministic by construction: no timings, no counters, nothing that varies between\ntwo identical runs. The spec asks for the report's decision subsection to be\nsemantically stable even though the report as a whole is exempt (INV-02).\n\n``subject`` is what the decision was about — a track id, a source path, a segment\nid — and is what makes two decisions with the same ``code`` orderable.",
+      "properties": {
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "detail": {
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "details": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Details",
+          "type": "object"
+        },
+        "subject": {
+          "minLength": 1,
+          "title": "Subject",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "subject",
+        "detail"
+      ],
+      "title": "Decision",
+      "type": "object"
+    },
     "Deliverable": {
       "additionalProperties": false,
       "description": "A file this run produced, and its hash.",
@@ -277,6 +312,13 @@
   "additionalProperties": false,
   "description": "The structured record of one run.",
   "properties": {
+    "decisions": {
+      "items": {
+        "$ref": "#/$defs/Decision"
+      },
+      "title": "Decisions",
+      "type": "array"
+    },
     "overall_status": {
       "$ref": "#/$defs/OverallStatus"
     },

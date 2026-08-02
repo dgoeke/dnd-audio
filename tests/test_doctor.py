@@ -117,7 +117,7 @@ class TestOverallStatus:
 
 
 class TestBoundaries:
-    def test_no_gpu_checks_yet(self) -> None:
+    def test_no_gpu_checks_yet(self, tmp_path: Path) -> None:
         """M6a owns those, and must test openability rather than infer it."""
-        names = {result.name for result in run_checks(Path())}
+        names = {result.name for result in run_checks(tmp_path)}
         assert not names & {"gpu", "torch", "/dev/kfd", "render node"}

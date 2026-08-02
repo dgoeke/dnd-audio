@@ -34,10 +34,18 @@ __all__ = [
     "run_checks",
 ]
 
-#: Free space below this earns a warning. A four-hour six-track session expands to a
-#: lot of 48 kHz float working audio; the exact preflight is M2's, which knows the
-#: session length. This is the "you will not get far" threshold.
-MIN_FREE_GIB: Final = 20.0
+#: Free space below this earns a warning. Order of magnitude, for a four-hour
+#: six-transmitter session:
+#:
+#:     48 kHz float32 working audio   6 tracks * 14400 s * 48000 Hz * 4 B  ≈ 15.4 GiB
+#:     16 kHz derivatives for VAD/ASR 6 tracks * 14400 s * 16000 Hz * 4 B  ≈  5.1 GiB
+#:     lossless mono mix intermediate            14400 s * 48000 Hz * 4 B  ≈  2.6 GiB
+#:
+#: ~23 GiB before caches, retries, or the MP3, so a 20 GiB floor would warn only after
+#: the disk was already gone. 40 GiB leaves room to finish. The real preflight belongs
+#: to M2, which knows the session's actual length rather than assuming four hours.
+#: The intermediate count is a guess about a pipeline that does not exist yet — OQ-013.
+MIN_FREE_GIB: Final = 40.0
 
 #: ``(executable, version-flag)``. SoX spells it differently from the FFmpeg tools, and
 #: is the canary for the flake environment: the target host has no system SoX.

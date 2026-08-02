@@ -33,6 +33,7 @@ __all__ = [
     "REPORT_FILENAME",
     "REPORT_SCHEMA_VERSION",
     "STAGE_ORDER",
+    "Decision",
     "Deliverable",
     "IngestReport",
     "OverallStatus",
@@ -114,6 +115,23 @@ class ReportWarning(_Artifact):
     code: str = Field(min_length=1)
     message: str = Field(min_length=1)
     path: str | None = None
+    details: dict[str, str] = Field(default_factory=dict)
+
+
+class Decision(_Artifact):
+    """A choice the pipeline made that a reader may need to audit.
+
+    Deterministic by construction: no timings, no counters, nothing that varies between
+    two identical runs. The spec asks for the report's decision subsection to be
+    semantically stable even though the report as a whole is exempt (INV-02).
+
+    ``subject`` is what the decision was about — a track id, a source path, a segment
+    id — and is what makes two decisions with the same ``code`` orderable.
+    """
+
+    code: str = Field(min_length=1)
+    subject: str = Field(min_length=1)
+    detail: str = Field(min_length=1)
     details: dict[str, str] = Field(default_factory=dict)
 
 
@@ -208,16 +226,49 @@ class IngestReport(_Artifact):
     overall_status: OverallStatus
     stages: list[StageReport]
     provenance: Provenance
+    #: Deterministic choices the run made. INV-02 requires this subsection to be
+    #: semantically stable across an unchanged rerun even though the report as a whole
+    #: is exempt. M1 onward fill it; the envelope and its ordering are fixed here.
+    decisions: list[Decision] = Field(default_factory=list)
     telemetry: Telemetry
 
     @model_validator(mode="after")
     def _check_stages(self) -> Self:
+        """Every stage must be accounted for, and the rollup must match them.
+
+        INV-13 says every stage reports `complete`, `failed`, or `skipped` — which is
+        only true if a stage that did not run says `skipped` rather than being absent.
+        An absent stage is indistinguishable from a stage nobody thought about, and a
+        report with no stages at all would otherwise roll up to `complete` and exit 0.
+        """
         seen = [stage.stage for stage in self.stages]
         if len(set(seen)) != len(seen):
             message = "a stage appears more than once in the report"
             raise ValueError(message)
+
+        missing = [stage for stage in STAGE_ORDER if stage not in set(seen)]
+        if missing:
+            names = ", ".join(stage.value for stage in missing)
+            message = (
+                f"the report accounts for no outcome of: {names}. Every stage needs a "
+                f"status; a stage that did not run is `skipped` with a reason (INV-13)."
+            )
+            raise ValueError(message)
+
         ordered = sorted(self.stages, key=lambda item: STAGE_ORDER.index(item.stage))
         object.__setattr__(self, "stages", ordered)
+
+        expected = roll_up(ordered)
+        if self.overall_status is not expected:
+            message = (
+                f"overall_status is {self.overall_status.value} but the stages roll up "
+                f"to {expected.value}"
+            )
+            raise ValueError(message)
+
+        object.__setattr__(
+            self, "decisions", sorted(self.decisions, key=lambda item: (item.code, item.subject))
+        )
         return self
 
     def exit_code(self) -> ExitCode:
@@ -237,7 +288,15 @@ def roll_up(stages: list[StageReport]) -> OverallStatus:
 
     A skipped stage is not a failure — running only `mix` skips `transcribe` on
     purpose. What matters is whether anything failed, and whether anything survived.
+
+    Raises:
+        ValueError: if handed no stages. A run that recorded nothing is not a complete
+            run, and returning `complete` for an empty list would let a builder that
+            forgot to record anything exit zero (INV-13).
     """
+    if not stages:
+        message = "cannot roll up an empty stage list: a run with no recorded stage is not complete"
+        raise ValueError(message)
     failed = any(stage.status is StageStatus.FAILED for stage in stages)
     if not failed:
         return OverallStatus.COMPLETE
@@ -265,6 +324,7 @@ class ReportBuilder:
         self._package_versions: dict[str, str] = {}
         self._model_identity: dict[str, str] = {}
         self._stage_seconds: dict[StageName, float] = {}
+        self._decisions: list[Decision] = []
         self._cache_hits = 0
         self._cache_misses = 0
 
@@ -332,12 +392,32 @@ class ReportBuilder:
         self._cache_hits += hits
         self._cache_misses += misses
 
+    def record_decision(self, decision: Decision) -> None:
+        self._decisions.append(decision)
+
     def build(self, finished_at: dt.datetime) -> IngestReport:
-        stages = [self._stages[name] for name in STAGE_ORDER if name in self._stages]
+        """Assemble the report.
+
+        Raises:
+            ValueError: if any stage has no recorded outcome. Filling those in
+                automatically would invent a reason nobody wrote; the caller knows why
+                it did not run a stage and INV-13 says the report has to say.
+        """
+        missing = [name for name in STAGE_ORDER if name not in self._stages]
+        if missing:
+            names = ", ".join(name.value for name in missing)
+            message = (
+                f"no outcome recorded for: {names}. Call stage_skipped() with a reason "
+                f"for each stage this run did not perform (INV-13)."
+            )
+            raise ValueError(message)
+
+        stages = [self._stages[name] for name in STAGE_ORDER]
         return IngestReport(
             session_id=self._session_id,
             overall_status=roll_up(stages),
             stages=stages,
+            decisions=list(self._decisions),
             provenance=Provenance(
                 config_hash=self._config_hash,
                 tool_versions=dict(self._tool_versions),

@@ -58,6 +58,22 @@ def test_name_resolution_is_blocked() -> None:
         socket.getaddrinfo("example.invalid", 80)
 
 
+def test_reverse_name_resolution_is_blocked() -> None:
+    """Reverse lookups go out through NSS and DNS exactly like forward ones."""
+    with pytest.raises(NetworkAccessBlockedError):
+        socket.gethostbyaddr("192.0.2.1")
+
+
+def test_getnameinfo_is_blocked() -> None:
+    with pytest.raises(NetworkAccessBlockedError):
+        socket.getnameinfo(("192.0.2.1", 80), 0)
+
+
+def test_forward_lookup_by_name_is_blocked() -> None:
+    with pytest.raises(NetworkAccessBlockedError):
+        socket.gethostbyname("example.invalid")
+
+
 def test_create_connection_is_blocked() -> None:
     with pytest.raises(NetworkAccessBlockedError):
         socket.create_connection(_DISCARD, timeout=0.1)

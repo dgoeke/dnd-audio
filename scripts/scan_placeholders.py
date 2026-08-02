@@ -4,9 +4,12 @@
 Two hard rules, both from AGENTS.md:
 
 * A skipped or xfailed test must carry a ``reason=`` naming the milestone
-  (``M6b``) or open question (``OQ-004``) that will resolve it.
-* ``NotImplementedError`` in ``src/`` must be annotated ``DEFERRED: M<n>`` on the
-  same line or the line above.
+  (``M6b``) or open question (``OQ-004``) that will resolve it. Runtime skips —
+  ``pytest.skip``, ``pytest.xfail``, ``pytest.importorskip`` — must name one too.
+* ``raise NotImplementedError`` in ``src/`` must be annotated ``DEFERRED: M<n>`` on
+  the same line or the line above. Only a ``raise`` counts: an ``except
+  NotImplementedError`` handler and a docstring explaining the convention are the
+  opposite of unexplained.
 
 Everything else (TODO/FIXME/XXX/HACK) is reported as a count only. Those are not
 failures, but ``/ms-verify`` is expected to account for them.
@@ -21,6 +24,13 @@ from pathlib import Path
 ROOTS = ("src", "tests")
 JUSTIFIED = re.compile(r"\b(M\d+[a-z]?|H\d+|OQ-\d+)\b")
 SKIP_MARK = re.compile(r"\bmark\.(skip|skipif|xfail)\b")
+
+# Runtime skips. A decorator is not the only way to skip a test, and these leave no
+# `reason=` for the check above to find, so they were previously invisible to a rule
+# AGENTS.md states as absolute. `importorskip` is the sneakiest: it reads as a guard
+# and behaves as a silent skip when the import is exactly what a milestone was
+# supposed to deliver.
+RUNTIME_SKIP = re.compile(r"\bpytest\.(skip|xfail|importorskip)\s*\(")
 DEFERRED = re.compile(r"DEFERRED:\s*(M\d+[a-z]?|H\d+|OQ-\d+)")
 LOOSE = re.compile(r"\b(TODO|FIXME|XXX|HACK)\b")
 
@@ -56,6 +66,14 @@ def main() -> int:
                         violations.append(
                             f"{where}: skip/xfail without a reason= naming a "
                             f"milestone or OQ\n      {line.strip()}"
+                        )
+
+                if RUNTIME_SKIP.search(line):
+                    window = "\n".join(lines[i : i + WINDOW])
+                    if not JUSTIFIED.search(window):
+                        violations.append(
+                            f"{where}: runtime skip without a milestone or OQ in its "
+                            f"message\n      {line.strip()}"
                         )
 
                 if root == "src" and RAISES_NOT_IMPLEMENTED.match(line):

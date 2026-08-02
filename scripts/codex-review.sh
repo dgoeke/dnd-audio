@@ -89,10 +89,26 @@ Do not modify any files. Output a review, not a patch."
     ;;
 
   code)
+    # `codex review` refuses a custom prompt alongside --base ("the argument
+    # '--base <BRANCH>' cannot be used with '[PROMPT]'"), and the prompt is the whole
+    # point — it is what supplies this project's priorities. So `code` drives
+    # `codex exec` the same way `plan` does and names the range in the prompt.
+    if [ "${CODEX_UNCOMMITTED:-0}" = "1" ]; then
+        SCOPE="the uncommitted work: \`git diff HEAD\` plus anything \`git status --porcelain\` lists as untracked"
+    else
+        SCOPE="this branch's changes: \`git diff ${BASE}...HEAD\`, with \`git diff --stat ${BASE}...HEAD\` for shape"
+        if [ -n "$(git status --porcelain)" ]; then
+            echo "warning: working tree is dirty; uncommitted changes are NOT in this review."
+            echo "         commit to the milestone branch first, or re-run with CODEX_UNCOMMITTED=1."
+        fi
+    fi
+
     PROMPT="${COMMON}
 
-Review this milestone's changes against ${CHARTER}'s completion gate. Priorities,
-in order:
+Review ${SCOPE}. Read the changed files in full rather than only the diff hunks —
+a test that cannot fail usually looks fine in isolation.
+
+Judge the changes against ${CHARTER}'s completion gate. Priorities, in order:
 
   1. Correctness bugs that produce wrong audio, wrong timestamps, wrong speaker
      attribution, or silently dropped speech.
@@ -104,16 +120,11 @@ in order:
   4. Gate criteria that are claimed but not actually demonstrated by a test.
   5. Anything the next implementor will misread six weeks from now.
 
-Ignore formatting and naming preferences; ruff and the type checker already ran."
-    SCOPE=(--base "$BASE")
-    if [ "${CODEX_UNCOMMITTED:-0}" = "1" ]; then
-        SCOPE=(--uncommitted)
-    elif [ -n "$(git status --porcelain)" ]; then
-        echo "warning: working tree is dirty; uncommitted changes are NOT in this review."
-        echo "         commit to the milestone branch first, or re-run with CODEX_UNCOMMITTED=1."
-    fi
-    echo "codex: reviewing milestone ${MS} (${SCOPE[*]}) -> ${OUT}"
-    codex review "${SCOPE[@]}" --title "Milestone ${MS}" "$PROMPT" </dev/null 2>&1 | tee "$OUT"
+Ignore formatting and naming preferences; ruff and the type checker already ran.
+
+Do not modify any files. Output a review, not a patch."
+    echo "codex: reviewing milestone ${MS} against ${BASE} -> ${OUT}"
+    codex exec -s read-only "$PROMPT" </dev/null 2>&1 | tee "$OUT"
     ;;
 
   *)

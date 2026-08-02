@@ -16,12 +16,26 @@ from pathlib import Path
 
 import pytest
 
-from dnd_audio.schema_export import JSON_SCHEMA_DIALECT, SCHEMA_DIRNAME, schema_documents
+from dnd_audio.schema_export import (
+    JSON_SCHEMA_DIALECT,
+    SCHEMA_DIRNAME,
+    schema_documents,
+    write_schemas,
+)
 
 
 @pytest.fixture
 def schema_dir(repo_root: Path) -> Path:
     return repo_root / SCHEMA_DIRNAME
+
+
+def _assert_matches(directory: Path, filename: str) -> None:
+    """The one comparison. Shared so the test below exercises the real thing."""
+    expected = schema_documents()[filename]
+    actual = (directory / filename).read_text(encoding="utf-8")
+    assert actual == expected, (
+        f"{filename} is stale. Run: uv run --no-sync python scripts/gen_schemas.py"
+    )
 
 
 def test_every_document_is_checked_in(schema_dir: Path) -> None:
@@ -32,28 +46,27 @@ def test_every_document_is_checked_in(schema_dir: Path) -> None:
 @pytest.mark.parametrize("filename", sorted(schema_documents()))
 def test_checked_in_bytes_match_the_models(schema_dir: Path, filename: str) -> None:
     """Fails when a model changed and `scripts/gen_schemas.py` was not re-run."""
-    expected = schema_documents()[filename]
-    actual = (schema_dir / filename).read_text(encoding="utf-8")
-    assert actual == expected, (
-        f"{filename} is stale. Run: uv run --no-sync python scripts/gen_schemas.py"
-    )
+    _assert_matches(schema_dir, filename)
 
 
-def test_drift_is_actually_detected(schema_dir: Path) -> None:
-    """The drift test must be able to fail.
+def test_drift_is_actually_detected(tmp_path: Path) -> None:
+    """The comparison above must be able to fail.
 
-    A comparison that cannot fail is worse than no comparison — it reads as coverage.
-    This mutates a committed schema in memory and asserts the comparison notices.
+    Runs `_assert_matches` — the same function the real test uses — against a copy
+    that has drifted. Asserting that a mutated dict differs from an unmutated one
+    would prove nothing about whether the drift check notices.
     """
-    filename = "manifest.schema.json"
-    committed = (schema_dir / filename).read_text(encoding="utf-8")
-    mutated = json.loads(committed)
-    mutated["properties"]["session_id"]["type"] = "integer"
+    write_schemas(tmp_path)
+    _assert_matches(tmp_path, "manifest.schema.json")
 
-    assert json.dumps(mutated, sort_keys=True) != json.dumps(json.loads(committed), sort_keys=True)
-    assert json.dumps(mutated, sort_keys=True) != json.dumps(
-        json.loads(schema_documents()[filename]), sort_keys=True
+    target = tmp_path / "manifest.schema.json"
+    target.write_text(
+        target.read_text(encoding="utf-8").replace('"session_id"', '"session_identifier"'),
+        encoding="utf-8",
     )
+
+    with pytest.raises(AssertionError, match="is stale"):
+        _assert_matches(tmp_path, "manifest.schema.json")
 
 
 def test_declares_its_dialect(schema_dir: Path) -> None:

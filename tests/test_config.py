@@ -58,8 +58,8 @@ class TestValidSession:
         assert config.asr.max_new_tokens == 1024
 
         assert config.activity.correlation_max_lag_ms == 30
-        assert config.mix.integrated_lufs == pytest.approx(-16.0)
-        assert config.mix.true_peak_dbtp == pytest.approx(-1.5)
+        assert config.mix.integrated_lufs == -16.0
+        assert config.mix.true_peak_dbtp == -1.5
         assert config.mix.mp3_bitrate_kbps == 128
 
         assert config.recovery.allow_processed_audio is False
@@ -93,11 +93,18 @@ class TestRejections:
 
     def test_duplicate_track_id_is_rejected(self, raw: dict[str, Any]) -> None:
         raw["tracks"][1]["track_id"] = "tx-a"
+        raw["tracks"][1]["input"] = "raw/tx-a"
         _reject(raw, "duplicate track_id: tx-a")
 
-    def test_duplicate_input_directory_is_rejected(self, raw: dict[str, Any]) -> None:
+    def test_two_tracks_cannot_share_a_directory(self, raw: dict[str, Any]) -> None:
+        """Which now follows from the identity rule rather than a separate check.
+
+        Two tracks reading the same directory would have to share its name, and a
+        shared name is a duplicate `track_id`. Kept as a test because the property is
+        what matters, not the route the validator takes to it.
+        """
         raw["tracks"][1]["input"] = "raw/tx-a"
-        _reject(raw, "duplicate input")
+        _reject(raw, "is the track's identity")
 
     def test_duplicate_receiver_channel_is_rejected(self, raw: dict[str, Any]) -> None:
         """Two transmitters cannot be channel 1 of the same receiver."""
@@ -119,6 +126,32 @@ class TestRejections:
         """INV-01 depends on paths being provably inside the session tree."""
         raw["tracks"][0]["input"] = value
         _reject(raw, "relative|escape|whitespace")
+
+    def test_a_track_may_not_read_another_tracks_directory(self, raw: dict[str, Any]) -> None:
+        """INV-11: one transposed letter would mis-attribute a whole session.
+
+        `track_id: tx-a` reading `raw/tx-f` is unique, well formed, and silently wrong
+        — every word Frank says becomes Alice's, and nothing downstream can notice.
+        """
+        raw["tracks"][0]["input"] = "raw/tx-f"
+        raw["tracks"][5]["input"] = "raw/tx-a"
+        _reject(raw, "is the track's identity")
+
+    def test_swapping_two_tracks_directories_is_rejected_even_though_both_are_unique(
+        self, raw: dict[str, Any]
+    ) -> None:
+        """Uniqueness checks alone cannot see a swap: both sides stay unique."""
+        raw["tracks"][0]["input"], raw["tracks"][1]["input"] = (
+            raw["tracks"][1]["input"],
+            raw["tracks"][0]["input"],
+        )
+        _reject(raw, "INV-11")
+
+    def test_the_directory_may_live_anywhere_as_long_as_it_is_named_for_the_track(
+        self, raw: dict[str, Any]
+    ) -> None:
+        raw["tracks"][0]["input"] = "raw/2026-08-15/kit-a/tx-a"
+        assert SessionConfig.model_validate(raw).tracks[0].input == "raw/2026-08-15/kit-a/tx-a"
 
     def test_active_tracks_must_name_configured_tracks(self, raw: dict[str, Any]) -> None:
         """An unconfigured directory must never be attributed to a speaker."""
@@ -271,6 +304,45 @@ class TestRecoveryOverrides:
         }
         _reject(raw, "relative")
 
+    def test_override_keys_are_normalized(self, raw: dict[str, Any]) -> None:
+        """An un-normalized key hashes differently and is never found by a lookup.
+
+        `raw//tx-a/./f.wav` and `raw/tx-a/f.wav` name the same file. Keeping both
+        spellings would give two configs that describe identical sessions different
+        cache identities (INV-08), and an override written the long way would silently
+        never apply.
+        """
+        raw["recovery"]["source_time_overrides"] = {
+            "raw//tx-a/./TX01_MIC002_20260815_190000_orig.wav": {
+                "start_offset_samples": 0,
+                "reason": "written with a redundant path",
+            }
+        }
+        config = SessionConfig.model_validate(raw)
+        assert list(config.recovery.source_time_overrides) == [
+            "raw/tx-a/TX01_MIC002_20260815_190000_orig.wav"
+        ]
+
+    def test_two_spellings_of_the_same_override_are_rejected(self, raw: dict[str, Any]) -> None:
+        raw["recovery"]["source_time_overrides"] = {
+            "raw/tx-a/f.wav": {"start_offset_samples": 0, "reason": "one"},
+            "raw//tx-a/./f.wav": {"start_offset_samples": 100, "reason": "two"},
+        }
+        _reject(raw, "same file")
+
+    def test_normalized_overrides_hash_identically(self, raw: dict[str, Any]) -> None:
+        plain = copy.deepcopy(raw)
+        plain["recovery"]["source_time_overrides"] = {
+            "raw/tx-a/f.wav": {"start_offset_samples": 0, "reason": "same override"}
+        }
+        redundant = copy.deepcopy(raw)
+        redundant["recovery"]["source_time_overrides"] = {
+            "raw/./tx-a//f.wav": {"start_offset_samples": 0, "reason": "same override"}
+        }
+        assert config_hash(SessionConfig.model_validate(plain)) == config_hash(
+            SessionConfig.model_validate(redundant)
+        )
+
 
 class TestLoader:
     def test_missing_file_is_a_config_error(self, tmp_path: Path) -> None:
@@ -345,6 +417,39 @@ class TestResolvedConfigHash:
         projection = resolved_config(SessionConfig.model_validate(raw))
         session = projection["session"]
         assert all(not track["input"].startswith("/") for track in session["tracks"])
+
+    def test_reordering_the_roster_does_not_change_the_hash(self, raw: dict[str, Any]) -> None:
+        """The roster is a set keyed by track_id; its order in the file means nothing.
+
+        Without normalization, moving a track up the list would invalidate every cached
+        result for a session that is identical in every way that affects output.
+        """
+        reordered = copy.deepcopy(raw)
+        reordered["tracks"] = list(reversed(reordered["tracks"]))
+        assert config_hash(SessionConfig.model_validate(raw)) == config_hash(
+            SessionConfig.model_validate(reordered)
+        )
+
+    def test_reordering_active_tracks_does_not_change_the_hash(self, raw: dict[str, Any]) -> None:
+        first = copy.deepcopy(raw)
+        first["active_tracks"] = ["tx-a", "tx-b", "tx-c"]
+        second = copy.deepcopy(raw)
+        second["active_tracks"] = ["tx-c", "tx-a", "tx-b"]
+        assert config_hash(SessionConfig.model_validate(first)) == config_hash(
+            SessionConfig.model_validate(second)
+        )
+
+    def test_changing_which_tracks_are_active_does_change_the_hash(
+        self, raw: dict[str, Any]
+    ) -> None:
+        """Sorting must not go so far as to erase a real difference."""
+        first = copy.deepcopy(raw)
+        first["active_tracks"] = ["tx-a", "tx-b"]
+        second = copy.deepcopy(raw)
+        second["active_tracks"] = ["tx-a", "tx-c"]
+        assert config_hash(SessionConfig.model_validate(first)) != config_hash(
+            SessionConfig.model_validate(second)
+        )
 
     def test_the_hash_is_stable_across_runs(self, valid_session_yaml: Path) -> None:
         first = config_hash(load_session_config(valid_session_yaml))
