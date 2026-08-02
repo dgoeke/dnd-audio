@@ -7,18 +7,17 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 
 ## Right now
 
-- **Current milestone:** M0 — Foundation (in progress)
+- **Current milestone:** M0 — Foundation (verified; awaiting close)
 - **Branch:** `milestone/M0-foundation`
 - **Last closed milestone:** none
-- **Gate status at HEAD:** passes, with the expected `ruff / types / pytest` skip —
-  there is no `pyproject.toml` yet. M0 removes that skip.
+- **Gate status at HEAD:** passes, zero skips (8 checks, 311 tests)
 - **Blocked on:** nothing
 
 ## Milestone status
 
 | ID  | Milestone                  | Status      | Closed at |
 | --- | -------------------------- | ----------- | --------- |
-| M0  | Foundation                 | in progress | —         |
+| M0  | Foundation                 | verified    | —         |
 | M1  | Inspection                 | not started | —         |
 | M2  | Timeline                   | not started | —         |
 | M3  | Activity                   | not started | —         |
