@@ -50,7 +50,15 @@ mapping between source samples, working samples, and session time.
 
 ## Known risks and open questions
 
-- Depends on **OQ-004, OQ-006, OQ-011**.
+- Depends on **OQ-004, OQ-006, OQ-011**, and **settles OQ-013**: the work-space
+  preflight this milestone builds is what replaces `doctor`'s estimated 40 GiB warning
+  threshold with a number derived from the session's actual length.
+- **`dnd_audio.determinism.write_atomic` is for artifacts, not audio.** It holds the
+  whole payload in memory, which is right for JSON and a direct INV-07 violation for a
+  session-length waveform. The streamed working-audio path is this milestone's to build.
+- Exact-time helpers already exist: rates are `Fraction`, and `public_seconds()` is the
+  only float-producing conversion, built on an integer-millisecond quantizer with a
+  documented tie rule. Do not add a second float path.
 - INV-04 and INV-07 are both at maximum risk here. Resist the convenience of a
   float seconds field and of one big NumPy array; both work fine on a two-minute
   fixture and fail on a four-hour session.

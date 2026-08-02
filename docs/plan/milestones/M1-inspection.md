@@ -56,6 +56,28 @@ extracts timecode through a testable strategy chain, and writes a deterministic
 - Decoding audio for anything beyond an exact sample count when `ffprobe` cannot
   supply one.
 
+## What M0 already provides (read before starting)
+
+Four contracts land in M0 that this milestone inherits. See M0's closeout for the
+reasoning behind each.
+
+- **Every stage needs a recorded outcome.** `ReportBuilder.build()` refuses to assemble
+  a report with any stage unaccounted for. `inspect` must call `stage_skipped()` with a
+  reason for the five stages it does not run.
+- **A track's `input` directory must be named for its `track_id`** — enforced in
+  `TrackConfig`, which is what makes INV-11 structural. Discovery can rely on it.
+- **The manifest schema version is provisional until this milestone closes.** Change
+  version 1 freely while M1 is open; after it closes, only additive optional fields, and
+  anything else bumps the version (ADR-0005).
+- **Build the inspection cache identity on `config_hash()`**, not on raw `session.yaml`
+  bytes. The resolved projection materializes defaults and sorts the roster, so a config
+  that omits a default hashes identically to one that states it and a reordered roster
+  does not invalidate caches. Add FFmpeg/FFprobe versions and the parser versions on top
+  of it (INV-08).
+- The canonical writer INV-02 needs already exists: `dnd_audio.determinism`. Use
+  `write_json_atomic`, and record decisions in the report's `decisions` list rather than
+  inventing a second place for them.
+
 ## Known risks and open questions
 
 - Depends on **OQ-001, OQ-003, OQ-004, OQ-005, OQ-007, OQ-011**. Every guess about

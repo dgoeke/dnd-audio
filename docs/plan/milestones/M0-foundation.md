@@ -1,6 +1,6 @@
 # M0 — Foundation
 
-**Status:** in progress
+**Status:** closed
 **Depends on:** nothing
 **Spec sections:** Default technology choices; Target-host runtime (environment
 only); Repository and command shape; Output schemas; Error handling and
@@ -14,52 +14,52 @@ every later milestone's gate mean something. No audio processing yet.
 
 ## Completion gate
 
-- [ ] `pyproject.toml` (Python 3.12, `requires-python` excluding 3.13,
+- [x] `pyproject.toml` (Python 3.12, `requires-python` excluding 3.13,
       `license = "Apache-2.0"` to match the repository `LICENSE`),
       `.python-version`, and a committed `uv.lock`.
-- [ ] Repo-local Nix flake: `flake.nix` + committed `flake.lock`, `nixpkgs` pinned to
+- [x] Repo-local Nix flake: `flake.nix` + committed `flake.lock`, `nixpkgs` pinned to
       the host channel (`nixos-25.11`), with `devShells.default` (`mkShell`: Python
       3.12, `uv`, FFmpeg, SoX, native libs, build toolchain) and `devShells.fhs`
       (`buildFHSEnv` `.env`, reserved for M6a). Does not reuse or modify the host's
       ComfyUI venv. See ADR-0002, and `LOCAL.md` (uncommitted) for the host's config
       path and the ComfyUI module to model the FHS shell on.
-- [ ] `.envrc` containing `use flake`, committed. `direnv allow` yields a shell where
+- [x] `.envrc` containing `use flake`, committed. `direnv allow` yields a shell where
       `python --version` is 3.12 and `uv`, `ffmpeg`, `ffprobe`, `sox` resolve into the
       Nix store. Demonstrated with executed output in the verify phase. This is not a
       formality: the host's own `python3` is 3.13 and it has no `sox` at all, so an
       unactivated shell fails differently than a broken one.
-- [ ] Everything in this milestone works in `devShells.default`; the FHS shell is not
+- [x] Everything in this milestone works in `devShells.default`; the FHS shell is not
       required to run the gate. `nix develop .#fhs` is proven to open a shell, nothing
       more.
-- [ ] Typer CLI with every command registered: `process`, `inspect`, `ingest`,
+- [x] Typer CLI with every command registered: `process`, `inspect`, `ingest`,
       `transcribe`, `mix`, `render`, `doctor`, `models fetch`. All except `doctor`
       are wired to stubs that fail with a clear "not implemented in M<N>" error.
       (Amended during the start phase: the original wording listed `doctor` among
       the stubs and then required it to work. `doctor` is implemented.)
-- [ ] `doctor` genuinely works for its non-GPU checks: system dependencies
+- [x] `doctor` genuinely works for its non-GPU checks: system dependencies
       (ffmpeg/ffprobe presence and versions), writable paths, disk space.
       GPU checks land in M6a. Invoking `ffmpeg -version` / `ffprobe -version` is
       part of this and is not the "no ffprobe invocation" non-goal below, which is
       about probing session audio.
-- [ ] Pydantic models for `session.yaml` (including the full `timecode`,
+- [x] Pydantic models for `session.yaml` (including the full `timecode`,
       `asr`, `activity`, `mix`, and `recovery` shapes) and skeletons for
       `manifest.json`, `transcript.json`, and `ingest-report.json`.
-- [ ] DJI frame-rate labels map to exact rational rates
+- [x] DJI frame-rate labels map to exact rational rates
       (`23.98F`, `24F`, `25F`, `29.97F`, `29.97DF`, `30F`, `50F`, `60F`), with
       incompatible drop-frame syntax rejected. Unit-tested (INV-04).
-- [ ] JSON Schema artifacts generate from the Pydantic models into a checked-in
+- [x] JSON Schema artifacts generate from the Pydantic models into a checked-in
       location, and a test fails when a model changes without regeneration.
-- [ ] `Transcriber` and `ActivityDetector` protocols exist with deterministic fake
+- [x] `Transcriber` and `ActivityDetector` protocols exist with deterministic fake
       implementations (INV-10).
-- [ ] Report writer produces a valid `ingest-report.json` skeleton with
+- [x] Report writer produces a valid `ingest-report.json` skeleton with
       `overall_status`, per-stage status, and separated provenance vs. telemetry
       sections; writes atomically (INV-13, INV-02).
-- [ ] Autouse pytest fixture blocks socket access; a test proves an attempted
+- [x] Autouse pytest fixture blocks socket access; a test proves an attempted
       connection fails (INV-05).
-- [ ] `host_smoke` pytest marker registered and excluded by the gate.
-- [ ] Atomic-write and canonical-JSON helpers exist with tests (INV-02).
-- [ ] `.gitignore` covers session audio, weights, secrets, work, and output.
-- [ ] `./scripts/gate.sh` passes end to end with its `TYPE_CHECK` command filled in,
+- [x] `host_smoke` pytest marker registered and excluded by the gate.
+- [x] Atomic-write and canonical-JSON helpers exist with tests (INV-02).
+- [x] `.gitignore` covers session audio, weights, secrets, work, and output.
+- [x] `./scripts/gate.sh` passes end to end with its `TYPE_CHECK` command filled in,
       and its system-dependency step extended to fail when the flake environment is
       not active — `sox` present, and `python --version` reporting 3.12 from
       `/nix/store`. Invoking `nix` from the gate is not allowed (it would need the
@@ -86,242 +86,212 @@ every later milestone's gate mean something. No audio processing yet.
 
 ---
 
-## Working plan
+## Closeout
 
-_Scratch section written at start time. Replaced by the Closeout at close time._
+### What works end to end
 
-### Preconditions checked
+Nothing processes audio yet — by design. What exists is a project that runs, and the
+rails that make every later milestone's gate mean something.
 
-Working tree clean at `82fb3b8`; M0 depends on nothing; `./scripts/gate.sh` passes at
-HEAD with the single expected skip (`ruff / types / pytest: no pyproject.toml yet`),
-which this milestone removes.
+`direnv allow`, then `cd` into the repository, gives a shell with Python 3.12.13, `uv`,
+FFmpeg 8.0 (with `libmp3lame`, `loudnorm`, and `ebur128`, which M5 needs), and SoX, all
+resolved out of `/nix/store`. `nix develop .#fhs` opens the FHS sandbox held for M6a,
+and `nix run .#fhs -- -c '<command>'` runs something inside it non-interactively.
 
-Facts verified before planning: the host interpreter is 3.13 and `sox` is absent, so the
-flake shell is load-bearing rather than decorative. nixpkgs at the channel the host
-tracks provides Python 3.12.13, and its `ffmpeg` carries `libmp3lame`, `loudnorm`, and
-`ebur128` — what M5 will need, confirmed now rather than discovered later.
+`uv run dnd-audio` exposes every command the spec names. `doctor` genuinely works:
 
-### Split into two phases
+```
+    ok  python         3.12.13 at .venv/bin/python
+    ok  ffmpeg         ffmpeg version 8.0 ...
+    ok  ffprobe        ffprobe version 8.0 ...
+    ok  sox            SoX v14.4.2 ...
+    ok  writable path  .
+    ok  free space     633.3 GiB free at .
+```
 
-The milestone is implemented as two commits with a gate-green boundary between them, at
-the invoker's request: the environment is built first, and the rest of the work is done
-from inside it. Phase A lands no Python, so the tree stays green (with the pre-existing
-skip) at the pause. `STATE.md` records M0 as in progress at that point so a cleared
-context can resume from the repository alone.
+Every other command is a stub that says which milestone it lands in and exits 3 —
+distinct from Click's usage exit 2 and from a pipeline failure's 1:
 
-**Phase A — flake and direnv machinery.** `flake.nix` (nixpkgs pinned to the channel the
-host's configuration tracks, `x86_64-linux` only, since `buildFHSEnv` is Linux-only and
-the target host is the only host), committed `flake.lock`, `.envrc` containing
-`use flake`, and `.python-version`.
+```
+$ uv run dnd-audio inspect /tmp/session
+not implemented yet: `inspect` lands in M1 (/tmp/session)
+$ echo $?
+3
+```
 
-- `devShells.default` — `mkShell` with Python 3.12, `uv`, FFmpeg, SoX, the native
-  libraries CPU wheels link against, and a build toolchain. Its `shellHook` points `uv`
-  at the flake's interpreter and disables uv's own interpreter downloads, so uv can never
-  quietly substitute a different Python.
-- `devShells.fhs` — a `buildFHSEnv` `.env` whose `targetPkgs` is seeded from the host's
-  ComfyUI module. Reserved for M6a; M0 proves only that it opens.
+Underneath: a validated `session.yaml` model, skeleton schemas for `manifest.json`,
+`transcript.json`, and `ingest-report.json` with checked-in JSON Schema artifacts, exact
+rational frame rates, model seams with scripted fakes, and a report writer that
+distinguishes a partial run from a successful one.
 
-Verified by executing `python --version` and tool lookups inside `nix develop`, opening
-the FHS shell, and re-running the gate.
+### Tests and commands run, with results
 
-**Phase B — the Python project**, in this order, each step verifiable before the next
-depends on it. Amended after the independent plan review; the record of what was
-accepted and rejected is at the end of this section.
+`./scripts/gate.sh` — **8 checks, zero skips, 311 tests**:
 
-1. `pyproject.toml` + `uv.lock`. Runtime: Typer, Pydantic, PyYAML, NumPy. Dev group:
-   pytest, ruff, the chosen type checker, `jsonschema`. The `asr-qwen` group is declared
-   **empty** with a comment naming M6a/M6b — declaring its existence is in scope,
-   resolving the heavyweight stack into the lock is not.
-2. `determinism.py` — canonical JSON, atomic write, and hashing. `sha256_file` streams in
-   a bounded chunk and never reads a whole file into memory (INV-07 applies to every
-   helper a later milestone will point at a multi-gigabyte recording). The only
-   float-producing conversion is built on an integer-millisecond quantizer with an
-   explicit, documented tie rule, so no caller can reach a general float helper by
-   accident (INV-04).
-3. `timecode.py` — the eight DJI rate labels to exact rationals plus a drop-frame flag,
-   and timecode-string validation that rejects drop-frame syntax at a non-drop rate.
-   Deliberately stops short of timecode-to-sample conversion, which is M2's.
-4. `config.py` — the full `session.yaml` model with unknown keys forbidden, including
-   `timecode`, `asr` (with the optional explicit model and aligner revisions the spec
-   requires), `activity`, `mix`, and `recovery.source_time_overrides`. INV-11 is
-   structural here: `track_id` is the key, and receiver fields validate without ever
-   becoming identity. `max_segment_s` is capped at 120 with `OQ-009` cited at the cap.
-   This step also defines the **resolved-configuration projection**: the validated model
-   dumped with defaults materialized and paths normalized, canonically serialized, and
-   hashed. Every later cache key is built on it (INV-08), so a config that omits a
-   default must hash identically to one that states it.
-5. `artifacts/` — `manifest.py`, `transcript.py` (matching the spec's baseline exactly),
-   and `report.py` with a structural provenance/telemetry split so INV-03 cannot be
-   violated by accident. Stage records are held in a fixed stage order, never in
-   completion order. The manifest and report schemas are explicitly **provisional** until
-   the milestone that owns the artifact closes; after that, additive optional fields only,
-   and anything else bumps `schema_version`.
-6. Schema export plus checked-in JSON Schema artifacts. One function returns the
-   filename-to-canonical-JSON mapping; the generator script writes it and the drift test
-   compares against it, so the two cannot disagree.
-7. `interfaces.py` and `fakes.py` — `Transcriber` and `ActivityDetector` protocols with a
-   **scripted** fake transcriber and a scripted-mask detector (INV-10). Request types
-   carry integer sample coordinates and a bounded audio window, never an unconstrained
-   session-length array (INV-07).
-8. `report.py` — stage accumulation, `overall_status` rollup, atomic write on partial
-   failure (INV-13), and deliverable hashes for everything except the report itself
-   (ADR-0003).
-9. `doctor.py` — tool presence and versions, interpreter identity, writable-path probe,
-   free disk space, with machine-readable output.
-10. `cli.py` — every command registered. Everything except `doctor` raises
-    `NotImplementedError` annotated `DEFERRED: M<n>`, deliberately visible to
-    `scripts/scan_placeholders.py` rather than hidden behind a custom exception type, and
-    the entry point turns that into a clean message and a dedicated exit code.
-11. `tests/` — the network block (see below), then one module per source module.
-12. `scripts/gate.sh` — `TYPE_CHECK` filled in; the system-dependency step extended to
-    require SoX and a store-resolved Python 3.12 with a "run `direnv allow`" hint; every
-    tool invocation switched to a no-sync form so the gate provably performs no network
-    I/O, with a preflight that names `uv sync` when the environment is missing.
-13. ADRs for the strict type checker, the schema-artifact generation/drift/versioning
-    mechanism, and the status, exit-code, and enum vocabularies the spec left open.
-    ADR-0003 is already written.
+```
+== gate summary ==
+  pass  system dependencies      pass  pytest (offline, cpu)
+  pass  ruff check               pass  lock is current
+  pass  ruff format              pass  placeholder scan
+  pass  type check               pass  plan consistency
 
-### The network block
+GATE PASSED
+```
 
-Blocking outbound `connect` is not enough: unconnected UDP and name resolution both leave
-the machine. The autouse fixture blocks the socket **operations** that can move bytes off
-the host — `connect`, `connect_ex`, `sendto`, `sendmsg` — on any socket that is not
-`AF_UNIX`, and blocks name resolution in both directions (`getaddrinfo`, `gethostbyname`,
-`gethostbyname_ex`, `gethostbyaddr`, `getnameinfo`) plus `create_connection`. `AF_UNIX`
-stays available: it cannot reach the network, and pytest internals use it.
+Per-area: config 56, timecode 43, determinism 29, report 28, fakes 22, cli 20, doctor 17,
+artifacts 15, packaging 32, schema drift 11, network block 12.
 
-Socket *construction* is deliberately not blocked. Libraries build sockets they never
-connect, and breaking that would trade a real invariant for spurious failures.
+Each rail was also proven able to *fail*, because a rail that cannot fail is decoration:
 
-There is no `host_smoke` exemption. INV-06 permits network access to exactly one command,
-`models fetch`, so the opt-out is a separate explicit `allow_network` marker reserved for
-that, not a side effect of needing a GPU. The gate excludes `allow_network` as well as
-`host_smoke` — an opted-out test running inside the suite the gate calls offline would
-make the claim false the moment one existed.
+| Rail | How it was falsified | Result |
+| ---- | -------------------- | ------ |
+| Placeholder scan | Planted `raise NotImplementedError` with no `DEFERRED:` | exit 1, named the line |
+| Placeholder scan | Planted `pytest.skip("waiting on nothing")` | exit 1, named the line |
+| Schema drift | Added a field to `Manifest` without regenerating | `test_checked_in_bytes_match_the_models[manifest]` failed |
+| Gate's flake check | Ran under `env -i PATH=/run/current-system/sw/bin` | `sox MISSING`, `Python 3.13.12 (expected 3.12.x)`, `run: direnv allow`, exit 1 |
+| Marker exclusion | `--collect-only` with and without the gate's selector | 311 vs 310 — it really deselects |
 
-The honest boundary: a subprocess the tests spawn has its own address space and is not
-covered. Nothing in the default suite spawns a network-capable subprocess other than this
-project's own CLI, and OS-level isolation is not worth its complexity here. This limit is
-documented in `conftest.py` rather than papered over.
+Environment proofs: `direnv exec .` (not a shell that was already active) resolves python
+and sox from `/nix/store`; `nix run .#fhs -- -c` reports Python 3.12.13 with `/usr/lib`
+present; `flake.lock` pins nixpkgs `b6018f87da91d19d0ab4cf979885689b469cdd41` — the same
+revision the host's own configuration is on, so the repo shell and the host cannot drift.
 
-### Gate criteria mapped to proof
+### Decisions made (→ ADRs)
 
-| Criterion | Proof |
-| --- | --- |
-| `pyproject.toml`, `.python-version`, committed lock | `tests/test_packaging.py` reads `pyproject.toml` with `tomllib` and asserts `requires-python`, the Apache-2.0 license, and the console-script entry point; `.python-version` content asserted; the gate's `uv lock --check`; `git ls-files` checked during verification |
-| Base environment stays free of heavyweight deps | `tests/test_packaging.py` parses `uv.lock` and asserts no `torch` in the default resolution and that `asr-qwen` is declared but empty |
-| Flake with both shells, committed lock | executed `nix develop` and `nix run .#fhs` output, quoted in the closeout |
-| `.envrc`; activated shell gives 3.12 and store-resolved tools | a clean `direnv exec .` invocation — not a shell that was already active — plus the gate's system-dependency step, which fails outside the flake |
-| Everything works in the default shell | the gate runs there and never invokes `nix` |
-| Every command registered; stubs fail clearly | `tests/test_cli.py` via `CliRunner`, **plus** a subprocess test running the installed `dnd-audio` console script offline, so a broken build backend or `src/` discovery cannot pass |
-| `doctor` works for non-GPU checks | `tests/test_doctor.py`: real tool versions parsed, non-writable path detected, free space reported, `--json` shape asserted |
-| `session.yaml` models, full shape | `tests/test_config.py`: a valid fixture exercising every field and default, plus a rejection table — unknown key, `active_tracks` naming an unrostered track, duplicate `track_id`, absolute or escaping input path, **a track reading another track's directory (INV-11)**, both timing values in one override, an override carrying no information at all, malformed hash, `max_segment_s` above the cap, invalid bitrate, `receiver_channel` out of range |
-| Resolved-config hash is a sound cache identity (INV-08) | `tests/test_config.py`: a config omitting defaults hashes identically to one stating them; reordering the roster or the active-track list does not change the hash while changing *which* tracks are active does; two spellings of the same override path normalize to one; changing any output-affecting field changes the hash |
-| Manifest / transcript / report skeletons | `tests/test_artifacts.py`: constructed instances validated against the **checked-in** schema files, not round-tripped through the model that produced them — plus the spec's own transcript example, transcribed by hand into `tests/data/`, as ground truth this code did not generate |
-| Rate labels to exact rationals; bad drop-frame syntax rejected (INV-04) | `tests/test_timecode.py`: all eight labels asserted against exact rationals; drop-frame separator at a non-drop rate, out-of-range frames, and legitimately skipped drop-frame numbers all raise |
-| Schemas generate; drift test fails on model change | `tests/test_schema_drift.py`: checked-in bytes equal generated bytes, generated in a **subprocess under a different `PYTHONHASHSEED`** so iteration order cannot hide; plus a test that drifts a copy on disk and asserts the *same comparison function* then fails |
-| Protocols and deterministic fakes (INV-10) | `tests/test_fakes.py`: runtime protocol conformance; a scripted response is returned verbatim; identical input twice yields identical output |
-| Report: every stage has a status, structured errors, deliverable hashes | `tests/test_report.py`: `complete`, `failed`, and `skipped` all represented; **a report missing any stage cannot be built**, and one whose `overall_status` contradicts its stages cannot be constructed; a structured error survives serialization; deliverable hashes present and `ingest-report.json` never among them (ADR-0003) |
-| Report determinism and the provenance/telemetry split | `tests/test_report.py`: the same stage updates applied in two different orders produce byte-identical provenance, and decisions recorded in either order serialize identically (INV-02); no time-typed field exists in provenance or in a decision (INV-03) |
-| Report atomicity (INV-13) | `tests/test_determinism.py`: three failures forced *after* the temp file exists — in `write`, `fsync`, and `replace` — each leave the previous file intact with no temp file behind, plus a test showing a naive truncating write fails that check. `tests/test_report.py` covers the builder path |
-| Socket block proven (INV-05) | `tests/test_network_blocked.py`, in the **default** suite: an outbound TCP connect, `connect_ex`, an IPv6 connect, an unconnected UDP `sendto`, and forward *and reverse* name resolution each raise the block error; an `AF_UNIX` socket still works |
-| `host_smoke` registered and excluded | `tests/test_packaging.py`: both markers declared, `--strict-markers` on, and the gate's selector excludes `host_smoke` **and** `allow_network` |
-| Atomic-write, canonical-JSON, and hashing helpers (INV-02, INV-07) | `tests/test_determinism.py`: repeated writes byte-identical, key order independent of insertion order, non-finite floats rejected, no temp files left behind, `sha256_file` matches a known digest while never reading more than its chunk size, millisecond quantization exact at tie boundaries |
-| `.gitignore` coverage | `tests/test_packaging.py`: `git check-ignore` asserted against sentinel paths for session audio, weights, secrets, work, and output |
-| Gate passes end to end | `./scripts/gate.sh` with zero skips, quoted in the closeout |
+- **[ADR-0003](../decisions/0003-report-deliverable-hashes.md)** — the report hashes every
+  deliverable except itself. The spec lists `ingest-report.json` as a deliverable *and*
+  requires the report to carry the hash of every deliverable produced, which has no fixed
+  point: writing the hash changes the bytes it describes. INV-13 and the spec's
+  error-handling section each gained the same one-clause carve-out. **This is the first
+  amendment to the spec.**
+- **[ADR-0004](../decisions/0004-mypy-strict-as-the-type-checker.md)** — mypy `strict`
+  with the Pydantic plugin. pyright and basedpyright both need a Node runtime the offline
+  gate cannot have; `ty` is not stable enough to base a per-milestone gate on.
+- **[ADR-0005](../decisions/0005-vocabularies-the-spec-left-open.md)** — the vocabularies
+  the spec implied but did not name: `overall_status`, exit codes, `rollover_policy`,
+  `alignment_status`, `asr.dtype`, and why an information-free recovery override is
+  rejected.
 
-### Invariants at risk, and what stops it
+### Assumptions made and open questions raised
 
-- **INV-02** — a helper that looks deterministic but is not, or an artifact whose content
-  depends on which stage finished first. One canonical serializer, sorted keys, fixed
-  stage ordering, non-finite floats rejected, a write-twice byte comparison, an
-  applied-in-two-orders comparison, and schema generation under a varied hash seed.
-- **INV-03** — a timestamp landing in provenance because it was convenient. The split is
-  structural, and a test asserts provenance carries no time-typed field.
-- **INV-04** — a fractional rate as a binary float. Rates are exact rationals, the tests
-  compare against rationals rather than decimal literals, and the only float-producing
-  path is an integer-millisecond quantizer with a documented tie rule.
-- **INV-05** — over-blocking (breaking pytest internals) or under-blocking (UDP, DNS,
-  a blanket `host_smoke` exemption). Addressed in "The network block" above.
-- **INV-07** — a hashing or interface helper that quietly reads a whole session into
-  memory. `sha256_file` streams with a bounded chunk and is tested for it; request types
-  carry sample coordinates and a bounded window rather than a session-length array.
-- **INV-08** — a cache identity built on raw YAML bytes, so that omitting a default looks
-  different from stating it. The resolved-configuration projection is defined in M0 and
-  tested for exactly that equivalence.
-- **INV-10** — a fake too clever to be useful. A scripted fake returns what the test told
-  it to, which is what M4 needs for truncation, overlap, and alignment-failure cases.
-- **INV-13** — a stub CLI that exits zero, or a report missing a stage. Distinct exit
-  codes asserted per command; all three stage statuses represented in the report test.
+**OQ-013 raised** — how much working disk a full session actually consumes. `doctor`
+warns below 40 GiB, derived from arithmetic in `src/dnd_audio/doctor.py`: roughly 15 GiB
+of 48 kHz float32 working audio, 5 GiB of 16 kHz derivatives, and 3 GiB of mix
+intermediate for a four-hour six-transmitter session. The intermediate *count* is the
+guess. M2's preflight settles it.
 
-### Charter points amended during this phase
+No existing open question was answered — every one of OQ-001..OQ-012 needs hardware or a
+milestone M0 does not touch. **OQ-009** is cited in `config.py` at the `max_segment_s`
+cap, which is the one place M0's code depends on an assumption about model behaviour.
 
-1. **The `doctor` contradiction.** The gate listed `doctor` among the commands wired to
-   not-implemented stubs and then required it to work. Amended above: everything except
-   `doctor` is a stub.
-2. **`doctor` versus the "no ffprobe invocation" non-goal.** Reading tool versions means
-   executing them; the non-goal is about probing session audio. Clarified above.
-3. **"Gate passes end to end" has to mean zero skips.** It already passes *with* one. M0
-   is not complete until that skip is gone. Recorded here rather than in the gate list,
-   which already says what it says.
+Assumptions worth naming that did *not* become open questions, because they are about
+tooling rather than the world: that the flake's nixpkgs pin tracks the host channel
+(ADR-0002 already owns this), and that `uv run --no-sync` performs no network I/O
+(asserted by a test that greps the gate script).
 
-### Independent review (Codex, `docs/plan/reviews/M0-plan-20260802-0912.md`)
+### Notes for future implementors
 
-**Accepted.** The network block redesign (UDP, DNS, no `host_smoke` exemption, proof test
-inside the default suite). The report coverage gaps — `skipped` status, structured
-errors, deliverable hashes, order-independent provenance. Ordering determinism generally,
-including varying `PYTHONHASHSEED` for schema generation. Bounded-memory contracts on
-`sha256_file` and on the protocol request types. A provisional-until-owned policy for the
-skeleton schema versions. The missing `session.yaml` cases: explicit model and aligner
-revisions, a `max_segment_s` cap citing OQ-009, an override supplying no information.
-The console-script subprocess test, since a `CliRunner` test passes even when packaging is
-broken. Executable proofs in place of assertion-free rows: `tomllib` for project metadata,
-`git check-ignore` for the ignore rules, `uv.lock` inspection for the no-Torch rule, and a
-clean `direnv exec .` for activation. A canonical resolved-configuration projection for
-INV-08. A scripted fake transcriber instead of a content-hash-derived one. An integer
-quantizer instead of a general float helper.
+**The environment is not optional and the gate will tell you so.** `./scripts/gate.sh`
+fails outside the flake shell with `sox MISSING` and a `direnv allow` hint. If you are
+seeing weird failures, check `python --version` first — the host's own is 3.13, the
+version `requires-python` excludes.
 
-**Accepted with a change of remedy.** The report self-hash impossibility is real, and the
-review is right that the wording had to change; ADR-0003 records the fix, amends INV-13
-and the spec, and rejects the sidecar alternative it proposed for reasons written there.
-On network-capable subprocesses, OS-level isolation is not worth its complexity in M0 —
-the boundary is documented in `conftest.py` instead.
+**`nix develop .#fhs --command CMD` silently runs nothing and exits 0.** `buildFHSEnv`'s
+shellHook `exec`s into `bwrap` before your command is reached, so you get no output and
+no error. This cost time to diagnose. Use `nix run .#fhs -- -c 'CMD'` — that is what
+`packages.fhs` exists for — or an interactive session. **M6a will hit this immediately.**
 
-**Rejected.** *"Enumerate the configurable thresholds later required by activity and
-automix."* Those fields belong to M3 and M5, which have not chosen them; inventing them
-now would guess at values those milestones must derive from real signal behaviour, and
-`extra="forbid"` guarantees that adding one later is a visible, deliberate change rather
-than a silent drift. M0 models exactly the fields the spec's own example defines.
+**The gate runs everything under `uv run --no-sync`.** That is what makes "the gate is
+offline" a fact rather than a habit, and it means a stale `.venv` fails the gate instead
+of being silently repaired. Run `uv sync` after changing dependencies; the gate says so
+if `.venv` is missing.
 
-### Verify phase: independent code review
+**`ReportBuilder.build()` refuses to assemble a report with any stage unaccounted for.**
+If your milestone runs only `inspect`, you must call `stage_skipped()` with a reason for
+the other five. This is deliberate: a stage that is simply absent is indistinguishable
+from one nobody remembered, and before the verify phase a builder with no stages produced
+`overall_status: complete` and exit 0 — the exact thing INV-13 exists to prevent.
 
-Two independent passes on the committed branch — Codex
-(`docs/plan/reviews/M0-code-20260802.md`) and a fresh-context reviewer agent that did not
-write the code. Both found real defects. Disposition:
+**A track's `input` directory must be named for its `track_id`.** `track_id: tx-a` with
+`input: raw/tx-f` used to validate, and would have attributed every word Frank said to
+Alice with nothing downstream able to notice. Directory identity is now structural rather
+than a docstring claim (INV-11). The directory may live anywhere in the session; only its
+final component is constrained. If a session legitimately needs person-named directories,
+that is a deliberate change to `TrackConfig`, not an oversight to work around.
 
-| # | Finding | Source | Severity | Disposition |
-| - | ------- | ------ | -------- | ----------- |
-| 1 | `codex-review.sh code` was broken: this Codex version rejects a custom prompt alongside `--base`, so the review never ran | gate/self | blocker | **Fixed.** `code` now drives `codex exec` like `plan` does and names the diff range in the prompt, which keeps the project-specific instructions that are the point of the script |
-| 2 | An empty report rolled up to `complete` and exited 0; stages could be silently absent; `overall_status` could contradict its own stages | codex | blocker | **Fixed.** `build()` refuses to assemble a report with any stage unaccounted for and names the missing ones; `IngestReport` requires all six and checks the rollup; `roll_up([])` raises |
-| 3 | A track could read another track's directory — `track_id: tx-a`, `input: raw/tx-f` validated, mis-attributing a whole session | codex | high | **Fixed.** The input directory's name must equal `track_id`. INV-11 is now structural, as the module claimed. The separate duplicate-input check became unreachable and was removed rather than left untestable |
-| 4 | Both "atomic write survives failure" tests short-circuit before `write_atomic` is entered, so the cleanup path was never exercised | reviewer agent, codex | high | **Fixed.** Three parametrized failures forced *after* `mkstemp` — in `write`, `fsync`, `replace` — plus a test proving a naive truncating write fails that check |
-| 5 | The socket block missed reverse resolution (`gethostbyaddr`, `getnameinfo`), and the gate excluded only `host_smoke`, so an `allow_network` test would run inside the "offline" suite | codex | high | **Fixed.** Both functions blocked; the gate selector is now `not host_smoke and not allow_network` |
-| 6 | The spec requires a deterministic decisions subsection; the proof table claimed one and no such field existed | codex | medium | **Fixed.** `decisions: list[Decision]`, sorted by `(code, subject)`, with order-independence and INV-03 tests |
-| 7 | Recovery override keys were validated but not normalized: two spellings of one path hashed differently and a lookup would miss one | codex | medium | **Fixed.** Keys normalize on validation and a post-normalization collision is rejected |
-| 8 | `scan_placeholders.py` was fail-open for runtime skips (`pytest.skip`, `importorskip`) | codex | medium | **Fixed.** Runtime skips must name a milestone or `OQ-` too. Verified by planting one |
-| 9 | `test_drift_is_actually_detected` mutated a dict and asserted it differed from itself — it could not fail meaningfully | self | medium | **Fixed.** It now drifts a copy on disk and asserts the *same comparison function* the real test uses then fails |
-| 10 | Every artifact test validated model output against schemas generated from those same models | self, reviewer agent (judged acceptable) | medium | **Fixed anyway.** The spec's own transcript example is transcribed by hand into `tests/data/` and validated as ground truth this code did not produce |
-| 11 | `doctor`'s 20 GiB free-space floor was an unregistered guess, and arithmetic says a four-hour session needs ~23 GiB of working audio — it would have warned too late | self | medium | **Fixed.** Raised to 40 GiB with the arithmetic in the source, and registered as **OQ-013** |
-| 12 | Reordering the roster in `session.yaml` changed `config_hash`, invalidating caches for a session identical in every way that affects output | reviewer agent (sub-threshold) | low | **Fixed.** The projection sorts `tracks` and `active_tracks`; a test confirms changing *which* tracks are active still changes the hash |
-| 13 | `test_public_seconds_is_exactly_the_quantizer` asserted the implementation against its own definition | self | low | **Fixed.** Replaced with hand-computed values |
-| 14 | The working plan said the fixture blocks socket *creation*; it blocks operations | codex | low | **Fixed** in the text above. Blocking construction would break libraries that build sockets they never connect — a real cost for no invariant gained |
-| 15 | Block network access inside subprocesses with OS-level isolation | codex (plan phase) | — | **Rejected.** Not worth the complexity in M0; nothing in the default suite spawns a network-capable subprocess but this project's own CLI. The boundary is documented in `conftest.py` rather than papered over |
-| 16 | Enumerate the threshold fields M3 and M5 will need | codex (plan phase) | — | **Rejected.** Those milestones have not chosen them; inventing values now would guess at numbers derived from real signal behaviour, and `extra="forbid"` makes adding one later a visible change |
-| 17 | The `scan_placeholders` 4-line window can be satisfied by an unrelated token nearby | codex | low | **Deferred.** Real but narrow; closing it properly means parsing with `ast` rather than regex. Recorded here so the next person finds it |
-| 18 | Schema-drift tests are inherently circular — they compare a committed file against the function that generated it | reviewer agent | — | **Rejected as a defect.** That is what a drift check *is*; correctness is covered by validating real payloads, now including the spec's own example |
+**Build a test that proves your test can fail.** Two of M0's own tests — both named "the
+atomic write survives a failure" — short-circuited before `write_atomic` was ever
+entered. Both would have passed against `path.write_bytes()`. Independent review caught
+it; self-review did not. When a test is the sole proof of an invariant, break the
+implementation on purpose once and watch the test go red.
 
-### Deliberately not doing
+**Use `write_atomic` for artifacts, never for audio.** It holds the whole payload in
+memory. INV-07 forbids materializing a session-length waveform, so M2's working-audio
+writes need their own streamed path.
 
-Real audio I/O, session-file probing, discovery, and the synthetic fixture generator (M1).
-PyTorch, ROCm, the AMD wheel index, and any real content in the `asr-qwen` group
-(M6a/M6b). Silero (M3). Any manifest content beyond a skeleton M1 will extend.
+**`resolved_config()` is what "the configuration" means to a cache key.** It materializes
+defaults and sorts the roster, so a session file that omits a default hashes identically
+to one that states it, and reordering tracks does not invalidate caches. Build M1's
+inspection cache identity on `config_hash()` plus tool versions rather than hashing raw
+YAML — hashing the file directly would make an added blank line a cache miss.
+
+**Times are `Fraction` everywhere internal.** `public_seconds()` is the only float-producing
+conversion, built on an integer-millisecond quantizer with an explicit half-away-from-zero
+tie rule. Python's `round()` is banker's rounding and would make 0.5 ms and 1.5 ms
+disagree about which way a half goes. Do not add a second float path.
+
+**`scripts/codex-review.sh code` had never worked.** This Codex version rejects a custom
+prompt alongside `--base`; the review exited immediately with a usage error that the tee
+captured and nobody read. It now drives `codex exec` the way `plan` does. If a review
+returns suspiciously fast, read the raw file before believing it found nothing.
+
+**Reviewer transcripts quote `LOCAL.md`.** They now land as gitignored `*.raw.md`; commit
+the distilled findings beside them. This repository is public.
+
+**Things that look wrong but are deliberate:** the CLI raises the builtin
+`NotImplementedError` rather than a project exception, so `scan_placeholders.py` can see
+it — a custom type would evade the check that exists to surface placeholder work. The
+schema-drift test compares a committed file against the function that generated it, which
+is circular by nature; correctness is covered separately by validating real payloads,
+including the spec's own transcript example checked into `tests/data/`.
+
+### Deviations from this charter, and why
+
+1. **`doctor` is implemented, not stubbed.** The gate listed it among the not-implemented
+   commands and then required it to work. Amended in the gate list during the start phase.
+2. **Reading tool versions means executing `ffmpeg -version` and `ffprobe -version`.** The
+   "no ffprobe invocation" non-goal is about probing session audio, not about reading a
+   version string. Clarified in the gate list.
+3. **"Gate passes end to end" was read as "with zero skips."** It already passed *with* a
+   skip before this milestone started.
+4. **`packages.fhs` was added beyond the charter's `devShells.fhs`.** Same sandbox, exposed
+   as a runnable wrapper, because `devShells.fhs` cannot be driven from a script.
+5. **The spec was amended** (one clause, ADR-0003). Flagged separately because the working
+   agreement says the spec does not change casually.
+6. **INV-13's wording was amended** with the same carve-out.
+7. **Three enforcement rails were fixed mid-milestone**: `scan_placeholders.py` matched the
+   bare string `NotImplementedError` (flagging an `except` handler and two docstrings) and
+   was blind to runtime skips; `codex-review.sh` was broken for `code` mode and was teeing
+   `LOCAL.md` into a public directory. All three were doing less than they claimed.
+
+### Downstream charters updated
+
+- **M1** — added the four M0 contracts it inherits: every stage needs a recorded outcome,
+  the input directory is the track identity, the manifest schema version is provisional
+  until M1 closes, and the inspection cache builds on `config_hash()`.
+- **M2** — noted that `write_atomic` is for artifacts only, and that its preflight is what
+  settles OQ-013.
+- **M4** — noted that the transcript schema version is provisional until M4 closes.
+- **M6a** — noted the `nix develop .#fhs --command` trap, with the working alternative.
+- **`OPEN-QUESTIONS.md`** — OQ-013 added.
+- **`AGENTS.md`** — records that reviewer transcripts are gitignored and distilled.
+- **`ROADMAP.md`** — unchanged; the dependency graph did not move.
+
+### Next smallest step
+
+Begin M1: the synthetic fixture generator first, then discovery and `ffprobe` capture.
+The generator is the thing everything after it is tested against, and the charter is
+explicit that acquiring the H1 hardware fixture should start during M1 rather than wait.
+
+Real DJI metadata has **not** been validated. Every layout assumption in M1 must sit
+behind a named strategy tagged with its `OQ-` ID.

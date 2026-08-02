@@ -59,7 +59,16 @@ cached records alone.
 ## Known risks and open questions
 
 - Depends on **OQ-009** for the eventual real segment limits, but M4 must be
-  correct under the configured limit regardless.
+  correct under the configured limit regardless. `config.py` caps `max_segment_s` at 120
+  and cites the OQ at the cap; move the cap there if the answer changes.
+- **The transcript schema version is provisional until this milestone closes.** Change
+  version 1 freely while M4 is open; after it closes, only additive optional fields
+  (ADR-0005). `tests/data/transcript-spec-example.json` is the spec's own example held as
+  independent ground truth — if a change makes it stop validating, the change is wrong.
+- The fake transcriber M0 provides is **scripted**, not content-derived: hand it the
+  truncation, alignment-failure, and overlapping-utterance responses this milestone needs
+  to exercise. `ScriptedTranscriber.requests` records what it was asked, which is how the
+  "no padded waveform exceeds `max_segment_s`" assertion is written.
 - Duplicate collapse is where the pipeline is most likely to silently delete real
   speech. Bias every ambiguous case toward keeping both and marking overlap.
 - INV-09: nothing decided here may flow back into the activity graph.
