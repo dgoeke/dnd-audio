@@ -168,7 +168,7 @@ class TestValidationRejectsABrokenFile:
     def test_a_missing_file_names_the_fix(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("dnd_audio.timeline.fir.FIR_PATH", FIR_PATH.parent / "absent.json")
         load_decimation_filter.cache_clear()
-        with pytest.raises(FilterError, match="design_fir.py"):
+        with pytest.raises(FilterError, match=r"design_fir\.py"):
             load_decimation_filter()
         load_decimation_filter.cache_clear()
 
@@ -203,9 +203,7 @@ class TestValidationRejectsABrokenFile:
                 delay_input if delay_input is not None else (len(coefficients) - 1) // 2
             ),
             "group_delay_samples_output": (
-                delay_output
-                if delay_output is not None
-                else ((len(coefficients) - 1) // 2) // 3
+                delay_output if delay_output is not None else ((len(coefficients) - 1) // 2) // 3
             ),
             "coefficients": coefficients,
         }
@@ -238,7 +236,8 @@ class TestDesignIsReproducible:
 
         script = Path(__file__).resolve().parent.parent / "scripts" / "design_fir.py"
         spec = importlib.util.spec_from_file_location("design_fir", script)
-        assert spec is not None and spec.loader is not None
+        assert spec is not None
+        assert spec.loader is not None
         module = importlib.util.module_from_spec(spec)
         sys.modules["design_fir"] = module
         spec.loader.exec_module(module)

@@ -3,7 +3,9 @@
 The spec requires schemas for `session.yaml`, `manifest.json`, `transcript.json`, and
 `ingest-report.json`, generated from the Pydantic models and checked in, and requires
 tests to validate real output against *those files* rather than round-tripping through
-the model that produced them.
+the model that produced them. `timeline.json` is M2's and follows the same rule: the
+spec names the artifacts it knew about, and a new deterministic artifact that skipped
+the schema would be the one consumers could not validate.
 
 :func:`schema_documents` is the single source both the generator script and the drift
 test use. If they each built the schema their own way, a drift test could pass while the
@@ -23,6 +25,7 @@ from pydantic import BaseModel
 
 from dnd_audio.artifacts.manifest import Manifest
 from dnd_audio.artifacts.report import IngestReport
+from dnd_audio.artifacts.timeline import Timeline
 from dnd_audio.artifacts.transcript import Transcript
 from dnd_audio.config import SessionConfig
 from dnd_audio.determinism import canonical_json, write_atomic
@@ -42,6 +45,7 @@ def schema_documents() -> dict[str, str]:
     return {
         "session-config.schema.json": _document(SessionConfig, mode="validation"),
         "manifest.schema.json": _document(Manifest, mode="serialization"),
+        "timeline.schema.json": _document(Timeline, mode="serialization"),
         "transcript.schema.json": _document(Transcript, mode="serialization"),
         "ingest-report.schema.json": _document(IngestReport, mode="serialization"),
     }

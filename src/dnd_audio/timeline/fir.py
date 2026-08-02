@@ -127,7 +127,9 @@ def _validate(
 ) -> None:
     length = int(coefficients.shape[0])
     if coefficients.ndim != 1 or length == 0:
-        message = f"the decimation filter must be a non-empty 1-D array, got shape {coefficients.shape}"
+        message = (
+            f"the decimation filter must be a non-empty 1-D array, got shape {coefficients.shape}"
+        )
         raise FilterError(message)
     if length % 2 == 0:
         message = (

@@ -238,6 +238,15 @@
       "title": "StageName",
       "type": "string"
     },
+    "StageOrigin": {
+      "description": "Whether a completed stage did its work or was served from cache.\n\nSeparate from :class:`StageStatus` because they answer different questions. A stage\nserved entirely from cache genuinely *completed* — its outputs are current and its\ndeliverables are real — so calling it `skipped` would be false, and a caller checking\nwhether the manifest reflects the sources on disk would read the wrong answer.",
+      "enum": [
+        "executed",
+        "reused"
+      ],
+      "title": "StageOrigin",
+      "type": "string"
+    },
     "StageReport": {
       "additionalProperties": false,
       "description": "One stage's outcome.",
@@ -248,6 +257,10 @@
           },
           "title": "Errors",
           "type": "array"
+        },
+        "origin": {
+          "$ref": "#/$defs/StageOrigin",
+          "default": "executed"
         },
         "skip_reason": {
           "anyOf": [

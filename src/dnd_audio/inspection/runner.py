@@ -32,7 +32,7 @@ from __future__ import annotations
 import datetime as dt
 from collections.abc import Sequence
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Final
 
 from dnd_audio.artifacts.manifest import (
@@ -65,7 +65,7 @@ from dnd_audio.artifacts.report import (
 )
 from dnd_audio.artifacts.roster import RosterSummary
 from dnd_audio.config import SessionConfig, config_hash, load_session_config
-from dnd_audio.determinism import sha256_file, write_atomic, write_json_atomic
+from dnd_audio.determinism import write_atomic, write_json_atomic
 from dnd_audio.errors import DiscoveryError, DndAudioError, ExitCode
 from dnd_audio.inspection import (
     INSPECTION_SEMANTICS_VERSION,
@@ -93,6 +93,7 @@ from dnd_audio.inspection.starttime import (
     TimecodeReference,
     extract_start_time,
 )
+from dnd_audio.raw_guard import raw_roots, reject_outputs_inside_raw, snapshot, verify_unchanged
 from dnd_audio.timecode import parse_frame_rate
 
 __all__ = [
@@ -234,9 +235,9 @@ def inspect_session(
     builder: ReportBuilder,
 ) -> Manifest:
     """The inspection itself. Raises :class:`DndAudioError` on any fatal condition."""
-    roots = _raw_roots(config)
-    before = _snapshot(session_dir, roots)
-    _reject_outputs_inside_raw(session_dir, config, roots)
+    roots = raw_roots(config)
+    before = snapshot(session_dir, roots)
+    reject_outputs_inside_raw(session_dir, config, roots, inspect_outputs(session_dir))
 
     tools = tool_versions()
     builder.record_tool_version("ffmpeg", tools.ffmpeg)
@@ -265,7 +266,7 @@ def inspect_session(
         _capture(session_dir, config, source, tools, cache) for source in found.unassigned
     ]
 
-    _verify_unchanged(session_dir, roots, before)
+    verify_unchanged(session_dir, roots, before)
 
     roster = _roster_of(found)
     manifest_tracks = tracks
@@ -651,128 +652,19 @@ def _contribute_to_report(
         )
 
 
-def _raw_roots(config: SessionConfig) -> tuple[str, ...]:
-    """The directories a session's sources live under, as session-relative paths.
+def inspect_outputs(session_dir: Path) -> dict[str, Path]:
+    """Everything `inspect` writes, for the INV-01 output check.
 
-    Derived from the configured inputs rather than hardcoded to ``raw/``: the spec's
-    layout is canonical, not mandatory, and INV-01 protects wherever the sources
-    actually are.
-
-    ``"."`` is kept. An earlier version dropped it — reasonably, since every relative
-    path is under ``"."`` and the output check would fire on all of them — but dropping
-    it also emptied the snapshot, so for a session configured as ``input: "tx-a"`` the
-    INV-01 verification compared two empty dicts and passed no matter what happened to
-    the sources. The false-positive problem belongs to the output check alone, and is
-    handled there; the snapshot excludes this pipeline's own directories by name.
+    Declared as data rather than inlined, so that adding an output and forgetting to
+    protect it is a visible omission from one list instead of an invisible one across a
+    function body. `ingest` declares its own set the same way.
     """
-    roots = {str(PurePosixPath(track.input).parent) or "." for track in config.tracks}
-    return tuple(sorted("." if root == "" else root for root in roots))
-
-
-def _snapshot(session_dir: Path, roots: tuple[str, ...]) -> dict[str, tuple[str, int]]:
-    """Hash and size every file under the raw roots.
-
-    Every file, not only the selected sources: INV-01 says nothing under ``raw/`` is
-    written, renamed, deleted, or normalized, and a check that looked only at what
-    inspection read would miss exactly the accidental rename it exists to catch.
-
-    ``work/`` and ``output/`` are excluded, because when a track's input sits directly in
-    the session root they are inside a scanned root and are the two directories this run
-    is *supposed* to write.
-    """
-    generated = {WORK_DIRNAME, OUTPUT_DIRNAME}
-    snapshot: dict[str, tuple[str, int]] = {}
-    for root in roots:
-        directory = session_dir if root == "." else session_dir / root
-        if not directory.is_dir():
-            continue
-        for path in sorted(directory.rglob("*")):
-            if not path.is_file():
-                continue
-            relative = path.relative_to(session_dir).as_posix()
-            if generated.intersection(PurePosixPath(relative).parts):
-                continue
-            snapshot[relative] = (sha256_file(path), path.stat().st_size)
-    return snapshot
-
-
-def _verify_unchanged(
-    session_dir: Path, roots: tuple[str, ...], before: dict[str, tuple[str, int]]
-) -> None:
-    """INV-01, verified rather than asserted."""
-    after = _snapshot(session_dir, roots)
-    if after == before:
-        return
-
-    added = sorted(set(after) - set(before))
-    removed = sorted(set(before) - set(after))
-    changed = sorted(path for path in set(before) & set(after) if before[path] != after[path])
-    details = []
-    if changed:
-        details.append(f"modified: {', '.join(changed)}")
-    if removed:
-        details.append(f"removed: {', '.join(removed)}")
-    if added:
-        details.append(f"appeared: {', '.join(added)}")
-    message = (
-        "the session's raw sources changed during inspection, which no stage of this "
-        "pipeline is permitted to do (INV-01). " + "; ".join(details)
-    )
-    raise DiscoveryError(message, code="raw_sources_modified")
-
-
-def _reject_outputs_inside_raw(
-    session_dir: Path, config: SessionConfig, roots: tuple[str, ...]
-) -> None:
-    """The spec's "output paths would overwrite raw inputs" fatal error.
-
-    Checked before the first write rather than after, which is the only order in which
-    it is a check rather than a postmortem.
-
-    **Compared after resolution, not lexically.** A lexical comparison is defeated by one
-    symlink: with ``output -> raw/tx-a``, ``output/ingest-report.json`` does not look like
-    it is inside ``raw/``, and the run cheerfully writes a report into a track's source
-    directory. The snapshot cannot catch it either, because the report is written after
-    the snapshot is verified. So every candidate path and every protected directory is
-    resolved to a real filesystem location first.
-
-    Protected: each configured track's input directory, always; and each scan root, except
-    when the root *is* the session directory, where ``work/`` and ``output/`` are
-    legitimately siblings of the track directories.
-    """
-    protected: dict[str, Path] = {
-        track.input: _resolve(session_dir / track.input) for track in config.tracks
-    }
-    for root in roots:
-        if root != ".":
-            protected[root] = _resolve(session_dir / root)
-
-    outputs = {
+    return {
         "the manifest": session_dir / MANIFEST_RELATIVE_PATH,
         "the FFprobe sidecars": session_dir / PROBE_DIRNAME,
         "the inspection cache": session_dir / CACHE_DIRNAME,
         "the report": session_dir / OUTPUT_DIRNAME / REPORT_FILENAME,
     }
-    for label, target in outputs.items():
-        resolved = _resolve(target)
-        for name, directory in sorted(protected.items()):
-            if resolved == directory or directory in resolved.parents:
-                message = (
-                    f"{label} would be written to {resolved}, inside the source directory "
-                    f"{name} ({directory}). Nothing under a session's raw sources may be "
-                    f"written to (INV-01). If a symlink put it there, that counts."
-                )
-                raise DiscoveryError(message, code="output_inside_raw")
-
-
-def _resolve(path: Path) -> Path:
-    """The real location a path names, following symlinks as far as they exist.
-
-    ``strict=False`` because most of these paths have not been created yet; what matters
-    is where they *would* land, and that is decided by the symlinks that already exist on
-    the way there.
-    """
-    return path.resolve()
 
 
 def _report_warnings(manifest: Manifest) -> list[ReportWarning]:

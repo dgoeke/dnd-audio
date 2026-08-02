@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Any, Final
 
 import numpy as np
 from scipy.signal import firwin
@@ -41,19 +42,26 @@ from dnd_audio.timeline.fir import FIR_PATH  # noqa: E402
 #: the 48↔16 mapping would be off by a fraction of a sample and no amount of testing
 #: would make it exact.
 #:
-#: ``cutoff_hz`` is firwin's −6 dB point, placed between the declared passband edge and
+#: ``cutoff_hz`` is firwin's -6 dB point, placed between the declared passband edge and
 #: the declared stopband edge. ``kaiser_beta`` then buys the stopband attenuation. The
 #: pair was chosen by sweeping both against the response contract below and taking the
 #: design with the most margin on each side.
-DESIGN = {
+INPUT_RATE: Final = 48000
+OUTPUT_RATE: Final = 16000
+DECIMATION: Final = 3
+LENGTH: Final = 259
+KAISER_BETA: Final = 9.0
+CUTOFF_HZ: Final = 7450.0
+
+DESIGN: Final[dict[str, Any]] = {
     "method": "kaiser_window_sinc",
     "designer": "scipy.signal.firwin",
-    "input_rate": 48000,
-    "output_rate": 16000,
-    "decimation": 3,
-    "length": 259,
-    "kaiser_beta": 9.0,
-    "cutoff_hz": 7450.0,
+    "input_rate": INPUT_RATE,
+    "output_rate": OUTPUT_RATE,
+    "decimation": DECIMATION,
+    "length": LENGTH,
+    "kaiser_beta": KAISER_BETA,
+    "cutoff_hz": CUTOFF_HZ,
     "cutoff_note": "firwin's -6 dB point, between the declared passband and stopband edges",
     "normalization": "unity_dc_gain",
 }
@@ -62,7 +70,7 @@ DESIGN = {
 #: checked-in coefficients by the frequency-response test. The stopband edge is 16 kHz's
 #: Nyquist: everything above it aliases into the derivative, so it is the one number here
 #: that is physics rather than preference.
-RESPONSE = {
+RESPONSE: Final[dict[str, float]] = {
     "passband_edge_hz": 7000.0,
     "max_passband_ripple_db": 0.1,
     "stopband_edge_hz": 8000.0,
@@ -77,28 +85,21 @@ def design() -> list[float]:
     one, which would make every derivative quietly a fraction of a decibel off from its
     source.
     """
-    length = int(DESIGN["length"])
-    nyquist = float(DESIGN["input_rate"]) / 2
-    taps = firwin(
-        length,
-        float(DESIGN["cutoff_hz"]) / nyquist,
-        window=("kaiser", float(DESIGN["kaiser_beta"])),
+    taps = np.asarray(
+        firwin(LENGTH, CUTOFF_HZ / (INPUT_RATE / 2), window=("kaiser", KAISER_BETA)),
+        dtype=np.float64,
     )
-    taps = np.asarray(taps, dtype=np.float64)
     return [float(value) for value in taps / taps.sum()]
 
 
 def document() -> str:
     """The checked-in file's exact bytes."""
-    length = int(DESIGN["length"])
-    decimation = int(DESIGN["decimation"])
-    delay_48k = (length - 1) // 2
-    if delay_48k % decimation:
+    delay_input = (LENGTH - 1) // 2
+    if delay_input % DECIMATION:
         message = (
-            f"a length-{length} filter has group delay {delay_48k} at "
-            f"{DESIGN['input_rate']} Hz, which is not a whole number of output samples "
-            f"at 1/{decimation} rate. Choose a length where (length - 1) / 2 divides by "
-            f"{decimation}."
+            f"a length-{LENGTH} filter has group delay {delay_input} at {INPUT_RATE} Hz, "
+            f"which is not a whole number of output samples at 1/{DECIMATION} rate. "
+            f"Choose a length where (length - 1) / 2 divides by {DECIMATION}."
         )
         raise ValueError(message)
 
@@ -107,8 +108,8 @@ def document() -> str:
             "name": "fir_48k_16k",
             "design": DESIGN,
             "response": RESPONSE,
-            "group_delay_samples_input": delay_48k,
-            "group_delay_samples_output": delay_48k // decimation,
+            "group_delay_samples_input": delay_input,
+            "group_delay_samples_output": delay_input // DECIMATION,
             "coefficients": design(),
         }
     )
@@ -134,7 +135,7 @@ def main() -> int:
 
     FIR_PATH.parent.mkdir(parents=True, exist_ok=True)
     FIR_PATH.write_text(text, encoding="utf-8")
-    print(f"  wrote {FIR_PATH.relative_to(REPO_ROOT)} ({DESIGN['length']} taps)")
+    print(f"  wrote {FIR_PATH.relative_to(REPO_ROOT)} ({LENGTH} taps)")
     return 0
 
 
