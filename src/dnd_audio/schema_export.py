@@ -23,6 +23,7 @@ from typing import Final, Literal
 
 from pydantic import BaseModel
 
+from dnd_audio.artifacts.activity import ActivityGraph
 from dnd_audio.artifacts.manifest import Manifest
 from dnd_audio.artifacts.report import IngestReport
 from dnd_audio.artifacts.timeline import Timeline
@@ -46,6 +47,7 @@ def schema_documents() -> dict[str, str]:
         "session-config.schema.json": _document(SessionConfig, mode="validation"),
         "manifest.schema.json": _document(Manifest, mode="serialization"),
         "timeline.schema.json": _document(Timeline, mode="serialization"),
+        "activity.schema.json": _document(ActivityGraph, mode="serialization"),
         "transcript.schema.json": _document(Transcript, mode="serialization"),
         "ingest-report.schema.json": _document(IngestReport, mode="serialization"),
     }

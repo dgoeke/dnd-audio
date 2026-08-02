@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 
+from dnd_audio.artifacts.activity import DetectorIdentity
+from dnd_audio.determinism import canonical_json, sha256_bytes
 from dnd_audio.interfaces import (
     AudioWindow,
     SpeechSpan,
@@ -70,6 +72,30 @@ class ScriptedActivityDetector:
 
     def detect(self, window: AudioWindow) -> tuple[SpeechSpan, ...]:
         return tuple(self._clip(self._spans.get(window.track_id, ()), window))
+
+    def identity(self) -> DetectorIdentity:
+        """What this detector is, for a cache key that has to tell two of them apart.
+
+        The digest covers the whole script. Two scripted detectors with different spans are
+        different detectors, and a cache that could not distinguish them would serve one
+        test's answers to another — which is the shape of bug that makes a suite pass while
+        the thing it tests is broken.
+
+        No model hash, no runtime, and no interface: this one runs no model, and a fabricated
+        interface would make the identity claim something untrue about how it was called.
+        """
+        script = canonical_json(
+            {
+                track: [
+                    [span.start_sample, span.end_sample, span.probability]
+                    for span in sorted(spans, key=lambda s: (s.start_sample, s.end_sample))
+                ]
+                for track, spans in sorted(self._spans.items())
+            }
+        )
+        return DetectorIdentity(
+            name="scripted", variant_digest=sha256_bytes(script.encode("utf-8"))
+        )
 
     @staticmethod
     def _clip(spans: Iterable[SpeechSpan], window: AudioWindow) -> list[SpeechSpan]:

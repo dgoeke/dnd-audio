@@ -11,6 +11,10 @@ Stage boundaries, from the spec:
 
 * ``inspect``   — discover and validate sources, write the manifest.
 * ``ingest``    — timeline maps, lossless working path, 16 kHz derivatives.
+* ``activity``  — speech detection, bleed rejection, and the graph both branches read.
+  A stage in the spec's own DAG rather than one of its named commands, exposed here as one
+  of the "independently resumable stages for development and recovery" it asks for, and
+  called directly by `transcribe`, `mix`, and `process` (ADR-0015).
 * ``transcribe``— activity, ASR, alignment, normalized transcript records.
 * ``mix``       — automix and MP3. Never requires ASR or `transcribe` output (INV-09).
 * ``render``    — regenerate transcript files from cached records. No ASR, no mixer.
@@ -25,10 +29,12 @@ from typing import Annotated
 import typer
 
 from dnd_audio import __version__
+from dnd_audio.activity.runner import ActivityResult, run_activity
 from dnd_audio.determinism import canonical_json
 from dnd_audio.doctor import CheckStatus, overall_status, run_checks
 from dnd_audio.errors import DndAudioError, ExitCode
 from dnd_audio.inspection.runner import InspectionResult, run_inspect
+from dnd_audio.models import SILERO_VAD, fetch, find_model, lock_path
 from dnd_audio.timeline.runner import IngestResult, run_ingest
 
 __all__ = ["app", "main"]
@@ -128,6 +134,36 @@ def ingest(
 
 
 @app.command()
+def activity(
+    session_dir: SessionDir,
+    no_cache: Annotated[
+        bool,
+        typer.Option(
+            "--no-cache",
+            help="Re-detect and re-attribute everything, ignoring cached work. Both caches "
+            "are still written, so this costs one slow run rather than every run.",
+        ),
+    ] = False,
+) -> None:
+    """Detect speech per track, reject bleed, and write the activity graph.
+
+    The spec's stage DAG calls `activity` the shared cached operation that `transcribe`,
+    `mix`, and `process` all invoke; this exposes it as one of the independently resumable
+    stages the spec asks for, so it can be run and inspected on its own (ADR-0015). It
+    reconstructs the timeline first, every time, for the reason `ingest` re-inspects every
+    time: an artifact on disk is not evidence that it still describes what is beside it.
+
+    Needs the pinned VAD model — `dnd-audio models fetch` — and says so if it is absent.
+
+    Always writes `output/ingest-report.json`, including when it fails (INV-13).
+    """
+    result = run_activity(session_dir, use_cache=not no_cache)
+    _summarize_activity(result)
+    if result.exit_code is not ExitCode.OK:
+        raise typer.Exit(code=result.exit_code)
+
+
+@app.command()
 def transcribe(session_dir: SessionDir) -> None:
     """Run activity attribution and ASR; write normalized transcript records."""
     # DEFERRED: M4
@@ -150,9 +186,30 @@ def render(session_dir: SessionDir) -> None:
 
 @models_app.command("fetch")
 def models_fetch() -> None:
-    """Download models and record their resolved snapshot revisions."""
-    # DEFERRED: M6b
-    raise NotImplementedError("`models fetch` lands in M6b")
+    """Download the pinned voice-activity model and record what it resolved to.
+
+    The only command permitted to touch the network (INV-06), and it fetches exactly
+    one artifact: Silero VAD, pinned by commit and sha256, verified before it is written
+    (ADR-0013). The ASR and alignment models land in M6b, and the lock format is
+    provisional until they do.
+
+    Already present and verifying means no download. A file that does not match the pin
+    is not a model, so this exits nonzero rather than leaving one behind.
+    """
+    descriptor = SILERO_VAD
+    already_present = find_model(descriptor) is not None
+    try:
+        path = fetch(descriptor)
+    except DndAudioError as exc:
+        typer.secho(f"  error  {exc.code}: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=ExitCode.FATAL) from exc
+
+    typer.echo(f"  {'already present' if already_present else 'fetched'}  {descriptor.key}")
+    typer.echo(f"  model     {path}")
+    typer.echo(f"  release   {descriptor.release}")
+    typer.echo(f"  commit    {descriptor.commit}")
+    typer.echo(f"  lock      {lock_path()}")
+    typer.echo("  ASR and alignment models land in M6b; this fetches the VAD model only.")
 
 
 @app.command()
@@ -171,7 +228,9 @@ def doctor(
 ) -> None:
     """Check this host without touching session audio.
 
-    GPU and model-availability checks arrive with M6a and M6b.
+    Reports the pinned VAD model as a warning when it is absent — that is a machine
+    that can do everything but activity detection. GPU checks arrive with M6a, the ASR
+    models with M6b.
     """
     results = run_checks(path)
     status = overall_status(results)
@@ -254,6 +313,37 @@ def _summarize_ingest(result: IngestResult) -> None:
         for note in timeline.warnings:
             typer.secho(f"  warn  {note.code}: {note.message}", fg=typer.colors.YELLOW, err=True)
         typer.echo(f"  timeline  {result.timeline_path}")
+    else:
+        for stage in result.report.stages:
+            for error in stage.errors:
+                typer.secho(
+                    f"  error  {error.code}: {error.message}", fg=typer.colors.RED, err=True
+                )
+    if result.report_written:
+        typer.echo(f"  report    {result.report_path}")
+    else:
+        typer.secho(
+            f"  no report written: {result.report_path} would land inside the session's "
+            f"own sources, and nothing under them may be written to (INV-01)",
+            fg=typer.colors.RED,
+            err=True,
+        )
+
+
+def _summarize_activity(result: ActivityResult) -> None:
+    """Human-readable progress for `activity`. The graph and the report hold everything."""
+    graph = result.graph
+    if graph is not None:
+        retained = graph.retained()
+        suppressed = [c for c in graph.candidates if c.decision == "suppressed"]
+        ambiguous = [c for c in retained if c.ambiguous]
+        typer.echo(
+            f"  {len(retained)} candidate(s) retained across {len(graph.tracks)} track(s), "
+            f"{len(suppressed)} suppressed as bleed, {len(ambiguous)} kept despite the evidence"
+        )
+        for note in graph.warnings:
+            typer.secho(f"  warn  {note.code}: {note.message}", fg=typer.colors.YELLOW, err=True)
+        typer.echo(f"  activity  {result.graph_path}")
     else:
         for stage in result.report.stages:
             for error in stage.errors:

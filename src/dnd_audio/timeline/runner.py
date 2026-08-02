@@ -50,7 +50,12 @@ from dnd_audio.artifacts.timeline import (
     TimelineProvenance,
     TimelineTrack,
 )
-from dnd_audio.config import SessionConfig, config_hash, load_session_config
+from dnd_audio.config import (
+    SessionConfig,
+    config_hash,
+    load_session_config,
+    stage_config_hash,
+)
 from dnd_audio.determinism import sha256_file, write_json_atomic
 from dnd_audio.errors import DiscoveryError, DndAudioError, ExitCode
 from dnd_audio.inspection import INSPECTION_SEMANTICS_VERSION, OUTPUT_DIRNAME
@@ -84,7 +89,7 @@ from dnd_audio.timeline.syncqa import run_sync_qa
 from dnd_audio.timeline.warp import IdentityWarp, TimeWarp
 from dnd_audio.timeline.wavwrite import WavWriter
 
-__all__ = ["IngestResult", "ingest_outputs", "run_ingest"]
+__all__ = ["IngestResult", "TimelineBuild", "build_timeline", "ingest_outputs", "run_ingest"]
 
 #: The stages `ingest` does not run, and why (INV-13).
 _SKIPPED_STAGES: Final = (
@@ -93,6 +98,22 @@ _SKIPPED_STAGES: Final = (
     (StageName.RENDER, "there is no transcript to render"),
     (StageName.MIX, "`ingest` does not produce a mix"),
 )
+
+
+@dataclass(frozen=True, slots=True)
+class TimelineBuild:
+    """A timeline, and the caches that produced it — **uncommitted**.
+
+    Returned rather than published so a *composed* run can hold them open: M3's `activity`
+    performs inspection, reconstruction, and attribution in one process under one INV-01
+    snapshot, and every cache entry from that run must commit at the same moment, after the
+    sources have been re-verified (ADR-0015). Committing here would mean a run that later
+    discovered a source had changed still left entries keyed on the bytes it read.
+    """
+
+    timeline: Timeline
+    inspection_cache: InspectionCache
+    derivative_cache: DerivativeCache
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,7 +177,11 @@ def run_ingest(
     try:
         config = load_session_config(session_dir / "session.yaml")
         builder = _builder(config.session_id, config_hash(config), started_at)
-        timeline = _ingest(
+        roots = raw_roots(config)
+        before = snapshot(session_dir, roots)
+        reject_outputs_inside_raw(session_dir, config, roots, ingest_outputs(session_dir))
+
+        build = build_timeline(
             session_dir,
             config,
             builder=builder,
@@ -165,6 +190,16 @@ def run_ingest(
             warp=warp or IdentityWarp(),
             window_samples=window_samples,
         )
+        timeline = build.timeline
+
+        # Verify first, publish second. A source that changed under the pipeline must not be
+        # able to leave behind a cache entry describing bytes that no longer exist — M1's
+        # inspection cache stages for exactly this reason, and the derivative cache does too.
+        # Until commit() runs, a derivative's audio is on disk with no sidecar naming it,
+        # which reads as a miss.
+        verify_unchanged(session_dir, roots, before)
+        build.inspection_cache.commit()
+        build.derivative_cache.commit()
         write_json_atomic(timeline_path, timeline.model_dump(mode="json"))
         builder.stage_complete(StageName.RECONSTRUCT, warnings=_report_warnings(timeline))
         builder.add_deliverable(timeline_path, relative_to=session_dir)
@@ -219,21 +254,33 @@ def _builder(session_id: str, hash_: str | None, started_at: dt.datetime) -> Rep
     return builder
 
 
-def _ingest(
+def build_timeline(
     session_dir: Path,
     config: SessionConfig,
     *,
     builder: ReportBuilder,
-    use_cache: bool,
-    materialize_48k: bool,
-    warp: TimeWarp,
-    window_samples: int,
-) -> Timeline:
-    """The run itself. Raises :class:`DndAudioError` on any fatal condition."""
-    roots = raw_roots(config)
-    before = snapshot(session_dir, roots)
-    reject_outputs_inside_raw(session_dir, config, roots, ingest_outputs(session_dir))
+    use_cache: bool = True,
+    materialize_48k: bool = False,
+    warp: TimeWarp | None = None,
+    window_samples: int = DEFAULT_WINDOW_SAMPLES,
+) -> TimelineBuild:
+    """Inspect the session and reconstruct its timeline, into the caller's report.
 
+    The `inspect` and `reconstruct` stages of any run that needs a timeline — `ingest`
+    today, `activity` in M3, `mix` in M5. It records both stages on the builder it is given
+    and returns the caches **uncommitted**, because the INV-01 snapshot belongs to the whole
+    composed run and every entry must publish at the same moment, after verification
+    (ADR-0015).
+
+    The caller owns the snapshot, the verification, the commits, and writing the timeline.
+    That split is deliberate: a function that both verified and published would make a
+    composed run verify twice and publish early.
+
+    Raises:
+        DndAudioError: on any fatal condition, for the caller to turn into a failed stage
+            and a written report (INV-13).
+    """
+    warp = warp or IdentityWarp()
     inspection_cache, manifest = _inspect(session_dir, config, builder=builder, use_cache=use_cache)
     reject_unusable_sources(manifest)
 
@@ -270,14 +317,6 @@ def _ingest(
 
     notes.extend(run_sync_qa(session_dir, config, tracks, builder=builder))
 
-    # Verify first, publish second. A source that changed under the pipeline must not be
-    # able to leave behind a cache entry describing bytes that no longer exist — M1's
-    # inspection cache stages for exactly this reason, and the derivative cache now does
-    # too. Until commit() runs, a derivative's audio is on disk with no sidecar naming it,
-    # which reads as a miss.
-    verify_unchanged(session_dir, roots, before)
-    inspection_cache.commit()
-    cache.commit()
     builder.record_cache(hits=cache.hits, misses=cache.misses)
     builder.record_package_version("dnd_audio.timeline", str(TIMELINE_SEMANTICS_VERSION))
     builder.record_tool_version("numpy", np.__version__)
@@ -288,7 +327,7 @@ def _ingest(
         )
 
     frame_rate = parse_frame_rate(config.timecode.frame_rate)
-    return Timeline(
+    timeline = Timeline(
         session_id=config.session_id,
         config_hash=config_hash(config),
         manifest_sha256=sha256_file(session_dir / MANIFEST_RELATIVE_PATH),
@@ -308,6 +347,9 @@ def _ingest(
         tracks=tracks,
         warnings=notes,
         decisions=[*origin.decisions, *layout_decisions],
+    )
+    return TimelineBuild(
+        timeline=timeline, inspection_cache=inspection_cache, derivative_cache=cache
     )
 
 
@@ -407,7 +449,7 @@ def _derive(
     resampling = target_rate != CANONICAL_SAMPLE_RATE
     key = derivative_identity(
         track,
-        config_hash=config_hash(config),
+        stage_config_hash=stage_config_hash(config, "derivative"),
         target_rate=target_rate,
         filter_identity=decimation_filter.identity if resampling else None,
     )

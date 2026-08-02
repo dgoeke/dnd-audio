@@ -11,8 +11,10 @@ So the identity is deliberately broad. It carries:
 * **the track's segment map**, canonically serialized — every source path, hash, offset,
   and placed position. This is the component the first draft omitted, and it is the one
   that matters: a parser fix in M1 moves a chunk without changing a single source byte;
-* **the resolved configuration hash**, which carries the frame rate, the origin, and every
-  recovery override;
+* **the `derivative` projection of the resolved configuration** (ADR-0016), which carries
+  the frame rate, the origin, the roster, and every recovery override — everything that can
+  move a sample. Not the whole configuration: an activity threshold cannot change 16 kHz
+  PCM, and rebuilding gigabytes of it to discover that is the tuning loop OQ-017 promises;
 * **both semantics versions**. `INSPECTION_SEMANTICS_VERSION` covers the code that produced
   the timing evidence, `TIMELINE_SEMANTICS_VERSION` the code that placed it;
 * **the filter's identity** — the SHA-256 of the checked-in coefficient file — for anything
@@ -66,7 +68,7 @@ CACHE_RECORD_VERSION: Final = 1
 def derivative_identity(
     track: TimelineTrack,
     *,
-    config_hash: str,
+    stage_config_hash: str,
     target_rate: int,
     filter_identity: str | None,
 ) -> str:
@@ -75,7 +77,7 @@ def derivative_identity(
         canonical_json(
             derivative_identity_document(
                 track,
-                config_hash=config_hash,
+                stage_config_hash=stage_config_hash,
                 target_rate=target_rate,
                 filter_identity=filter_identity,
             )
@@ -86,7 +88,7 @@ def derivative_identity(
 def derivative_identity_document(
     track: TimelineTrack,
     *,
-    config_hash: str,
+    stage_config_hash: str,
     target_rate: int,
     filter_identity: str | None,
 ) -> dict[str, Any]:
@@ -99,7 +101,7 @@ def derivative_identity_document(
     """
     return {
         "cache_record_version": CACHE_RECORD_VERSION,
-        "config_hash": config_hash,
+        "config_hash": stage_config_hash,
         "filter_identity": filter_identity,
         "inspection_semantics_version": INSPECTION_SEMANTICS_VERSION,
         "numpy_version": np.__version__,

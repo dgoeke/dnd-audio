@@ -34,16 +34,22 @@ __all__ = [
     "CONFIG_SCHEMA_VERSION",
     "ActivityConfig",
     "AsrConfig",
+    "BleedConfig",
     "MixConfig",
     "RecoveryConfig",
+    "ScoringConfig",
     "SessionConfig",
     "SourceTimeOverride",
+    "StageScope",
     "SyncQaConfig",
     "TimecodeConfig",
     "TrackConfig",
+    "VadConfig",
     "config_hash",
     "load_session_config",
     "resolved_config",
+    "stage_config",
+    "stage_config_hash",
 ]
 
 #: Bumped when the meaning of an existing field changes. Part of every cache identity
@@ -214,12 +220,120 @@ class AsrConfig(_Strict):
         return None if value is None else _validate_relative_path(value)
 
 
+class VadConfig(_Strict):
+    """Where speech starts and stops on one track.
+
+    Every default here is a number chosen against synthetic audio and **OQ-017** is the
+    record of that: a real session is what will move them.
+    """
+
+    #: A frame above this is speech. Silero's own documented default, and the value its
+    #: authors say is a good "lazy" choice on most material (OQ-017).
+    speech_threshold: float = Field(default=0.5, gt=0.0, lt=1.0)
+    #: Speech continues until a frame falls below this. Two thresholds rather than one,
+    #: because a single one chops a word in half every time a probability wobbles across
+    #: it mid-syllable (OQ-017).
+    silence_threshold: float = Field(default=0.35, gt=0.0, lt=1.0)
+    #: Regions shorter than this are noise, not words (OQ-017).
+    min_speech_ms: int = Field(default=250, ge=0, le=10_000)
+    #: A dip shorter than this is a stop consonant, not the end of a turn (OQ-017).
+    min_silence_ms: int = Field(default=100, ge=0, le=10_000)
+    #: Regions closer together than this become one candidate. Wider than
+    #: `min_silence_ms`: that one is about the detector's own hysteresis, this one is
+    #: about not handing M4 a hundred fragments of one sentence (OQ-017).
+    merge_gap_ms: int = Field(default=200, ge=0, le=10_000)
+    #: Added to both ends so a padded region does not clip the word it contains (OQ-017).
+    pad_ms: int = Field(default=30, ge=0, le=1000)
+
+    @model_validator(mode="after")
+    def _check_hysteresis(self) -> VadConfig:
+        if self.silence_threshold >= self.speech_threshold:
+            message = (
+                f"vad.silence_threshold ({self.silence_threshold}) must be below "
+                f"vad.speech_threshold ({self.speech_threshold}). Equal thresholds are no "
+                f"hysteresis at all, and an inverted pair would start speech where it ends."
+            )
+            raise ValueError(message)
+        return self
+
+
+class BleedConfig(_Strict):
+    """When one track's candidate is really another track's voice (ADR-0014).
+
+    Suppression requires all three of a score margin, a correlation, and a level below the
+    veto. Any one of them failing keeps the candidate, because losing real overlapped
+    speech is worse than spending more ASR compute.
+    """
+
+    #: How much better another track's source score must be. Fractional, against scores in
+    #: [0, 1] (OQ-017).
+    min_score_margin: float = Field(default=0.15, gt=0.0, le=1.0)
+    #: Below this normalized peak correlation the two signals are not the same sound, and
+    #: nothing is suppressed however loud the other track is (OQ-017).
+    min_correlation: float = Field(default=0.5, gt=0.0, le=1.0)
+    #: The veto. A candidate whose band-limited level is within this many dB of its own
+    #: track's speech reference is never suppressed: a lav hearing its wearer at the
+    #: wearer's normal level is not hearing someone else, however correlated the two
+    #: tracks are (ADR-0014, OQ-017).
+    veto_db: float = Field(default=12.0, gt=0.0, le=60.0)
+    #: How much of a long overlap is actually correlated. Bounded, because this is one of
+    #: the few places holding a contiguous array and an unbounded value in a session file
+    #: would be an INV-07 violation an operator could configure.
+    correlation_window_ms: int = Field(default=2000, gt=0, le=30_000)
+    #: High-confidence candidates needed before a track has a speech reference at all.
+    #: Below it the veto cannot be evaluated and the graph says so, rather than treating a
+    #: reference of zero as a measurement (OQ-017).
+    min_reference_candidates: int = Field(default=3, ge=1, le=100)
+
+
+class ScoringConfig(_Strict):
+    """How four pieces of evidence become one source score.
+
+    Weights are relative and normalized by their sum, so doubling all four changes
+    nothing. The spans are the dynamic ranges each term is mapped over; a term is clamped
+    at both ends rather than allowed to dominate the total from one outlier.
+    """
+
+    #: Track-relative speech level: is this as loud as this wearer normally is? (OQ-017)
+    level_weight: float = Field(default=0.35, ge=0.0, le=1.0)
+    #: The detector's own confidence.
+    confidence_weight: float = Field(default=0.25, ge=0.0, le=1.0)
+    #: Cross-track dominance: is this louder than everyone else here? (OQ-017)
+    dominance_weight: float = Field(default=0.25, ge=0.0, le=1.0)
+    #: Independence: a candidate strongly correlated with another track is more likely a
+    #: copy of it than a voice of its own (OQ-017).
+    correlation_weight: float = Field(default=0.15, ge=0.0, le=1.0)
+    #: dB below its own track's reference at which the level term reaches zero (OQ-017).
+    level_span_db: float = Field(default=30.0, gt=0.0, le=120.0)
+    #: dB of cross-track level difference at which the dominance term saturates (OQ-017).
+    dominance_span_db: float = Field(default=20.0, gt=0.0, le=120.0)
+
+    @model_validator(mode="after")
+    def _check_weights(self) -> ScoringConfig:
+        total = (
+            self.level_weight
+            + self.confidence_weight
+            + self.dominance_weight
+            + self.correlation_weight
+        )
+        if total <= 0.0:
+            message = (
+                "activity.scoring weights sum to zero, so every candidate would score the "
+                "same and the bleed gate could never prefer one track over another"
+            )
+            raise ValueError(message)
+        return self
+
+
 class ActivityConfig(_Strict):
-    """Pre-ASR activity and bleed-gate parameters. M3 extends this."""
+    """Pre-ASR activity and bleed-gate parameters."""
 
     #: Bleed arrives late. Similarity must be measured over a bounded lag window
     #: rather than at zero lag, or a delayed copy of the same speech looks unrelated.
     correlation_max_lag_ms: int = Field(default=30, gt=0, le=1000)
+    vad: VadConfig = Field(default_factory=VadConfig)
+    bleed: BleedConfig = Field(default_factory=BleedConfig)
+    scoring: ScoringConfig = Field(default_factory=ScoringConfig)
 
 
 class SyncQaConfig(_Strict):
@@ -467,3 +581,89 @@ def resolved_config(config: SessionConfig) -> dict[str, Any]:
 def config_hash(config: SessionConfig) -> str:
     """Hash the resolved configuration. Stable across key order and omitted defaults."""
     return sha256_bytes(canonical_json(resolved_config(config)).encode("utf-8"))
+
+
+#: The cached stages, each with its own view of what "the configuration" means (ADR-0016).
+StageScope = Literal["inspection", "derivative", "detection", "attribution"]
+
+_ALL_STAGES: Final[frozenset[StageScope]] = frozenset(
+    ("inspection", "derivative", "detection", "attribution")
+)
+_PLACEMENT: Final[frozenset[StageScope]] = frozenset(("inspection", "derivative"))
+
+#: Which stages each configuration field can change the *output bytes* of.
+#:
+#: Read as data rather than inferred from call sites, because the property that matters is
+#: not "which field does this stage read" but "which field can change what this stage
+#: writes", and the two differ wherever one value is derived from another.
+#:
+#: **Generous, not minimal.** A field is excluded only where its exclusion is provable: the
+#: failure mode of a too-narrow key is a stale artifact served as current, which is silent,
+#: and the failure mode of a too-broad key is recomputation, which is merely slow. When a
+#: new field's blast radius is unclear, it belongs in the broader scope.
+#:
+#: A key may name a nested path. ``tests/test_config.py`` asserts this table is exhaustive
+#: over :class:`SessionConfig`, so a new section must be classified deliberately rather than
+#: defaulting to "affects nothing".
+_FIELD_SCOPES: Final[dict[str, frozenset[StageScope]]] = {
+    # Identity travels everywhere: it is what a cached artifact belongs to.
+    "schema_version": _ALL_STAGES,
+    "session_id": _ALL_STAGES,
+    # The roster decides which audio exists at all, so every stage depends on it (INV-11).
+    "tracks": _ALL_STAGES,
+    # Placement: which files are selected, where their samples land, and what overrides
+    # moved them. The 16 kHz derivative is a function of the segment map, so it inherits
+    # everything the map depends on.
+    "active_tracks": _PLACEMENT,
+    "timecode": _PLACEMENT,
+    "recovery": _PLACEMENT,
+    # Detection is inference over that audio; attribution consumes detections and compares
+    # them, so it depends on the whole activity section including the VAD half.
+    "activity.vad": frozenset(("detection", "attribution")),
+    "activity.bleed": frozenset(("attribution",)),
+    "activity.scoring": frozenset(("attribution",)),
+    "activity.correlation_max_lag_ms": frozenset(("attribution",)),
+    # Reaches no cached stage. `title` and `language` are carried into outputs M3 does not
+    # produce; `asr` belongs to M6b's own cache identity; `mix` to M5's; and `sync_qa`
+    # produces warnings and report decisions but never a sample.
+    "title": frozenset(),
+    "language": frozenset(),
+    "asr": frozenset(),
+    "sync_qa": frozenset(),
+    "mix": frozenset(),
+}
+
+
+def stage_config(config: SessionConfig, stage: StageScope) -> dict[str, Any]:
+    """The projection of the resolved configuration one cached stage depends on.
+
+    Built from :func:`resolved_config`, so it inherits the same normalization: defaults are
+    materialized and the roster is sorted, and a session file that omits a default projects
+    identically to one that states it.
+    """
+    session = resolved_config(config)["session"]
+    projected: dict[str, Any] = {}
+    for path, stages in _FIELD_SCOPES.items():
+        if stage not in stages:
+            continue
+        head, _, tail = path.partition(".")
+        if tail:
+            projected.setdefault(head, {})[tail] = session[head][tail]
+        else:
+            projected[head] = session[head]
+    return {
+        "config_schema_version": CONFIG_SCHEMA_VERSION,
+        "stage": stage,
+        "session": projected,
+    }
+
+
+def stage_config_hash(config: SessionConfig, stage: StageScope) -> str:
+    """Hash one stage's projection (INV-08, ADR-0016).
+
+    What a cache identity carries instead of the whole configuration. Tuning a bleed
+    threshold must not rebuild gigabytes of 16 kHz PCM that provably cannot depend on it —
+    and, in the other direction, the projections are tested to *change* for every section
+    they include, because a key that quietly stops changing is how this invariant dies.
+    """
+    return sha256_bytes(canonical_json(stage_config(config, stage)).encode("utf-8"))

@@ -17,8 +17,11 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from dnd_audio import cli, models
 from dnd_audio.cli import app
+from dnd_audio.determinism import sha256_bytes
 from dnd_audio.errors import ExitCode
+from dnd_audio.models import ModelDescriptor
 
 runner = CliRunner()
 
@@ -61,10 +64,11 @@ class TestCommandSurface:
         assert isinstance(result.exception, NotImplementedError)
         assert milestone in str(result.exception)
 
-    def test_models_fetch_names_its_milestone(self) -> None:
-        result = runner.invoke(app, ["models", "fetch"])
-        assert isinstance(result.exception, NotImplementedError)
-        assert "M6b" in str(result.exception)
+    def test_models_fetch_says_the_asr_half_is_still_to_come(self) -> None:
+        """It is implemented, so the stub message is gone — but the boundary is not."""
+        result = runner.invoke(app, ["models", "fetch", "--help"])
+        assert result.exit_code == 0
+        assert "M6b" in result.output
 
     def test_a_missing_session_directory_is_a_usage_error(self, tmp_path: Path) -> None:
         """Click's exit code 2, which is why ExitCode does not use 2."""
@@ -98,6 +102,79 @@ class TestDoctorCommand:
 
     def test_defaults_to_the_working_directory(self) -> None:
         assert runner.invoke(app, ["doctor"]).exit_code == ExitCode.OK
+
+
+class TestModelsFetchCommand:
+    """The one command permitted to reach the network, exercised without reaching it.
+
+    Both the descriptor and the downloader are substituted: the real pin is 2.3 MB of
+    weights that may not be committed, and the socket block in `conftest.py` would fail
+    any test that actually fetched it (INV-05). What is under test is the command's
+    behaviour — what it reports, and what it exits with — not Silero.
+    """
+
+    PAYLOAD = b"stand-in for the ONNX graph\n"
+
+    @pytest.fixture
+    def models_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        directory = tmp_path / "models"
+        monkeypatch.setenv("DND_AUDIO_MODELS_DIR", str(directory))
+        monkeypatch.setattr(cli, "SILERO_VAD", self._descriptor())
+        return directory
+
+    @classmethod
+    def _descriptor(cls) -> ModelDescriptor:
+        commit = "0" * 40
+        return ModelDescriptor(
+            key="fake-vad",
+            filename="fake_vad.onnx",
+            repository="example/fake-vad",
+            release="v0.0.1",
+            commit=commit,
+            path_in_repository="data/fake_vad.onnx",
+            url=f"https://raw.githubusercontent.com/example/fake-vad/{commit}/data/fake.onnx",
+            size_bytes=len(cls.PAYLOAD),
+            sha256=sha256_bytes(cls.PAYLOAD),
+        )
+
+    @staticmethod
+    def _serve(monkeypatch: pytest.MonkeyPatch, payload: bytes) -> None:
+        monkeypatch.setattr(models, "default_download", lambda url: payload)  # noqa: ARG005
+
+    def test_it_fetches_and_says_where_it_landed(
+        self, models_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._serve(monkeypatch, self.PAYLOAD)
+
+        result = runner.invoke(app, ["models", "fetch"])
+
+        assert result.exit_code == ExitCode.OK, result.output
+        assert "fetched" in result.output
+        assert str(models_dir / "fake_vad.onnx") in result.output
+        assert "0" * 40 in result.output
+        assert (models_dir / "fake_vad.onnx").read_bytes() == self.PAYLOAD
+
+    def test_a_second_run_reports_it_as_already_present(
+        self, models_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._serve(monkeypatch, self.PAYLOAD)
+        assert runner.invoke(app, ["models", "fetch"]).exit_code == ExitCode.OK
+
+        result = runner.invoke(app, ["models", "fetch"])
+
+        assert result.exit_code == ExitCode.OK
+        assert "already present" in result.output
+
+    def test_a_verification_failure_exits_nonzero_and_writes_nothing(
+        self, models_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._serve(monkeypatch, b"z" * len(self.PAYLOAD))
+
+        result = runner.invoke(app, ["models", "fetch"])
+
+        assert result.exit_code == ExitCode.FATAL
+        assert "model_hash_mismatch" in result.output
+        assert not (models_dir / "fake_vad.onnx").exists()
 
 
 class TestInstalledConsoleScript:

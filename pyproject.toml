@@ -95,6 +95,13 @@ plugins = ["pydantic.mypy"]
 warn_unreachable = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 
+# `onnxruntime` ships no `py.typed`. It is wrapped behind the typed `OnnxSession` adapter in
+# `activity/silero.py` and imported nowhere else, so nothing outside that module ever sees an
+# untyped object (ADR-0013).
+[[tool.mypy.overrides]]
+module = ["onnxruntime"]
+ignore_missing_imports = true
+
 [tool.pydantic-mypy]
 init_forbid_extra = true
 init_typed = true

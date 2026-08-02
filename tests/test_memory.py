@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
+import numpy.typing as npt
 import pytest
 
 from dnd_audio.artifacts.timeline import TimelineSegment, TimelineTrack
@@ -197,3 +198,113 @@ class TestTheWriterDoesNotBuffer:
             short_write()
         assert not path.exists()
         assert not list(tmp_path.glob(".*tmp"))
+
+
+class TestTheDetectionPathStreams:
+    """The same proof for M3's path, which composes differently and could break differently.
+
+    `detect_track` reads a 16 kHz derivative and hands windows to a detector. Bounding the
+    reader says nothing about a detector that keeps every window it is given, or about an
+    assembler that materializes the track before deciding anything — and the *whole* point of
+    M2's technique is that only an ordered event log over the composed path can tell.
+    """
+
+    def test_a_detection_happens_before_the_last_read(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The assertion an accumulating detector cannot pass.
+
+        A detector handed the session one window at a time must have been *called* before the
+        reader finished, and one that buffered would be called once, at the end.
+        """
+        from dnd_audio.activity.detect import detect_track
+        from dnd_audio.config import VadConfig
+        from dnd_audio.interfaces import ActivityDetector, AudioWindow, SpeechSpan
+        from dnd_audio.timeline import DERIVATIVE_SAMPLE_RATE
+        from dnd_audio.timeline.pcm import PcmReader
+
+        # Ten minutes at 16 kHz. Silence is honest here: a scripted detector's answer does not
+        # depend on the samples, and what is under test is how many of them are resident.
+        duration = 10 * 60 * DERIVATIVE_SAMPLE_RATE
+        path = tmp_path / "derivative.wav"
+        window = DERIVATIVE_SAMPLE_RATE
+        with WavWriter(path, sample_rate=DERIVATIVE_SAMPLE_RATE, n_samples=duration) as writer:
+            written = 0
+            while written < duration:
+                block = min(window, duration - written)
+                writer.write(np.zeros(block, dtype=np.float32))
+                written += block
+
+        journal = Journal()
+        original = PcmReader.read
+
+        def watched_read(self: PcmReader, start: int, n: int) -> npt.NDArray[np.float32]:
+            journal.record("read", n)
+            return original(self, start, n)
+
+        class Watchful:
+            """Records every window it is given, without keeping any of them."""
+
+            def detect(self, audio: AudioWindow) -> tuple[SpeechSpan, ...]:
+                journal.record("detect", len(audio))
+                return ()
+
+        detector: ActivityDetector = Watchful()
+        # Patched by name so the instrumentation sits on the real reader the detection pass
+        # opens for itself: there is no seam to inject one through, and that is deliberate —
+        # the pass owns its file handle so nothing can hand it a buffered stand-in.
+        monkeypatch.setattr("dnd_audio.timeline.pcm.PcmReader.read", watched_read)
+        result = detect_track(
+            path,
+            track_id="tx-a",
+            detector=detector,
+            settings=VadConfig(),
+            window_samples=window,
+        )
+
+        detections = [i for i, (kind, _) in enumerate(journal.events) if kind == "detect"]
+        assert detections[0] < journal.last_read_index()
+        assert max(journal.reads) <= window + 512
+        assert sum(journal.reads) == duration
+        assert sum(journal.reads) > 100 * window
+        # Two bytes per 32 ms frame is the only thing that grows with the session, and it is
+        # the artifact that makes a bad attribution debuggable.
+        assert result.frame_probabilities.nbytes < duration // 100
+
+    def test_the_bleed_gate_reads_only_what_it_compares(self, tmp_path: Path) -> None:
+        """A candidate may be minutes long; a comparison may not.
+
+        `correlation_window_ms` is the bound, and without it one long candidate pulls its
+        whole span into memory — six times over, on a host where memory pressure kills
+        processes.
+        """
+        from dnd_audio.activity.bleed import CandidateInput, attribute
+        from dnd_audio.config import ActivityConfig
+        from dnd_audio.timeline import DERIVATIVE_SAMPLE_RATE
+
+        minutes = 10 * 60 * DERIVATIVE_SAMPLE_RATE
+        reads: list[int] = []
+
+        def read(track_id: str, start: int, n_samples: int) -> npt.NDArray[np.float32]:
+            reads.append(n_samples)
+            return np.zeros(n_samples, dtype=np.float32)
+
+        candidates = [
+            CandidateInput(
+                track_id=track,
+                start_sample=0,
+                end_sample=minutes * 3,
+                derivative_start_sample=0,
+                derivative_end_sample=minutes,
+                probability_permille=900,
+                peak_probability_permille=950,
+            )
+            for track in ("tx-a", "tx-b")
+        ]
+        config = ActivityConfig()
+        attribute(candidates, read=read, config=config)
+
+        cap = config.bleed.correlation_window_ms * DERIVATIVE_SAMPLE_RATE // 1000
+        assert reads, "the gate read nothing, so this proves nothing"
+        assert max(reads) <= cap
+        assert cap < minutes // 100

@@ -114,6 +114,11 @@ class SpeechInterval:
     #: recording during the interval get one — a transmitter that is off hears nothing,
     #: and the fixture would be lying if it said otherwise.
     bleeds_into: tuple[str, ...] = ()
+    #: How late and how much quieter the bleed arrives. ``None`` takes the module defaults,
+    #: which are one plausible table's worth of geometry; a fixture about the *lag window*
+    #: or about mutual bleed during real overlap needs its own numbers.
+    bleed_delay_samples: int | None = None
+    bleed_attenuation_db: float | None = None
     gain: float = 0.25
     #: Stable identity, derived from track and position rather than from list order.
     utterance_id: str = ""
@@ -239,7 +244,9 @@ class FixtureTruth:
     def for_track(self, track_id: str) -> tuple[WrittenChunk, ...]:
         return tuple(c for c in self.chunks if c.track_id == track_id)
 
-    def activity_spans(self) -> dict[str, tuple[SpeechSpan, ...]]:
+    def activity_spans(
+        self, *, sample_rate: int | None = None
+    ) -> dict[str, tuple[SpeechSpan, ...]]:
         """Ground-truth speech, in the shape :class:`ScriptedActivityDetector` takes.
 
         M3's detector fake is driven from this rather than from an opinion about the
@@ -247,14 +254,111 @@ class FixtureTruth:
         particular learned Silero release. Bleed is deliberately absent — it is not
         speech on the track that received it, and a fixture that claimed otherwise
         would make the bleed gate untestable.
+
+        Args:
+            sample_rate: The grid to express the spans on. Defaults to the fixture's own
+                48 kHz. **Pass the derivative rate when scripting a detector for M3**: the
+                detection pass hands out windows of the 16 kHz derivative, so 48 kHz spans
+                land past the end of every window, the detector returns nothing, and every
+                attribution assertion then passes over an empty graph. That failure is
+                silent in exactly the way this project keeps finding — hence the argument
+                rather than a convention.
+        """
+        return self._at_rate(
+            {
+                interval.track_id: [
+                    SpeechSpan(start_sample=i.start_sample, end_sample=i.end_sample)
+                    for i in self.speech
+                    if i.track_id == interval.track_id
+                ]
+                for interval in self.speech
+            },
+            sample_rate,
+        )
+
+    def bleed_spans(self, *, sample_rate: int | None = None) -> dict[str, tuple[SpeechSpan, ...]]:
+        """Where each track *hears someone else*, in that track's own samples.
+
+        The fixture knows this exactly — it wrote the bleed — so a test never has to guess
+        where a leaky detector would fire. A real VAD fires on bleed; :meth:`activity_spans`
+        deliberately does not, because it is ground truth about who *spoke*. Combining them
+        is :meth:`leaky_activity_spans`.
+
+        The delay matters and is included: bleed arrives late, which is the entire reason
+        the similarity measure is lag-tolerant rather than zero-lag.
         """
         spans: dict[str, list[SpeechSpan]] = {}
         for interval in self.speech:
-            spans.setdefault(interval.track_id, []).append(
-                SpeechSpan(start_sample=interval.start_sample, end_sample=interval.end_sample)
+            delay = (
+                _BLEED_DELAY_SAMPLES
+                if interval.bleed_delay_samples is None
+                else interval.bleed_delay_samples
             )
+            for target in interval.bleeds_into:
+                spans.setdefault(target, []).append(
+                    SpeechSpan(
+                        start_sample=interval.start_sample + delay,
+                        end_sample=interval.end_sample + delay,
+                    )
+                )
+        return self._at_rate(spans, sample_rate)
+
+    def leaky_activity_spans(
+        self, *, sample_rate: int | None = None
+    ) -> dict[str, tuple[SpeechSpan, ...]]:
+        """What a *real* detector would find: speech and bleed alike, per track.
+
+        Provided here rather than left to each test because the obvious spelling —
+        ``activity_spans() | bleed_spans()`` — is a dict union, and a union **replaces** the
+        value for any track present in both. In the canonical fixture that is `tx-d` and
+        `tx-e`, whose genuine simultaneous speech would vanish and take the overlap case
+        with it. Found by independent review of M3's plan; merged per track here so no test
+        can spell it the wrong way.
+        """
+        speech = self.activity_spans(sample_rate=sample_rate)
+        bleed = self.bleed_spans(sample_rate=sample_rate)
+        merged: dict[str, tuple[SpeechSpan, ...]] = {}
+        for track in sorted(set(speech) | set(bleed)):
+            items = [*speech.get(track, ()), *bleed.get(track, ())]
+            merged[track] = tuple(sorted(items, key=lambda s: (s.start_sample, s.end_sample)))
+        return merged
+
+    def _at_rate(
+        self, spans: dict[str, list[SpeechSpan]], sample_rate: int | None
+    ) -> dict[str, tuple[SpeechSpan, ...]]:
+        """Convert to another grid, covering the interval rather than shrinking it.
+
+        The start floors and the end ceils, which is the same rule
+        `timeline.resample.to_derivative_interval` states and for the same reason: rounding
+        both ends alike loses up to two samples of a word, at the end where the phonemes are.
+        """
+        if sample_rate is None or sample_rate == self.sample_rate:
+            return {
+                track: tuple(sorted(items, key=lambda s: (s.start_sample, s.end_sample)))
+                for track, items in sorted(spans.items())
+            }
+        if self.sample_rate % sample_rate:
+            message = (
+                f"{self.sample_rate} Hz does not divide by {sample_rate} Hz, so a span "
+                f"cannot be moved between the two grids exactly"
+            )
+            raise ValueError(message)
+        factor = self.sample_rate // sample_rate
         return {
-            track: tuple(sorted(items, key=lambda s: (s.start_sample, s.end_sample)))
+            track: tuple(
+                sorted(
+                    (
+                        SpeechSpan(
+                            start_sample=span.start_sample // factor,
+                            end_sample=-(-span.end_sample // factor),
+                            probability=span.probability,
+                            details=dict(span.details),
+                        )
+                        for span in items
+                    ),
+                    key=lambda s: (s.start_sample, s.end_sample),
+                )
+            )
             for track, items in sorted(spans.items())
         }
 
@@ -465,8 +569,16 @@ def _build_events(spec: FixtureSession) -> tuple[_Event, ...]:
 
         bleed = synth.bleed_of(
             voice,
-            delay_samples=_BLEED_DELAY_SAMPLES,
-            attenuation_db=_BLEED_ATTENUATION_DB,
+            delay_samples=(
+                _BLEED_DELAY_SAMPLES
+                if interval.bleed_delay_samples is None
+                else interval.bleed_delay_samples
+            ),
+            attenuation_db=(
+                _BLEED_ATTENUATION_DB
+                if interval.bleed_attenuation_db is None
+                else interval.bleed_attenuation_db
+            ),
         )
         for target in interval.bleeds_into:
             if not _is_live(live.get(target, ()), interval.start_sample, interval.n_samples):

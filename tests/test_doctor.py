@@ -4,6 +4,11 @@ These run the real tools. That is the point: a mocked `ffmpeg -version` would pr
 only that the mock returns a string, and the check exists to catch a host where the
 flake environment is not active.
 
+The model check is the exception, and for the opposite reason: it is pointed at a
+temporary directory in every test here, so the results do not depend on whether whoever
+is running the suite happens to have fetched the model — and so no test reads or writes
+the invoking user's real cache.
+
 GPU checks belong to M6a; there is deliberately no placeholder for them here.
 """
 
@@ -15,6 +20,8 @@ from pathlib import Path
 
 import pytest
 
+from dnd_audio import doctor as doctor_module
+from dnd_audio.determinism import sha256_bytes
 from dnd_audio.doctor import (
     REQUIRED_TOOLS,
     CheckResult,
@@ -22,6 +29,13 @@ from dnd_audio.doctor import (
     overall_status,
     run_checks,
 )
+from dnd_audio.models import ModelDescriptor
+
+
+@pytest.fixture(autouse=True)
+def _empty_models_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No model, by default, wherever this suite is run."""
+    monkeypatch.setenv("DND_AUDIO_MODELS_DIR", str(tmp_path / "models"))
 
 
 @pytest.fixture
@@ -116,8 +130,75 @@ class TestOverallStatus:
         ]
 
 
+class TestModelCheck:
+    """The spec's model-availability check, warning rather than failing."""
+
+    def test_an_absent_model_warns_and_names_the_fix(self, results: list[CheckResult]) -> None:
+        result = _named(results, "vad model")
+        assert result.status is CheckStatus.WARN
+        assert "dnd-audio models fetch" in result.detail
+
+    def test_an_absent_model_does_not_condemn_the_host(self, results: list[CheckResult]) -> None:
+        """Inspection, ingest, and the whole default suite run without any model."""
+        assert overall_status(results) is not CheckStatus.FAIL
+
+    def test_a_present_model_is_reported(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Substituting the descriptor is the only way to test this offline.
+
+        The real pin is 2.3 MB of weights that may not be committed, so the check is
+        exercised against a stand-in of the same shape. What is under test is the
+        check's logic, not Silero.
+        """
+        directory = tmp_path / "present"
+        directory.mkdir()
+        payload = b"stand-in for the ONNX graph\n"
+        monkeypatch.setattr(doctor_module, "SILERO_VAD", _fake_model(payload))
+        (directory / "fake_vad.onnx").write_bytes(payload)
+
+        result = _named(run_checks(tmp_path, models_directory=directory), "vad model")
+
+        assert result.status is CheckStatus.OK
+        assert str(directory / "fake_vad.onnx") in result.detail
+
+    def test_a_corrupted_model_warns_like_an_absent_one(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A file that does not verify must not be reported as available."""
+        directory = tmp_path / "corrupt"
+        directory.mkdir()
+        payload = b"stand-in for the ONNX graph\n"
+        monkeypatch.setattr(doctor_module, "SILERO_VAD", _fake_model(payload))
+        (directory / "fake_vad.onnx").write_bytes(b"y" * len(payload))
+
+        result = _named(run_checks(tmp_path, models_directory=directory), "vad model")
+
+        assert result.status is CheckStatus.WARN
+
+
+def _fake_model(payload: bytes) -> ModelDescriptor:
+    commit = "0" * 40
+    return ModelDescriptor(
+        key="fake-vad",
+        filename="fake_vad.onnx",
+        repository="example/fake-vad",
+        release="v0.0.1",
+        commit=commit,
+        path_in_repository="data/fake_vad.onnx",
+        url=f"https://raw.githubusercontent.com/example/fake-vad/{commit}/data/fake_vad.onnx",
+        size_bytes=len(payload),
+        sha256=sha256_bytes(payload),
+    )
+
+
 class TestBoundaries:
     def test_no_gpu_checks_yet(self, tmp_path: Path) -> None:
         """M6a owns those, and must test openability rather than infer it."""
         names = {result.name for result in run_checks(tmp_path)}
         assert not names & {"gpu", "torch", "/dev/kfd", "render node"}
+
+    def test_no_asr_model_checks_yet(self, tmp_path: Path) -> None:
+        """M6b owns those. Only the VAD model is fetchable today."""
+        names = {result.name for result in run_checks(tmp_path)}
+        assert not names & {"asr model", "qwen", "aligner"}
