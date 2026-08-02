@@ -266,8 +266,9 @@ class TimelineTrack(_Artifact):
         position = self.start_sample
         for segment in ordered:
             if segment.session_start_sample != position:
+                shape = "hole" if segment.session_start_sample > position else "overlap"
                 message = (
-                    f"track {self.track_id} has a {'hole' if segment.session_start_sample > position else 'overlap'} "
+                    f"track {self.track_id} has a {shape} "
                     f"at sample {position}: the next segment starts at "
                     f"{segment.session_start_sample}. A gap is an explicit silence "
                     f"segment, never an absence."
