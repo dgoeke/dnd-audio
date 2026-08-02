@@ -152,3 +152,36 @@ preflight, which knows the actual session length instead of assuming four hours.
 **Evidence:** Measure `work/` after the first complete run.
 **Needs:** M2 (preflight), H2 or the first real session (real numbers) ·
 **Blocks:** nothing · **Status:** open
+
+**Partially answered in M2, and the arithmetic's premise changed.** M2 builds a preflight
+that estimates work-space from the session's *actual* length rather than an assumed four
+hours, and from the artifacts actually requested. Two of the three terms in the original
+estimate are now wrong by construction: the 48 kHz working audio is a segment map rather
+than 15 GiB of materialized float32 (ADR-0011), and the mix intermediate belongs to M5.
+What M2 can measure is its own footprint; the full-pipeline number this question asks for
+still needs H2 or a real session, so this stays **open**.
+
+## OQ-014 — How long is a real session, and when is an inferred span implausible?
+**Assumption:** Under 12 hours. A span longer than that is unambiguous arithmetically —
+midnight rollover is unique within one 24-hour cycle — but implausible enough to be worth
+a human's attention, so it warns rather than failing (ADR-0009).
+**Why it matters:** Only whether a warning fires. It changes no placement and no artifact.
+Set too low it is noise; set too high it never fires and the operator learns nothing from
+a session whose timecode is a day out.
+**Evidence:** The wall-clock length of real sessions, and whether the warning ever fires
+on one.
+**Needs:** H2 or the first real session · **Blocks:** nothing · **Status:** open
+
+## OQ-015 — Where is the DJI receivers' timecode zero relative to real midnight?
+**Assumption:** `00:00:00:00` is jammed to real midnight, so a timecode and a BWF sample
+reference in the same session share a day origin.
+**Why it matters:** At a fractional non-drop rate a timecode day is not a real day —
+2 592 000 frames at 30000/1001 fps is 86 486.4 seconds, 86.4 seconds longer than a
+calendar day. Within a session that costs nothing, because elapsed time converts exactly;
+it matters only where the two domains are anchored to each other. A session mixing BWF and
+timecode evidence at 23.98F or 29.97F therefore rests on this assumption, and M2 warns when
+one does (ADR-0009). The canonical fixture mixes exactly these domains, at 30F, where a
+timecode day *is* 86 400 seconds and the question does not arise.
+**Evidence:** The displayed timecode on all three receivers after the LTC jam, recorded
+against wall-clock time, cross-checked with the `bext` origination time in the files.
+**Needs:** H1 · **Blocks:** nothing directly · **Status:** open
