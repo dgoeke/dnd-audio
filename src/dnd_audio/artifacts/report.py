@@ -26,6 +26,7 @@ from typing import Annotated, Final, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from dnd_audio.artifacts.roster import RosterSummary
 from dnd_audio.determinism import sha256_file, write_json_atomic
 from dnd_audio.errors import ExitCode
 
@@ -40,6 +41,7 @@ __all__ = [
     "Provenance",
     "ReportBuilder",
     "ReportWarning",
+    "RosterSummary",
     "StageName",
     "StageReport",
     "StageStatus",
@@ -230,6 +232,11 @@ class IngestReport(_Artifact):
     #: semantically stable across an unchanged rerun even though the report as a whole
     #: is exempt. M1 onward fill it; the envelope and its ordering are fixed here.
     decisions: list[Decision] = Field(default_factory=list)
+    #: Who was configured, who was recording, and what was found where. The spec
+    #: requires the report to show this; a typed section rather than free-text
+    #: decisions, so a consumer reads counts instead of parsing prose. ``None`` when no
+    #: stage that discovers files ran — which is not the same as an empty roster.
+    roster: RosterSummary | None = None
     telemetry: Telemetry
 
     @model_validator(mode="after")
@@ -325,6 +332,7 @@ class ReportBuilder:
         self._model_identity: dict[str, str] = {}
         self._stage_seconds: dict[StageName, float] = {}
         self._decisions: list[Decision] = []
+        self._roster: RosterSummary | None = None
         self._cache_hits = 0
         self._cache_misses = 0
 
@@ -395,6 +403,14 @@ class ReportBuilder:
     def record_decision(self, decision: Decision) -> None:
         self._decisions.append(decision)
 
+    def record_roster(self, roster: RosterSummary) -> None:
+        """Record who was configured and who was recording.
+
+        Set once, by whichever stage discovered the files. A second call replaces it
+        rather than merging: two partial rosters would be worse than one complete one.
+        """
+        self._roster = roster
+
     def build(self, finished_at: dt.datetime) -> IngestReport:
         """Assemble the report.
 
@@ -418,6 +434,7 @@ class ReportBuilder:
             overall_status=roll_up(stages),
             stages=stages,
             decisions=list(self._decisions),
+            roster=self._roster,
             provenance=Provenance(
                 config_hash=self._config_hash,
                 tool_versions=dict(self._tool_versions),

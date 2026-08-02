@@ -156,6 +156,63 @@
       "title": "ReportWarning",
       "type": "object"
     },
+    "RosterSummary": {
+      "additionalProperties": false,
+      "description": "Who was configured, who was recording, and what was found where.",
+      "properties": {
+        "active_tracks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Active Tracks",
+          "type": "array"
+        },
+        "empty_directories": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Empty Directories",
+          "type": "array"
+        },
+        "extra_directories": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Extra Directories",
+          "type": "array"
+        },
+        "file_counts": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "File Counts",
+          "type": "object"
+        },
+        "inactive_tracks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Inactive Tracks",
+          "type": "array"
+        },
+        "known_tracks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Known Tracks",
+          "type": "array"
+        },
+        "missing_directories": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Missing Directories",
+          "type": "array"
+        }
+      },
+      "title": "RosterSummary",
+      "type": "object"
+    },
     "StageName": {
       "description": "The executable stage DAG, in dependency order.\n\nDeclaration order is the serialization order — see :data:`STAGE_ORDER`. Report\nfinalization is not here: it is an always-run internal sink, not a stage that can\nitself be skipped.",
       "enum": [
@@ -324,6 +381,17 @@
     },
     "provenance": {
       "$ref": "#/$defs/Provenance"
+    },
+    "roster": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RosterSummary"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "schema_version": {
       "const": 1,

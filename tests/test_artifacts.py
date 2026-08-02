@@ -16,7 +16,21 @@ from typing import Any
 import pytest
 from jsonschema import Draft202012Validator
 
-from dnd_audio.artifacts.manifest import Manifest, ManifestSource, ManifestTrack
+from dnd_audio.artifacts.manifest import (
+    BwfSampleReferenceRecord,
+    ContainerRecord,
+    DeclinedStrategyRecord,
+    FilenameHintsRecord,
+    InspectionProvenance,
+    Manifest,
+    ManifestNote,
+    ManifestSource,
+    ManifestTrack,
+    ProbeRecord,
+    RiffChunkRecord,
+    RiffRecord,
+    StartTimeRecord,
+)
 from dnd_audio.artifacts.report import (
     STAGE_ORDER,
     Decision,
@@ -29,6 +43,7 @@ from dnd_audio.artifacts.report import (
     StructuredError,
     Telemetry,
 )
+from dnd_audio.artifacts.roster import RosterSummary
 from dnd_audio.artifacts.transcript import (
     SegmentProvenance,
     Transcript,
@@ -54,35 +69,90 @@ def _validator(schema_dir: Path, name: str) -> Draft202012Validator:
     return Draft202012Validator(schema)
 
 
+def _source(path: str, sha: str, *, role: str = "selected") -> ManifestSource:
+    return ManifestSource(
+        relative_path=path,
+        sha256=sha,
+        size_bytes=1024,
+        role=role,  # type: ignore[arg-type]
+        reason_code="original_selected",
+        detail="the original recording for this chunk",
+        filename=FilenameHintsRecord(recognized=True, variant="orig", tx_label="TX01", sequence=1),
+        container=ContainerRecord(
+            codec_name="pcm_f32le",
+            sample_format="flt",
+            bits_per_sample=32,
+            sample_rate=48000,
+            channels=1,
+            duration_ts=144000,
+            time_base="1/48000",
+            duration_text="3.000000",
+            sample_count=144000,
+            sample_count_source="data_chunk",
+            sample_count_agrees=True,
+        ),
+        probe=ProbeRecord(sidecar_path=f"work/ffprobe/{'d' * 64}.json", sha256="d" * 64),
+        riff=RiffRecord(
+            form="RIFF",
+            form_type="WAVE",
+            declared_size=576836,
+            file_size=576844,
+            chunks=[RiffChunkRecord(chunk_id="data", offset=700, size=576000)],
+        ),
+        start_time=StartTimeRecord(
+            strategy="bwf_time_reference",
+            evidence=BwfSampleReferenceRecord(samples=3283200000, sample_rate=48000),
+            assumptions=["OQ-004: samples since midnight at the file's own rate"],
+            declined=[DeclinedStrategyRecord(strategy="timecode_tag", reason="no timecode tag")],
+        ),
+    )
+
+
 def _sample_manifest() -> Manifest:
     return Manifest(
         session_id="2026-08-15",
         config_hash="a" * 64,
+        inspection=InspectionProvenance(
+            ffmpeg_version="ffmpeg version 8.0",
+            ffprobe_version="ffprobe version 8.0",
+            ffprobe_args=["-show_format", "-show_streams"],
+            semantics_version=1,
+        ),
+        roster=RosterSummary(
+            known_tracks=["tx-b", "tx-a"],
+            active_tracks=["tx-a"],
+            inactive_tracks=["tx-b"],
+            file_counts={"tx-b": 0, "tx-a": 2},
+            empty_directories=["raw/tx-b"],
+        ),
         tracks=[
             ManifestTrack(
                 track_id="tx-b",
                 speaker_id="bob",
+                speaker_name="Bob",
+                input_path="raw/tx-b",
                 active=False,
+                inactive_reason="no usable original recording was found",
             ),
             ManifestTrack(
                 track_id="tx-a",
                 speaker_id="alice",
+                speaker_name="Alice",
+                input_path="raw/tx-a",
                 active=True,
                 sources=[
-                    ManifestSource(
-                        relative_path="raw/tx-a/TX01_MIC002_20260815_190500_orig.wav",
-                        sha256="b" * 64,
-                        size_bytes=1024,
-                    ),
-                    ManifestSource(
-                        relative_path="raw/tx-a/TX01_MIC002_20260815_190000_orig.wav",
-                        sha256="c" * 64,
-                        size_bytes=2048,
-                    ),
+                    _source("raw/tx-a/TX01_MIC002_20260815_190500_orig.wav", "b" * 64),
+                    _source("raw/tx-a/TX01_MIC002_20260815_190000_orig.wav", "c" * 64),
                 ],
             ),
         ],
-        warnings=["tx-b has no usable original recording"],
+        warnings=[
+            ManifestNote(
+                code="track_inactive",
+                message="Bob is on the roster but has no usable original recording",
+                path="raw/tx-b",
+            )
+        ],
     )
 
 
@@ -276,7 +346,7 @@ class TestValidation:
 
     def test_manifest_hash_format_is_enforced(self) -> None:
         with pytest.raises(ValueError, match="should match pattern"):
-            ManifestSource(relative_path="raw/a.wav", sha256="short", size_bytes=1)
+            _source("raw/a.wav", "short")
 
     def test_no_confidence_field_exists_on_a_segment(self) -> None:
         """The spec forbids manufacturing one the model does not provide."""

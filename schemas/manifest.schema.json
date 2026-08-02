@@ -1,11 +1,424 @@
 {
   "$defs": {
+    "BwfSampleReferenceRecord": {
+      "additionalProperties": false,
+      "description": "Samples since midnight, at the **file's own** sample rate.\n\nThe rate is recorded because it need not be the session's: a 44.1 kHz source counts\n44100ths of a second, and reading it as 48000ths misplaces the file by 8.75%.",
+      "properties": {
+        "kind": {
+          "const": "bwf_sample_reference",
+          "default": "bwf_sample_reference",
+          "title": "Kind",
+          "type": "string"
+        },
+        "origination_date": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Origination Date"
+        },
+        "sample_rate": {
+          "exclusiveMinimum": 0,
+          "title": "Sample Rate",
+          "type": "integer"
+        },
+        "samples": {
+          "minimum": 0,
+          "title": "Samples",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "samples",
+        "sample_rate"
+      ],
+      "title": "BwfSampleReferenceRecord",
+      "type": "object"
+    },
+    "ContainerRecord": {
+      "additionalProperties": false,
+      "description": "The container facts, captured before any project-specific interpretation.",
+      "properties": {
+        "bits_per_sample": {
+          "minimum": 0,
+          "title": "Bits Per Sample",
+          "type": "integer"
+        },
+        "channels": {
+          "exclusiveMinimum": 0,
+          "title": "Channels",
+          "type": "integer"
+        },
+        "codec_name": {
+          "title": "Codec Name",
+          "type": "string"
+        },
+        "duration_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Text"
+        },
+        "duration_ts": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Ts"
+        },
+        "sample_count": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sample Count"
+        },
+        "sample_count_agrees": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sample Count Agrees"
+        },
+        "sample_count_source": {
+          "default": "none",
+          "enum": [
+            "data_chunk",
+            "duration_ts",
+            "none"
+          ],
+          "title": "Sample Count Source",
+          "type": "string"
+        },
+        "sample_format": {
+          "title": "Sample Format",
+          "type": "string"
+        },
+        "sample_rate": {
+          "exclusiveMinimum": 0,
+          "title": "Sample Rate",
+          "type": "integer"
+        },
+        "time_base": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Time Base"
+        }
+      },
+      "required": [
+        "codec_name",
+        "sample_format",
+        "bits_per_sample",
+        "sample_rate",
+        "channels"
+      ],
+      "title": "ContainerRecord",
+      "type": "object"
+    },
+    "DeclinedStrategyRecord": {
+      "additionalProperties": false,
+      "description": "A strategy that ran and found nothing, and what it was looking for.\n\nRecorded because it is what makes H1 cheap: answering OQ-001 becomes reading these\nreasons across a real fixture rather than re-running an investigation.",
+      "properties": {
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "strategy": {
+          "minLength": 1,
+          "title": "Strategy",
+          "type": "string"
+        }
+      },
+      "required": [
+        "strategy",
+        "reason"
+      ],
+      "title": "DeclinedStrategyRecord",
+      "type": "object"
+    },
+    "FilenameHintsRecord": {
+      "additionalProperties": false,
+      "description": "What the filename suggested. Hints only — never identity (INV-11), never a\ntime (INV-12).",
+      "properties": {
+        "named_date": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Named Date"
+        },
+        "named_time": {
+          "anyOf": [
+            {
+              "format": "time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Named Time"
+        },
+        "recognized": {
+          "title": "Recognized",
+          "type": "boolean"
+        },
+        "sequence": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sequence"
+        },
+        "tx_label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tx Label"
+        },
+        "variant": {
+          "enum": [
+            "orig",
+            "edit",
+            "unknown"
+          ],
+          "title": "Variant",
+          "type": "string"
+        }
+      },
+      "required": [
+        "recognized",
+        "variant"
+      ],
+      "title": "FilenameHintsRecord",
+      "type": "object"
+    },
+    "InspectionProvenance": {
+      "additionalProperties": false,
+      "description": "What produced this manifest. Deterministic, and part of the cache identity.\n\nTool versions live here rather than in the report's telemetry because they are not\nper-run measurements: the same tools on unchanged bytes produce the same capture,\nand a different FFmpeg legitimately produces a different one (INV-08). Nothing here\nvaries between two identical runs, which is what INV-03 asks.",
+      "properties": {
+        "ffmpeg_version": {
+          "minLength": 1,
+          "title": "Ffmpeg Version",
+          "type": "string"
+        },
+        "ffprobe_args": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Ffprobe Args",
+          "type": "array"
+        },
+        "ffprobe_version": {
+          "minLength": 1,
+          "title": "Ffprobe Version",
+          "type": "string"
+        },
+        "semantics_version": {
+          "minimum": 1,
+          "title": "Semantics Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "ffmpeg_version",
+        "ffprobe_version",
+        "semantics_version"
+      ],
+      "title": "InspectionProvenance",
+      "type": "object"
+    },
+    "ManifestDecision": {
+      "additionalProperties": false,
+      "description": "A choice worth auditing. Deterministic by construction — no counts, no timings.",
+      "properties": {
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "detail": {
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "subject": {
+          "minLength": 1,
+          "title": "Subject",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "subject",
+        "detail"
+      ],
+      "title": "ManifestDecision",
+      "type": "object"
+    },
+    "ManifestNote": {
+      "additionalProperties": false,
+      "description": "A warning: something worth a human's attention that did not stop the run.",
+      "properties": {
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "ManifestNote",
+      "type": "object"
+    },
     "ManifestSource": {
       "additionalProperties": false,
-      "description": "One source file as it was found. Never modified — INV-01.",
+      "description": "One candidate file, whatever became of it. Never modified — INV-01.",
       "properties": {
+        "associated_with": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Associated With"
+        },
+        "container": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContainerRecord"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "detail": {
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "filename": {
+          "$ref": "#/$defs/FilenameHintsRecord"
+        },
+        "probe": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProbeRecord"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "reason_code": {
+          "minLength": 1,
+          "title": "Reason Code",
+          "type": "string"
+        },
         "relative_path": {
+          "minLength": 1,
           "title": "Relative Path",
+          "type": "string"
+        },
+        "riff": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RiffRecord"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "role": {
+          "enum": [
+            "selected",
+            "associated_edit",
+            "duplicate",
+            "unassigned",
+            "unusable"
+          ],
+          "title": "Role",
           "type": "string"
         },
         "sha256": {
@@ -17,23 +430,62 @@
           "minimum": 0,
           "title": "Size Bytes",
           "type": "integer"
+        },
+        "start_time": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StartTimeRecord"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/ManifestNote"
+          },
+          "title": "Warnings",
+          "type": "array"
         }
       },
       "required": [
         "relative_path",
         "sha256",
-        "size_bytes"
+        "size_bytes",
+        "role",
+        "reason_code",
+        "detail",
+        "filename"
       ],
       "title": "ManifestSource",
       "type": "object"
     },
     "ManifestTrack": {
       "additionalProperties": false,
-      "description": "One roster track, and whichever originals were discovered for it.",
+      "description": "One roster track, and everything found in its directory.",
       "properties": {
         "active": {
           "title": "Active",
           "type": "boolean"
+        },
+        "inactive_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Inactive Reason"
+        },
+        "input_path": {
+          "minLength": 1,
+          "title": "Input Path",
+          "type": "string"
         },
         "sources": {
           "items": {
@@ -43,10 +495,17 @@
           "type": "array"
         },
         "speaker_id": {
+          "minLength": 1,
           "title": "Speaker Id",
           "type": "string"
         },
+        "speaker_name": {
+          "minLength": 1,
+          "title": "Speaker Name",
+          "type": "string"
+        },
         "track_id": {
+          "minLength": 1,
           "title": "Track Id",
           "type": "string"
         }
@@ -54,9 +513,398 @@
       "required": [
         "track_id",
         "speaker_id",
+        "speaker_name",
+        "input_path",
         "active"
       ],
       "title": "ManifestTrack",
+      "type": "object"
+    },
+    "ProbeRecord": {
+      "additionalProperties": false,
+      "description": "Where the verbatim FFprobe output was kept, and what produced it.",
+      "properties": {
+        "command": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Command",
+          "type": "array"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "sidecar_path": {
+          "minLength": 1,
+          "title": "Sidecar Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sidecar_path",
+        "sha256"
+      ],
+      "title": "ProbeRecord",
+      "type": "object"
+    },
+    "RationalRate": {
+      "additionalProperties": false,
+      "description": "An exact rate, as the two integers it actually is.\n\nINV-04: 30000/1001 is never serialized as 29.97. A consumer that wants a float can\ndivide; a consumer that wants exactness cannot recover it from one.",
+      "properties": {
+        "denominator": {
+          "exclusiveMinimum": 0,
+          "title": "Denominator",
+          "type": "integer"
+        },
+        "numerator": {
+          "exclusiveMinimum": 0,
+          "title": "Numerator",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "numerator",
+        "denominator"
+      ],
+      "title": "RationalRate",
+      "type": "object"
+    },
+    "RiffChunkRecord": {
+      "additionalProperties": false,
+      "description": "One chunk of the container, found without FFprobe's help.",
+      "properties": {
+        "chunk_id": {
+          "minLength": 1,
+          "title": "Chunk Id",
+          "type": "string"
+        },
+        "container": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Container"
+        },
+        "offset": {
+          "minimum": 0,
+          "title": "Offset",
+          "type": "integer"
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sha256"
+        },
+        "size": {
+          "minimum": 0,
+          "title": "Size",
+          "type": "integer"
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Text"
+        }
+      },
+      "required": [
+        "chunk_id",
+        "offset",
+        "size"
+      ],
+      "title": "RiffChunkRecord",
+      "type": "object"
+    },
+    "RiffRecord": {
+      "additionalProperties": false,
+      "description": "The generic chunk inventory (OQ-005).",
+      "properties": {
+        "chunks": {
+          "items": {
+            "$ref": "#/$defs/RiffChunkRecord"
+          },
+          "title": "Chunks",
+          "type": "array"
+        },
+        "declared_size": {
+          "minimum": 0,
+          "title": "Declared Size",
+          "type": "integer"
+        },
+        "file_size": {
+          "minimum": 0,
+          "title": "File Size",
+          "type": "integer"
+        },
+        "form": {
+          "minLength": 1,
+          "title": "Form",
+          "type": "string"
+        },
+        "form_type": {
+          "minLength": 1,
+          "title": "Form Type",
+          "type": "string"
+        },
+        "truncated": {
+          "default": false,
+          "title": "Truncated",
+          "type": "boolean"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/ManifestNote"
+          },
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "form",
+        "form_type",
+        "declared_size",
+        "file_size"
+      ],
+      "title": "RiffRecord",
+      "type": "object"
+    },
+    "RosterSummary": {
+      "additionalProperties": false,
+      "description": "Who was configured, who was recording, and what was found where.",
+      "properties": {
+        "active_tracks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Active Tracks",
+          "type": "array"
+        },
+        "empty_directories": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Empty Directories",
+          "type": "array"
+        },
+        "extra_directories": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Extra Directories",
+          "type": "array"
+        },
+        "file_counts": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "File Counts",
+          "type": "object"
+        },
+        "inactive_tracks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Inactive Tracks",
+          "type": "array"
+        },
+        "known_tracks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Known Tracks",
+          "type": "array"
+        },
+        "missing_directories": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Missing Directories",
+          "type": "array"
+        }
+      },
+      "title": "RosterSummary",
+      "type": "object"
+    },
+    "SessionOffsetRecord": {
+      "additionalProperties": false,
+      "description": "An operator-supplied offset: signed, 48 kHz, relative to session zero.\n\nNot a time of day, and not convertible into one without knowing where session zero\nis — which is M2's to determine.",
+      "properties": {
+        "kind": {
+          "const": "session_offset_samples",
+          "default": "session_offset_samples",
+          "title": "Kind",
+          "type": "string"
+        },
+        "recording_date": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Recording Date"
+        },
+        "sample_rate": {
+          "exclusiveMinimum": 0,
+          "title": "Sample Rate",
+          "type": "integer"
+        },
+        "samples": {
+          "title": "Samples",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "samples",
+        "sample_rate"
+      ],
+      "title": "SessionOffsetRecord",
+      "type": "object"
+    },
+    "StartTimeRecord": {
+      "additionalProperties": false,
+      "description": "Where this source's start time came from, and what that rests on.",
+      "properties": {
+        "assumptions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Assumptions",
+          "type": "array"
+        },
+        "declined": {
+          "items": {
+            "$ref": "#/$defs/DeclinedStrategyRecord"
+          },
+          "title": "Declined",
+          "type": "array"
+        },
+        "evidence": {
+          "discriminator": {
+            "mapping": {
+              "bwf_sample_reference": "#/$defs/BwfSampleReferenceRecord",
+              "session_offset_samples": "#/$defs/SessionOffsetRecord",
+              "timecode": "#/$defs/TimecodeRecord"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/BwfSampleReferenceRecord"
+            },
+            {
+              "$ref": "#/$defs/TimecodeRecord"
+            },
+            {
+              "$ref": "#/$defs/SessionOffsetRecord"
+            }
+          ],
+          "title": "Evidence"
+        },
+        "override_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Override Reason"
+        },
+        "strategy": {
+          "minLength": 1,
+          "title": "Strategy",
+          "type": "string"
+        }
+      },
+      "required": [
+        "strategy",
+        "evidence"
+      ],
+      "title": "StartTimeRecord",
+      "type": "object"
+    },
+    "TimecodeRecord": {
+      "additionalProperties": false,
+      "description": "A timecode, as an exact frame index plus the rational rate it counts in.\n\nNot a sample position: at 30000/1001 fps a frame is 8008/5 samples, and the rule for\nrounding that onto the working grid belongs to M2 (ADR-0006).",
+      "properties": {
+        "drop_frame": {
+          "title": "Drop Frame",
+          "type": "boolean"
+        },
+        "frame_rate": {
+          "$ref": "#/$defs/RationalRate"
+        },
+        "frame_rate_label": {
+          "minLength": 1,
+          "title": "Frame Rate Label",
+          "type": "string"
+        },
+        "frames": {
+          "minimum": 0,
+          "title": "Frames",
+          "type": "integer"
+        },
+        "kind": {
+          "const": "timecode",
+          "default": "timecode",
+          "title": "Kind",
+          "type": "string"
+        },
+        "recording_date": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Recording Date"
+        },
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "frames",
+        "frame_rate_label",
+        "frame_rate",
+        "drop_frame"
+      ],
+      "title": "TimecodeRecord",
       "type": "object"
     }
   },
@@ -69,6 +917,19 @@
       "title": "Config Hash",
       "type": "string"
     },
+    "decisions": {
+      "items": {
+        "$ref": "#/$defs/ManifestDecision"
+      },
+      "title": "Decisions",
+      "type": "array"
+    },
+    "inspection": {
+      "$ref": "#/$defs/InspectionProvenance"
+    },
+    "roster": {
+      "$ref": "#/$defs/RosterSummary"
+    },
     "schema_version": {
       "const": 1,
       "default": 1,
@@ -76,6 +937,7 @@
       "type": "integer"
     },
     "session_id": {
+      "minLength": 1,
       "title": "Session Id",
       "type": "string"
     },
@@ -86,9 +948,16 @@
       "title": "Tracks",
       "type": "array"
     },
+    "unassigned": {
+      "items": {
+        "$ref": "#/$defs/ManifestSource"
+      },
+      "title": "Unassigned",
+      "type": "array"
+    },
     "warnings": {
       "items": {
-        "type": "string"
+        "$ref": "#/$defs/ManifestNote"
       },
       "title": "Warnings",
       "type": "array"
@@ -96,7 +965,9 @@
   },
   "required": [
     "session_id",
-    "config_hash"
+    "config_hash",
+    "inspection",
+    "roster"
   ],
   "title": "Manifest",
   "type": "object"

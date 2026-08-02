@@ -22,10 +22,10 @@ from dnd_audio.errors import ExitCode
 
 runner = CliRunner()
 
-#: Command, and the milestone its stub names. `doctor` is absent: it is implemented.
+#: Command, and the milestone its stub names. `doctor` and `inspect` are absent: both
+#: are implemented, `doctor` since M0 and `inspect` since M1.
 STUBS = [
     ("process", "M5"),
-    ("inspect", "M1"),
     ("ingest", "M2"),
     ("transcribe", "M4"),
     ("mix", "M5"),
@@ -140,15 +140,23 @@ class TestInstalledConsoleScript:
 
     def test_a_stub_exits_with_the_not_implemented_code(self, session_dir: Path) -> None:
         """A traceback would be a bad message; a distinct exit code is a usable one."""
-        completed = self._run("inspect", str(session_dir))
+        completed = self._run("ingest", str(session_dir))
         assert completed.returncode == ExitCode.NOT_IMPLEMENTED
         assert "not implemented yet" in completed.stderr
-        assert "M1" in completed.stderr
+        assert "M2" in completed.stderr
         assert "Traceback" not in completed.stderr
 
     def test_stub_exit_code_is_distinct_from_usage_error(self, tmp_path: Path) -> None:
-        usage = self._run("inspect", str(tmp_path / "absent"))
-        stub = self._run("inspect", str(tmp_path))
+        usage = self._run("ingest", str(tmp_path / "absent"))
+        stub = self._run("ingest", str(tmp_path))
         assert usage.returncode == 2
         assert stub.returncode == ExitCode.NOT_IMPLEMENTED
         assert usage.returncode != stub.returncode
+
+    def test_a_session_with_no_config_fails_without_a_traceback(self, session_dir: Path) -> None:
+        """`inspect` is implemented now, so its failure mode is a fatal exit and a
+        report — not a stub message, and never a stack trace."""
+        completed = self._run("inspect", str(session_dir))
+        assert completed.returncode == ExitCode.FATAL
+        assert "invalid_configuration" in completed.stderr
+        assert "Traceback" not in completed.stderr
