@@ -28,6 +28,7 @@ from dnd_audio import __version__
 from dnd_audio.determinism import canonical_json
 from dnd_audio.doctor import CheckStatus, overall_status, run_checks
 from dnd_audio.errors import DndAudioError, ExitCode
+from dnd_audio.inspection.runner import InspectionResult, run_inspect
 
 __all__ = ["app", "main"]
 
@@ -67,10 +68,27 @@ def process(session_dir: SessionDir) -> None:
 
 
 @app.command()
-def inspect(session_dir: SessionDir) -> None:
-    """Discover and validate sources; write the deterministic manifest."""
-    # DEFERRED: M1
-    raise NotImplementedError(f"`inspect` lands in M1 ({session_dir})")
+def inspect(
+    session_dir: SessionDir,
+    no_cache: Annotated[
+        bool,
+        typer.Option(
+            "--no-cache",
+            help="Re-inspect every source, ignoring cached captures. The cache is still "
+            "written, so this costs one slow run rather than every run.",
+        ),
+    ] = False,
+) -> None:
+    """Discover and validate sources; write the deterministic manifest.
+
+    Always writes `output/ingest-report.json`, including when inspection fails —
+    that is what INV-13 means, and it is why this exits through a status rather than
+    by raising.
+    """
+    result = run_inspect(session_dir, use_cache=not no_cache)
+    _summarize(result)
+    if result.exit_code is not ExitCode.OK:
+        raise typer.Exit(code=result.exit_code)
 
 
 @app.command()
@@ -156,6 +174,42 @@ def doctor(
 
     if status is CheckStatus.FAIL:
         raise typer.Exit(code=ExitCode.FATAL)
+
+
+def _summarize(result: InspectionResult) -> None:
+    """Human-readable progress, as the spec's observability section asks for.
+
+    Deliberately short. The report holds everything; this is the part someone reads
+    while the run is still on screen.
+    """
+    manifest = result.manifest
+    roster = manifest.roster
+    if result.exit_code is ExitCode.OK:
+        selected = sum(
+            1 for track in manifest.tracks for source in track.sources if source.role == "selected"
+        )
+        typer.echo(
+            f"  inspected {selected} source(s) across "
+            f"{len(roster.active_tracks)}/{len(roster.known_tracks)} active track(s)"
+        )
+        for note in manifest.warnings:
+            typer.secho(f"  warn  {note.code}: {note.message}", fg=typer.colors.YELLOW, err=True)
+        typer.echo(f"  manifest  {result.manifest_path}")
+    else:
+        for stage in result.report.stages:
+            for error in stage.errors:
+                typer.secho(
+                    f"  error  {error.code}: {error.message}", fg=typer.colors.RED, err=True
+                )
+    if result.report_written:
+        typer.echo(f"  report    {result.report_path}")
+    else:
+        typer.secho(
+            f"  no report written: {result.report_path} would land inside the session's "
+            f"own sources, and nothing under them may be written to (INV-01)",
+            fg=typer.colors.RED,
+            err=True,
+        )
 
 
 def main() -> None:

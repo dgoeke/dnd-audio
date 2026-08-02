@@ -26,6 +26,7 @@ from typing import Annotated, Final, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from dnd_audio.artifacts.roster import RosterSummary
 from dnd_audio.determinism import sha256_file, write_json_atomic
 from dnd_audio.errors import ExitCode
 
@@ -40,6 +41,7 @@ __all__ = [
     "Provenance",
     "ReportBuilder",
     "ReportWarning",
+    "RosterSummary",
     "StageName",
     "StageReport",
     "StageStatus",
@@ -176,11 +178,18 @@ class Provenance(_Artifact):
     ``tests/test_report.py`` asserts that no field here is time-typed.
     """
 
-    #: Ties the report to the resolved configuration (INV-08).
-    config_hash: Sha256Hex
+    #: Ties the report to the resolved configuration (INV-08). ``None`` only when the
+    #: run failed before a configuration could be resolved — a fabricated hash there
+    #: would be syntactically valid and untrue, which is worse than an absence.
+    config_hash: Sha256Hex | None = None
     #: External tools whose version changes the output — FFmpeg, FFprobe, SoX.
     tool_versions: dict[str, str] = Field(default_factory=dict)
     package_versions: dict[str, str] = Field(default_factory=dict)
+    #: The exact external commands whose parameters affect an output, as the spec's
+    #: observability section requires. Recorded as the invariant part of the invocation
+    #: with the varying operand written as a placeholder: twelve near-identical FFprobe
+    #: lines are noise, and the parameters are the thing that changes a capture.
+    commands: list[str] = Field(default_factory=list)
     #: Resolved model and aligner revisions, not mutable branch names.
     model_identity: dict[str, str] = Field(default_factory=dict)
     #: Every deliverable this run produced, except the report itself (ADR-0003).
@@ -230,6 +239,11 @@ class IngestReport(_Artifact):
     #: semantically stable across an unchanged rerun even though the report as a whole
     #: is exempt. M1 onward fill it; the envelope and its ordering are fixed here.
     decisions: list[Decision] = Field(default_factory=list)
+    #: Who was configured, who was recording, and what was found where. The spec
+    #: requires the report to show this; a typed section rather than free-text
+    #: decisions, so a consumer reads counts instead of parsing prose. ``None`` when no
+    #: stage that discovers files ran — which is not the same as an empty roster.
+    roster: RosterSummary | None = None
     telemetry: Telemetry
 
     @model_validator(mode="after")
@@ -314,17 +328,21 @@ class ReportBuilder:
     and it is why :meth:`write` takes no "only if successful" flag.
     """
 
-    def __init__(self, session_id: str, *, config_hash: str, started_at: dt.datetime) -> None:
+    def __init__(
+        self, session_id: str, *, config_hash: str | None, started_at: dt.datetime
+    ) -> None:
         self._session_id = session_id
-        self._config_hash = config_hash
+        self._config_hash: str | None = config_hash
         self._started_at = started_at
         self._stages: dict[StageName, StageReport] = {}
         self._deliverables: dict[str, Deliverable] = {}
         self._tool_versions: dict[str, str] = {}
         self._package_versions: dict[str, str] = {}
+        self._commands: list[str] = []
         self._model_identity: dict[str, str] = {}
         self._stage_seconds: dict[StageName, float] = {}
         self._decisions: list[Decision] = []
+        self._roster: RosterSummary | None = None
         self._cache_hits = 0
         self._cache_misses = 0
 
@@ -382,6 +400,11 @@ class ReportBuilder:
     def record_package_version(self, name: str, version: str) -> None:
         self._package_versions[name] = version
 
+    def record_command(self, command: str) -> None:
+        """Record an external command's exact parameters. Recorded once, not per file."""
+        if command not in self._commands:
+            self._commands.append(command)
+
     def record_model_identity(self, name: str, revision: str) -> None:
         self._model_identity[name] = revision
 
@@ -394,6 +417,14 @@ class ReportBuilder:
 
     def record_decision(self, decision: Decision) -> None:
         self._decisions.append(decision)
+
+    def record_roster(self, roster: RosterSummary) -> None:
+        """Record who was configured and who was recording.
+
+        Set once, by whichever stage discovered the files. A second call replaces it
+        rather than merging: two partial rosters would be worse than one complete one.
+        """
+        self._roster = roster
 
     def build(self, finished_at: dt.datetime) -> IngestReport:
         """Assemble the report.
@@ -418,10 +449,12 @@ class ReportBuilder:
             overall_status=roll_up(stages),
             stages=stages,
             decisions=list(self._decisions),
+            roster=self._roster,
             provenance=Provenance(
                 config_hash=self._config_hash,
                 tool_versions=dict(self._tool_versions),
                 package_versions=dict(self._package_versions),
+                commands=list(self._commands),
                 model_identity=dict(self._model_identity),
                 deliverables=list(self._deliverables.values()),
             ),

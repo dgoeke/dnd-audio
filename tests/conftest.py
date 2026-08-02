@@ -35,11 +35,15 @@ invariant would hold only until the first test used its own escape hatch.
 from __future__ import annotations
 
 import datetime as dt
+import shutil
 import socket
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
+
+from dnd_audio.fixtures import FixtureTruth, build_session, canonical_session
 
 TESTS_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = TESTS_ROOT.parent
@@ -130,3 +134,27 @@ def minimal_session_yaml() -> Path:
 def instant() -> dt.datetime:
     """A fixed timezone-aware instant, so report tests do not depend on the clock."""
     return dt.datetime(2026, 8, 15, 19, 0, 0, tzinfo=dt.UTC)
+
+
+@pytest.fixture(scope="session")
+def _canonical_build(tmp_path_factory: pytest.TempPathFactory) -> FixtureTruth:
+    """The canonical six-transmitter fixture, generated once for the whole run.
+
+    Building it costs a few megabytes of synthesis per call, and nearly every test in
+    M1 onward wants the same one. Private because it is shared mutable state on disk:
+    depend on :func:`canonical_fixture` instead, which hands out a private copy.
+    """
+    return build_session(canonical_session(), tmp_path_factory.mktemp("canonical"))
+
+
+@pytest.fixture
+def canonical_fixture(_canonical_build: FixtureTruth, tmp_path: Path) -> FixtureTruth:
+    """A private copy of the canonical fixture, safe to write `work/` into.
+
+    `inspect` writes `work/` and `output/` inside the session directory, so tests that
+    run it would otherwise see each other's caches — which is precisely how a cache test
+    passes for the wrong reason.
+    """
+    session_dir = tmp_path / "session"
+    shutil.copytree(_canonical_build.session_dir, session_dir)
+    return replace(_canonical_build, session_dir=session_dir)

@@ -5,9 +5,16 @@ timestamp arithmetic (INV-04), so ``29.97F`` is :class:`~fractions.Fraction`
 ``30000/1001`` here and stays that way. ``29.97`` appears nowhere in this module except
 as a label.
 
-Scope: labels, rates, and whether a timecode string is well formed for its rate.
-Converting a timecode to an absolute frame or sample position is M2's, and belongs with
-the rest of the timeline arithmetic rather than split across two milestones.
+Scope: labels, rates, whether a timecode string is well formed for its rate, and the
+exact frame index it denotes.
+
+The boundary that used to be drawn here was wrong. It said converting a timecode to a
+position "is M2's", but M1 has to extract a start time from a timecode tag, and counting
+frames is arithmetic *on a timecode* rather than placement *on a timeline*. ADR-0006
+redraws it: :func:`frame_index` lives here, and M2 owns normalizing recording dates,
+inferring midnight rollover, choosing session zero, and rasterizing onto the 48 kHz
+grid. A frame index is exact and unit-free; a sample position is neither until a
+quantization rule exists, and that rule is M2's to define.
 """
 
 from __future__ import annotations
@@ -25,6 +32,7 @@ __all__ = [
     "FRAME_RATE_LABELS",
     "FrameRate",
     "Timecode",
+    "frame_index",
     "parse_frame_rate",
     "parse_timecode",
 ]
@@ -147,6 +155,33 @@ def parse_timecode(text: str, frame_rate: FrameRate) -> Timecode:
     return Timecode(
         hours=hours, minutes=minutes, seconds=seconds, frames=frames, frame_rate=frame_rate
     )
+
+
+def frame_index(timecode: Timecode) -> int:
+    """How many frames since midnight this timecode denotes.
+
+    Exact, and an integer at every rate — a frame index counts frames, so no rate is
+    fractional in these units. That is why the manifest stores an index and a rational
+    rate rather than a sample position: converting to samples at 30000/1001 fps yields
+    8008/5 samples per frame, and the rounding rule for that belongs with the rest of
+    the timeline arithmetic in M2 (ADR-0006, INV-04).
+
+    Drop-frame is handled by subtracting the labels it never assigns. It drops *labels*,
+    not frames: no audio or video is discarded, so the index of a real frame is smaller
+    than naive counting suggests, and it is the naive version that would drift by
+    3.6 seconds an hour.
+    """
+    rate = timecode.frame_rate
+    nominal = rate.frames_per_timecode_second
+    seconds = timecode.hours * 3600 + timecode.minutes * 60 + timecode.seconds
+    index = seconds * nominal + timecode.frames
+
+    if not rate.drop_frame:
+        return index
+
+    total_minutes = timecode.hours * 60 + timecode.minutes
+    dropped_per_minute = nominal // 15  # 2 at 30 fps, 4 at 60 fps
+    return index - dropped_per_minute * (total_minutes - total_minutes // 10)
 
 
 def _reject_out_of_range(

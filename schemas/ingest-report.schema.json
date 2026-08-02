@@ -75,10 +75,25 @@
       "additionalProperties": false,
       "description": "Deterministic facts about the inputs and the software.\n\nINV-03: nothing in here may vary between two identical runs. No timestamps, no\ndurations, no cache counters, no hostname. Those live in :class:`Telemetry`, and\n``tests/test_report.py`` asserts that no field here is time-typed.",
       "properties": {
+        "commands": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Commands",
+          "type": "array"
+        },
         "config_hash": {
-          "pattern": "^[0-9a-f]{64}$",
-          "title": "Config Hash",
-          "type": "string"
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Config Hash"
         },
         "deliverables": {
           "items": {
@@ -109,9 +124,6 @@
           "type": "object"
         }
       },
-      "required": [
-        "config_hash"
-      ],
       "title": "Provenance",
       "type": "object"
     },
@@ -154,6 +166,63 @@
         "message"
       ],
       "title": "ReportWarning",
+      "type": "object"
+    },
+    "RosterSummary": {
+      "additionalProperties": false,
+      "description": "Who was configured, who was recording, and what was found where.",
+      "properties": {
+        "active_tracks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Active Tracks",
+          "type": "array"
+        },
+        "empty_directories": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Empty Directories",
+          "type": "array"
+        },
+        "extra_directories": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Extra Directories",
+          "type": "array"
+        },
+        "file_counts": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "File Counts",
+          "type": "object"
+        },
+        "inactive_tracks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Inactive Tracks",
+          "type": "array"
+        },
+        "known_tracks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Known Tracks",
+          "type": "array"
+        },
+        "missing_directories": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Missing Directories",
+          "type": "array"
+        }
+      },
+      "title": "RosterSummary",
       "type": "object"
     },
     "StageName": {
@@ -324,6 +393,17 @@
     },
     "provenance": {
       "$ref": "#/$defs/Provenance"
+    },
+    "roster": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RosterSummary"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "schema_version": {
       "const": 1,

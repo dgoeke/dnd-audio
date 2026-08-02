@@ -48,6 +48,33 @@ mapping between source samples, working samples, and session time.
 - VAD, activity, or anything that interprets the audio's content.
 - Phase-coherent multichannel processing of any kind.
 
+## What M1 already provides (read before starting)
+
+- **Per-file timing evidence already exists, in typed form** (ADR-0006). The manifest's
+  `start_time.evidence` is a discriminated union, and the three variants do not share a
+  coordinate system: `bwf_sample_reference` is unsigned samples since midnight **at the
+  file's own rate**; `timecode` is an exact integer frame index plus a rational rate;
+  `session_offset_samples` is **signed, at 48 kHz, relative to session zero**. Reconciling
+  them is this milestone's job. Do not add a fourth "just give me the number" accessor —
+  that is the collapse ADR-0006 exists to prevent.
+- **This milestone owes acceptance criterion 2 a documented quantization rule.** A frame
+  at 30000/1001 fps is `8008/5` samples at 48 kHz, so "the expected integer sample
+  position" is a property of a rounding rule, not of the evidence. Define it, write it
+  down, and test it at 24000/1001 and 30000/1001 where it actually bites. M1 deliberately
+  stopped short of inventing one.
+- **A non-48 kHz source is a warning in M1 and must be fatal here**, before timeline
+  construction. The manifest already carries `unexpected_sample_rate` per source and the
+  container facts that explain it; the diagnostic exists, the refusal does not.
+- **`container.sample_count` is exact and needs no decode** — it comes from the RIFF
+  `data` size over the block alignment, cross-checked against `duration_ts`, with their
+  agreement recorded as `sample_count_agrees` (OQ-011).
+- **Every candidate is in the manifest, not only the selected ones**, including files in
+  unconfigured directories under `unassigned`. Filter on `role == "selected"` when
+  building the timeline; nothing else belongs on it.
+- **`_snapshot`/`_verify_unchanged` in `inspection/runner.py` is the INV-01 machinery.**
+  If this milestone writes anywhere new, extend the "output inside raw" check — and note
+  it compares *resolved* paths, because a lexical comparison was defeated by one symlink.
+
 ## Known risks and open questions
 
 - Depends on **OQ-004, OQ-006, OQ-011**, and **settles OQ-013**: the work-space
