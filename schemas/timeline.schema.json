@@ -2,7 +2,7 @@
   "$defs": {
     "DerivativeRecord": {
       "additionalProperties": false,
-      "description": "A cached resampling of one track, and everything needed to map back to 48 kHz.\n\nThe mapping is `sample_out = sample_in // decimation` after the group delay is\ncompensated. That is exact rather than approximate because the delay divides by the\ndecimation factor — see :mod:`dnd_audio.timeline.fir`.",
+      "description": "A cached resampling of one track, and everything needed to map back to 48 kHz.\n\nOutput sample `k` corresponds to input sample `k * decimation`, exactly, because the\ngroup delay divides by the decimation factor — see :mod:`dnd_audio.timeline.fir`. The\nreverse direction lands between grid points, so an interval is converted by flooring\nits start and ceiling its end (`timeline.resample.to_derivative_interval`) rather than\nby one rounding rule for both ends.",
       "properties": {
         "cache_key": {
           "pattern": "^[0-9a-f]{64}$",

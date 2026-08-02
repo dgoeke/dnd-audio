@@ -39,7 +39,7 @@ is an assumption at a fractional non-drop one, which is **OQ-015**. A caller not
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from fractions import Fraction
 from typing import Final
 
@@ -153,7 +153,13 @@ def relative_seconds(evidence: SessionOffsetRecord) -> Fraction:
     return Fraction(evidence.samples, evidence.sample_rate)
 
 
-def session_position(source_seconds: Fraction, zero_seconds: Fraction, rate: int) -> int:
+def session_position(
+    source_seconds: Fraction,
+    zero_seconds: Fraction,
+    rate: int,
+    *,
+    adjust: Callable[[Fraction], Fraction] | None = None,
+) -> int:
     """The integer sample position of ``source_seconds`` on a timeline starting at zero.
 
     **One subtraction, then one rounding.** The signature takes both times rather than a
@@ -161,10 +167,17 @@ def session_position(source_seconds: Fraction, zero_seconds: Fraction, rate: int
     cannot accidentally quantize an absolute position and subtract a quantized origin,
     because there is nowhere here to pass one.
 
+    ``adjust`` is where a time warp goes (:mod:`~dnd_audio.timeline.warp`) — applied to the
+    exact elapsed time, inside the single rounding. A correction applied to an
+    already-rounded index would accumulate the error it exists to remove.
+
     May return a negative value. Whether that is fatal or means the timeline needs
     shifting is ADR-0009's question, not this function's.
     """
-    return to_samples(source_seconds - zero_seconds, rate)
+    elapsed = source_seconds - zero_seconds
+    if adjust is not None:
+        elapsed = adjust(elapsed)
+    return to_samples(elapsed, rate)
 
 
 def quantization_tolerance_samples(

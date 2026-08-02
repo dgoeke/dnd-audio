@@ -172,9 +172,11 @@ class TimelineSegment(_Artifact):
 class DerivativeRecord(_Artifact):
     """A cached resampling of one track, and everything needed to map back to 48 kHz.
 
-    The mapping is `sample_out = sample_in // decimation` after the group delay is
-    compensated. That is exact rather than approximate because the delay divides by the
-    decimation factor — see :mod:`dnd_audio.timeline.fir`.
+    Output sample `k` corresponds to input sample `k * decimation`, exactly, because the
+    group delay divides by the decimation factor — see :mod:`dnd_audio.timeline.fir`. The
+    reverse direction lands between grid points, so an interval is converted by flooring
+    its start and ceiling its end (`timeline.resample.to_derivative_interval`) rather than
+    by one rounding rule for both ends.
     """
 
     sample_rate: int = Field(gt=0)

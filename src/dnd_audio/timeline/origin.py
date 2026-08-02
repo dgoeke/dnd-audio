@@ -52,6 +52,7 @@ from dnd_audio.timeline.rasterize import (
     session_position,
     timecode_day_discrepancy_seconds,
 )
+from dnd_audio.timeline.warp import IdentityWarp, TimeWarp
 
 __all__ = [
     "PLAUSIBLE_SPAN_SECONDS",
@@ -119,8 +120,15 @@ def selected_sources(manifest: Manifest) -> tuple[tuple[str, ManifestSource], ..
     )
 
 
-def determine_origin(manifest: Manifest, config: SessionConfig) -> SessionOrigin:
+def determine_origin(
+    manifest: Manifest, config: SessionConfig, *, warp: TimeWarp | None = None
+) -> SessionOrigin:
     """Place every selected source on one timeline.
+
+    Args:
+        warp: The future affine drift correction's seam, applied to every placement's
+            exact elapsed time before it is quantized. Defaults to the identity, which is
+            the only implementation the MVP ships (OQ-006).
 
     Raises:
         TimecodeError: when the day a chunk belongs to cannot be settled without guessing
@@ -130,6 +138,7 @@ def determine_origin(manifest: Manifest, config: SessionConfig) -> SessionOrigin
             it, because INV-12 forbids inventing the answer.
     """
     frame_rate = parse_frame_rate(config.timecode.frame_rate)
+    time_warp = warp if warp is not None else IdentityWarp()
     candidates = [
         _Candidate(track_id=track_id, source=source, evidence=source.start_time.evidence)
         for track_id, source in selected_sources(manifest)
@@ -154,8 +163,14 @@ def determine_origin(manifest: Manifest, config: SessionConfig) -> SessionOrigin
 
     zero_seconds, zero_source = _choose_zero(configured_zero, unwrapped)
     zero_domain = _zero_domain(configured_zero, unwrapped, absolute)
+    track_of = {item.source.relative_path: item.track_id for item in candidates}
     positions: dict[str, int] = {
-        path: session_position(seconds, zero_seconds, CANONICAL_SAMPLE_RATE)
+        path: session_position(
+            seconds,
+            zero_seconds,
+            CANONICAL_SAMPLE_RATE,
+            adjust=lambda elapsed, track=track_of[path]: time_warp.warp(track, elapsed),  # type: ignore[misc]
+        )
         for path, seconds in unwrapped.items()
     }
     for item in relative:
@@ -165,7 +180,8 @@ def determine_origin(manifest: Manifest, config: SessionConfig) -> SessionOrigin
             message = f"{item.source.relative_path} is not session-relative evidence"
             raise TimecodeError(message)
         positions[item.source.relative_path] = to_samples(
-            relative_seconds(item.evidence), CANONICAL_SAMPLE_RATE
+            time_warp.warp(item.track_id, relative_seconds(item.evidence)),
+            CANONICAL_SAMPLE_RATE,
         )
 
     shift = _shift_for(positions, zero_source, decisions)
