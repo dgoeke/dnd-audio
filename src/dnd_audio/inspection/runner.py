@@ -233,11 +233,20 @@ def inspect_session(
     *,
     cache: InspectionCache,
     builder: ReportBuilder,
+    verify_raw: bool = True,
 ) -> Manifest:
-    """The inspection itself. Raises :class:`DndAudioError` on any fatal condition."""
+    """The inspection itself. Raises :class:`DndAudioError` on any fatal condition.
+
+    Args:
+        verify_raw: Whether to take and check the INV-01 snapshot here. `ingest` runs
+            inspection as one step of a longer run and holds a snapshot around the whole
+            of it, so it passes False rather than hashing every source twice — which on a
+            four-hour session is a minute of I/O for a check that is already being made.
+    """
     roots = raw_roots(config)
-    before = snapshot(session_dir, roots)
-    reject_outputs_inside_raw(session_dir, config, roots, inspect_outputs(session_dir))
+    before = snapshot(session_dir, roots) if verify_raw else {}
+    if verify_raw:
+        reject_outputs_inside_raw(session_dir, config, roots, inspect_outputs(session_dir))
 
     tools = tool_versions()
     builder.record_tool_version("ffmpeg", tools.ffmpeg)
@@ -266,7 +275,8 @@ def inspect_session(
         _capture(session_dir, config, source, tools, cache) for source in found.unassigned
     ]
 
-    verify_unchanged(session_dir, roots, before)
+    if verify_raw:
+        verify_unchanged(session_dir, roots, before)
 
     roster = _roster_of(found)
     manifest_tracks = tracks

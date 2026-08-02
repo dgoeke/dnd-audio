@@ -29,6 +29,7 @@ from dnd_audio.determinism import canonical_json
 from dnd_audio.doctor import CheckStatus, overall_status, run_checks
 from dnd_audio.errors import DndAudioError, ExitCode
 from dnd_audio.inspection.runner import InspectionResult, run_inspect
+from dnd_audio.timeline.runner import IngestResult, run_ingest
 
 __all__ = ["app", "main"]
 
@@ -92,10 +93,38 @@ def inspect(
 
 
 @app.command()
-def ingest(session_dir: SessionDir) -> None:
-    """Build the timeline, the lossless working path, and the 16 kHz derivatives."""
-    # DEFERRED: M2
-    raise NotImplementedError(f"`ingest` lands in M2 ({session_dir})")
+def ingest(
+    session_dir: SessionDir,
+    no_cache: Annotated[
+        bool,
+        typer.Option(
+            "--no-cache",
+            help="Re-inspect and re-derive everything, ignoring cached work. Both caches "
+            "are still written, so this costs one slow run rather than every run.",
+        ),
+    ] = False,
+    materialize_48k: Annotated[
+        bool,
+        typer.Option(
+            "--materialize-48k",
+            help="Also write contiguous 48 kHz float32 RF64 files per track. The segment "
+            "map is the working path; these are disposable cache artifacts for debugging, "
+            "interoperability, and performance investigation.",
+        ),
+    ] = False,
+) -> None:
+    """Build the timeline, the working path, and the 16 kHz derivatives.
+
+    Runs inspection first, every time — a manifest whose configuration hash still matches
+    is not evidence that the files it describes are the ones on disk. A warm run costs no
+    FFprobe.
+
+    Always writes `output/ingest-report.json`, including when it fails (INV-13).
+    """
+    result = run_ingest(session_dir, use_cache=not no_cache, materialize_48k=materialize_48k)
+    _summarize_ingest(result)
+    if result.exit_code is not ExitCode.OK:
+        raise typer.Exit(code=result.exit_code)
 
 
 @app.command()
@@ -195,6 +224,36 @@ def _summarize(result: InspectionResult) -> None:
         for note in manifest.warnings:
             typer.secho(f"  warn  {note.code}: {note.message}", fg=typer.colors.YELLOW, err=True)
         typer.echo(f"  manifest  {result.manifest_path}")
+    else:
+        for stage in result.report.stages:
+            for error in stage.errors:
+                typer.secho(
+                    f"  error  {error.code}: {error.message}", fg=typer.colors.RED, err=True
+                )
+    if result.report_written:
+        typer.echo(f"  report    {result.report_path}")
+    else:
+        typer.secho(
+            f"  no report written: {result.report_path} would land inside the session's "
+            f"own sources, and nothing under them may be written to (INV-01)",
+            fg=typer.colors.RED,
+            err=True,
+        )
+
+
+def _summarize_ingest(result: IngestResult) -> None:
+    """Human-readable progress for `ingest`. The report holds everything."""
+    timeline = result.timeline
+    if timeline is not None:
+        active = [track for track in timeline.tracks if track.segments]
+        seconds = timeline.duration_samples / timeline.sample_rate
+        typer.echo(
+            f"  reconstructed {len(active)}/{len(timeline.tracks)} track(s), "
+            f"{seconds:.3f}s aligned ({timeline.duration_samples} samples)"
+        )
+        for note in timeline.warnings:
+            typer.secho(f"  warn  {note.code}: {note.message}", fg=typer.colors.YELLOW, err=True)
+        typer.echo(f"  timeline  {result.timeline_path}")
     else:
         for stage in result.report.stages:
             for error in stage.errors:

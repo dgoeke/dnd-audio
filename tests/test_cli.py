@@ -22,11 +22,10 @@ from dnd_audio.errors import ExitCode
 
 runner = CliRunner()
 
-#: Command, and the milestone its stub names. `doctor` and `inspect` are absent: both
-#: are implemented, `doctor` since M0 and `inspect` since M1.
+#: Command, and the milestone its stub names. `doctor`, `inspect`, and `ingest` are
+#: absent: they are implemented, in M0, M1, and M2 respectively.
 STUBS = [
     ("process", "M5"),
-    ("ingest", "M2"),
     ("transcribe", "M4"),
     ("mix", "M5"),
     ("render", "M4"),
@@ -140,18 +139,30 @@ class TestInstalledConsoleScript:
 
     def test_a_stub_exits_with_the_not_implemented_code(self, session_dir: Path) -> None:
         """A traceback would be a bad message; a distinct exit code is a usable one."""
-        completed = self._run("ingest", str(session_dir))
+        completed = self._run("transcribe", str(session_dir))
         assert completed.returncode == ExitCode.NOT_IMPLEMENTED
         assert "not implemented yet" in completed.stderr
-        assert "M2" in completed.stderr
+        assert "M4" in completed.stderr
         assert "Traceback" not in completed.stderr
 
     def test_stub_exit_code_is_distinct_from_usage_error(self, tmp_path: Path) -> None:
-        usage = self._run("ingest", str(tmp_path / "absent"))
-        stub = self._run("ingest", str(tmp_path))
+        usage = self._run("transcribe", str(tmp_path / "absent"))
+        stub = self._run("transcribe", str(tmp_path))
         assert usage.returncode == 2
         assert stub.returncode == ExitCode.NOT_IMPLEMENTED
         assert usage.returncode != stub.returncode
+
+    def test_ingest_fails_like_an_implemented_command(self, session_dir: Path) -> None:
+        """`ingest` is implemented now, so a session with no config is a fatal exit.
+
+        The distinction matters to a caller: exit 3 means "this pipeline has not built
+        that yet" and exit 1 means "your session is broken". Confusing the two sends an
+        operator looking in entirely the wrong place.
+        """
+        completed = self._run("ingest", str(session_dir))
+        assert completed.returncode == ExitCode.FATAL
+        assert "not implemented yet" not in completed.stderr
+        assert "Traceback" not in completed.stderr
 
     def test_a_session_with_no_config_fails_without_a_traceback(self, session_dir: Path) -> None:
         """`inspect` is implemented now, so its failure mode is a fatal exit and a

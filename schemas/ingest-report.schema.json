@@ -259,8 +259,15 @@
           "type": "array"
         },
         "origin": {
-          "$ref": "#/$defs/StageOrigin",
-          "default": "executed"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StageOrigin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "skip_reason": {
           "anyOf": [

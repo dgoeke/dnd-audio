@@ -165,8 +165,10 @@ class StageReport(_Artifact):
 
     stage: StageName
     status: StageStatus
-    #: Whether the work ran or came from cache. Meaningful only for a completed stage.
-    origin: StageOrigin = StageOrigin.EXECUTED
+    #: Whether the work ran or came from cache. Present only on a completed stage: a
+    #: skipped or failed one did not produce outputs, so "executed" would be noise on
+    #: four stages out of six.
+    origin: StageOrigin | None = None
     #: Why the stage was skipped. Required when skipped, absent otherwise — "skipped"
     #: with no reason is indistinguishable from a stage nobody remembered to run.
     skip_reason: str | None = None
@@ -184,10 +186,10 @@ class StageReport(_Artifact):
         if self.status is StageStatus.FAILED and not self.errors:
             message = f"stage {self.stage} failed without a structured error"
             raise ValueError(message)
-        if self.origin is StageOrigin.REUSED and self.status is not StageStatus.COMPLETE:
+        if self.origin is not None and self.status is not StageStatus.COMPLETE:
             message = (
-                f"stage {self.stage} is {self.status} and cannot be `reused`: only a "
-                f"completed stage can have been served from cache"
+                f"stage {self.stage} is {self.status} and cannot carry an origin: only a "
+                f"completed stage either ran or was served from cache"
             )
             raise ValueError(message)
         return self
@@ -400,6 +402,16 @@ class ReportBuilder:
                 warnings=warnings or [],
             )
         )
+
+    def recorded(self, stage: StageName) -> bool:
+        """Whether this stage already has an outcome.
+
+        Exists so a caller failing partway through a multi-stage run can account for the
+        stages that never got the chance to report. :meth:`build` refuses a report with a
+        gap in it, so without this a failure early in `ingest` produced no report at all —
+        the exact outcome INV-13 exists to prevent.
+        """
+        return stage in self._stages
 
     def stage_skipped(self, stage: StageName, reason: str) -> None:
         self._record(StageReport(stage=stage, status=StageStatus.SKIPPED, skip_reason=reason))
