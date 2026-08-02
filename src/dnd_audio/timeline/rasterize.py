@@ -68,6 +68,11 @@ __all__ = [
 #: A calendar day. Used for a BWF reference, whose samples-since-midnight really is
 #: measured against wall time — and pointedly *not* for a timecode, which has its own
 #: cycle (see the module docstring).
+#:
+#: Assumes OQ-004: that a BWF reference counts samples since **midnight at the file's own
+#: rate**. If H1 shows it counts from power-on, or at a fixed rate regardless of the file's,
+#: this constant and :func:`relative_seconds`' BWF branch are what change — and every
+#: placement in every session moves with them.
 SECONDS_PER_DAY: Final = 86400
 
 

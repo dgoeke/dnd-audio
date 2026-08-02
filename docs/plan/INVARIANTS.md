@@ -18,9 +18,13 @@ selected ones — before and after a complete run. Output paths that would land 
 defeated by a single `output -> raw/tx-a` link (M1's verify phase found exactly that).
 When the report's own location is the offending one, no report is written; this invariant
 outranks INV-13 there, because a report is regenerable and a source directory written into
-is not.
-_Owner: M1. Test: full-run hash equality, plus a run that corrupts a source mid-flight to
-prove the check can fail._
+is not. The session's own generated directories are excluded from the snapshot **at the
+session root only**: excluding any path component named `work` or `output` anywhere in the
+tree left `raw/tx-a/work/notes.txt` unhashed and therefore freely mutable, which M2's
+verify phase found in code inherited from M1.
+_Owner: M1, extracted to `raw_guard.py` in M2 so each stage declares its own protected
+outputs. Test: full-run hash equality, plus a run that corrupts a source mid-flight to
+prove the check can fail, plus a source under a directory named `work`._
 _Future exception (M7): the owner may delete raw files manually after verified
 archival. That happens outside a pipeline run, by explicit human action. No
 pipeline stage ever deletes from `raw/`. Amend this wording when M7 is planned._
@@ -44,7 +48,13 @@ Integer sample indices and rational conversions only. Never accumulate floating
 point durations; never represent a fractional frame rate (24000/1001, 30000/1001)
 as a binary float during timestamp arithmetic. A BWF `time_reference` stays an
 integer sample count and is never rounded through a frame count. Floats appear
-only when serializing public millisecond timestamps.
+only when serializing public millisecond timestamps. There is exactly one quantizer
+(`determinism.to_samples`, half away from zero) and one float-producing conversion
+(`public_seconds`); a second of either is how this rule dies. Take a session-relative
+difference *before* quantizing, never after — rounding two absolute positions and
+subtracting them is a sample short. A 24-hour wrap is unwrapped in the evidence's **own**
+units, because a timecode day at 30000/1001 fps is 86 486.4 real seconds (ADR-0008,
+ADR-0009).
 _Owner: M2._
 
 **INV-05 — The default test suite is offline, CPU-only, and model-free.**
@@ -68,7 +78,11 @@ Never hold six full-session waveforms in RAM. Long audio is processed in bounded
 windows over a segment map with streamed reads and writes. Contiguous float
 intermediates use RF64 so they stay valid past RIFF's 4 GiB limit. Work-space and
 disk are preflighted before expanding a long session. This is a UMA host — memory
-pressure kills processes.
+pressure kills processes. **Prove it over the composed path, not one component:** bounding
+a reader says nothing about a caller that collects every window. M2's technique is to
+instrument reads and writes into one ordered event log and assert that a write happens
+before the last read — a property nothing accumulating a session-length array can satisfy
+(`tests/test_memory.py`).
 _Owner: M2._
 
 **INV-08 — Cache identity is complete.**
@@ -77,8 +91,12 @@ implementation/schema version, external tool versions (FFmpeg/FFprobe for
 inspection), and model/aligner identity plus resolved revision and all
 output-affecting inference parameters for ASR. A tool or parser upgrade must
 re-run the work even when source bytes are unchanged. Cache writes are atomic and
-an incomplete entry is never a hit.
-_Owner: M1 (inspection), M6b (ASR)._
+an incomplete entry is never a hit — which requires a *size* check, not just the presence
+of the file the entry names. **An entry is committed only after INV-01 has been
+re-verified**, never at publish time: a run that correctly fails on a changed source must
+not leave behind an entry keyed on the bytes it read, because restoring the original file
+makes that key match again forever (M2's verify phase).
+_Owner: M1 (inspection), M2 (derivatives), M6b (ASR)._
 
 **INV-09 — The mix never depends on ASR.**
 The automixer consumes only the model-independent pre-ASR activity/attribution

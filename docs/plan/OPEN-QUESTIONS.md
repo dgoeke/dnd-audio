@@ -54,6 +54,13 @@ is a timecode tag plus configured frame rate.
 **Evidence:** `bext` chunk contents from a file whose wall-clock start is known.
 **Needs:** H1 · **Blocks:** M1, M2 · **Status:** open
 
+**What M2 does with it.** `timeline/rasterize.py` treats a `bwf_sample_reference` as
+unsigned samples since **midnight at the file's own rate**, converts it to exact rational
+seconds in that domain, and unwraps a 24-hour cycle by adding whole samples-per-day before
+any conversion. If the real answer is "midnight-relative but at 48 kHz regardless of the
+file's rate", or "relative to power-on rather than midnight", the change is localized to
+that one conversion — but every placement in every session moves. `rg 'OQ-004'` finds it.
+
 ## OQ-005 — Are there DJI-private or iXML chunks, and do they carry timing?
 **Assumption:** There may be; the generic RIFF inventory captures ID/offset/size
 regardless, with bounded textual payloads retained and every payload hashed in full.
@@ -82,6 +89,14 @@ future coherent processing degrade over four hours.
 **Evidence:** Differential clap lag measured near the start and near the end of a
 ~4-hour recording.
 **Needs:** H2 · **Blocks:** nothing (warning threshold tuning) · **Status:** open
+
+**M2 built the instrument.** `session.sync_qa` (off by default) correlates each track
+against a reference near both ends and reports the lag at each, never a correction — a
+constant lag is a timecode disagreement, a lag that changes between the ends is drift.
+Answering this is now enabling a config flag on a long recording and reading the warnings,
+not writing measurement code. Proven on a synthetic drift fixture whose tracks carry
+identical metadata and differ only in where the end transient sits in the audio: +0.000 ms
+at the start, +20.000 ms at the end.
 
 ## OQ-007 — Does dual-file mode produce `orig`/`edit` pairs as assumed?
 **Assumption:** Yes, distinguishable by filename suffix; `orig` is 32-bit float and

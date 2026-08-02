@@ -48,8 +48,8 @@ __all__ = [
     "TimelineTrack",
 ]
 
-#: Provisional until M2 closes. After that, only additive optional fields; anything else
-#: bumps the version (ADR-0005).
+#: Frozen at M2's close. Only additive optional fields from here; anything else bumps the
+#: version (ADR-0005). M3 and M5 both index into this document.
 TIMELINE_SCHEMA_VERSION: Final = 1
 
 Sha256Hex = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
