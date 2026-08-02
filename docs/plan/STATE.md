@@ -7,17 +7,18 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 
 ## Right now
 
-- **Current milestone:** M0 — Foundation (not started)
-- **Branch:** `main`
+- **Current milestone:** M0 — Foundation (in progress)
+- **Branch:** `milestone/M0-foundation`
 - **Last closed milestone:** none
-- **Gate status at HEAD:** n/a (no project yet)
+- **Gate status at HEAD:** passes, with the expected `ruff / types / pytest` skip —
+  there is no `pyproject.toml` yet. M0 removes that skip.
 - **Blocked on:** nothing
 
 ## Milestone status
 
 | ID  | Milestone                  | Status      | Closed at |
 | --- | -------------------------- | ----------- | --------- |
-| M0  | Foundation                 | not started | —         |
+| M0  | Foundation                 | in progress | —         |
 | M1  | Inspection                 | not started | —         |
 | M2  | Timeline                   | not started | —         |
 | M3  | Activity                   | not started | —         |
@@ -35,8 +36,13 @@ idea but the work is deliberately unplanned.
 
 ## What works end to end
 
-Nothing yet. The repository contains the spec and this planning scaffold.
+Nothing processes audio yet. The repository contains the spec, this planning scaffold,
+and the repo-local Nix development environment: `direnv allow` yields a shell with
+Python 3.12, `uv`, FFmpeg, and SoX resolved out of `/nix/store`, and `nix develop .#fhs`
+opens the FHS sandbox held for M6a.
 
 ## Next smallest step
 
-Begin the start phase for M0. (Claude Code: `/ms-start 0`.)
+Continue M0 from inside the activated shell, starting at `pyproject.toml` + `uv.lock`.
+The working plan is recorded in `docs/plan/milestones/M0-foundation.md`; everything after
+step 1 of its Phase B list is outstanding.
