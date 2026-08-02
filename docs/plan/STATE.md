@@ -7,13 +7,15 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 
 ## Right now
 
-- **Current milestone:** M1 — Inspection (verified, awaiting close)
-- **Branch:** `milestone/M1-inspection`
-- **Last closed milestone:** M0 — Foundation
-- **Gate status at HEAD:** passes, zero skips (8 checks, 311 tests)
-- **Blocked on:** nothing. M1 can start immediately. The H1 hardware fixture is not a
-  blocker for starting M1, but acquiring it should begin now — every DJI layout guess
-  M1 makes stays unsettled until it exists.
+- **Current milestone:** M2 — Timeline (not started)
+- **Branch:** `main`
+- **Last closed milestone:** M1 — Inspection
+- **Gate status at HEAD:** passes, zero skips (8 checks, 551 tests)
+- **Blocked on:** nothing for M2. **H1 is now the oldest outstanding item in the
+  project** and gates five open questions (OQ-001, OQ-002, OQ-003, OQ-004, OQ-007). It
+  needs a physical recording session, not code. Every DJI layout assumption M1 made sits
+  behind a named strategy tagged with its `OQ-` ID, so settling them is cheap once a real
+  file exists — but they stay unsettled until one does.
 
 ## Milestone status
 
@@ -37,24 +39,38 @@ idea but the work is deliberately unplanned.
 
 ## What works end to end
 
-No audio is processed yet — M0 was the foundation and its rails, by design.
+`uv run dnd-audio inspect /path/to/session` — the first stage that touches audio.
 
-`direnv allow` then `cd` gives a shell with Python 3.12, `uv`, FFmpeg, and SoX out of
-`/nix/store`; `nix run .#fhs -- -c '<cmd>'` runs inside the FHS sandbox held for M6a.
-`uv run dnd-audio doctor` reports real tool versions, writable paths, and free disk.
-Every other command is registered and exits 3 naming the milestone it lands in.
+It discovers a session's sources, captures everything FFprobe and a generic RIFF walk can
+tell us about each candidate, applies the selection and roster rules, extracts timing
+evidence through a named strategy chain, and writes `work/manifest.json` plus
+`output/ingest-report.json`. A second run is byte-identical and probes nothing. Beside the
+manifest sit content-hash-addressed sidecars holding exactly the bytes FFprobe wrote.
 
-Underneath: validated `session.yaml` models, checked-in JSON Schema artifacts with a
-drift test, exact rational frame rates, model seams with scripted fakes, a report writer
-that cannot lose a stage, and a test suite that is provably offline.
+`python scripts/make_fixture.py <dir>` materializes the six-transmitter synthetic session
+everything from M2 onward is tested against — multiple chunks per track, a real gap, a
+shared clap, quiet bleed, a two-speaker overlap, and the fake-VAD/fake-ASR contracts M3
+and M4 consume. No audio binaries are in the repository.
+
+`doctor` still reports real tool versions, writable paths, and free disk. `ingest`,
+`transcribe`, `mix`, `render`, `process`, and `models fetch` remain registered stubs that
+exit 3 naming the milestone they land in.
+
+Underneath, from M0: validated `session.yaml` models, checked-in JSON Schema artifacts
+with a drift test, exact rational frame rates, model seams with scripted fakes, a report
+writer that cannot lose a stage, and a test suite that is provably offline.
 
 ## Next smallest step
 
-Begin M1 — the synthetic fixture generator first, since everything after it is tested
-against it. (Claude Code: `/ms-start 1`.)
+Begin M2 — the timeline. Start with session zero and the rollover rules: everything else
+in that milestone hangs off where time zero is, and the evidence it consumes is already in
+the manifest in typed form. (Claude Code: `/ms-start 2`.)
 
-Read M1's new "What M0 already provides" section before writing code: four contracts
-land in M0 that M1 inherits.
+Read M2's new "What M1 already provides" section first. Two items there are obligations
+rather than conveniences: M2 owes acceptance criterion 2 a **documented quantization
+rule** (a 29.97 fps frame is 8008/5 samples at 48 kHz, so an integer sample position is a
+property of a rounding rule, not of the evidence), and a non-48 kHz source is a warning in
+M1 that **must become fatal** before timeline construction.
 
-**Real DJI metadata has not been validated.** Start acquiring the H1 fixture now; every
-layout assumption M1 makes must sit behind a named strategy tagged with its `OQ-` ID.
+**Real DJI metadata has still not been validated.** Acquiring the H1 fixture is the oldest
+outstanding item in the project.

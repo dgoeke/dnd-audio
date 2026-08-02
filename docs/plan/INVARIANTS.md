@@ -12,9 +12,15 @@ the test that proves it does not.
 
 **INV-01 — `raw/` is immutable.**
 No pipeline stage writes, renames, deletes, or normalizes anything under a
-session's `raw/`. Enforced by hashing every source before and after a complete
-run. Output paths that would land inside `raw/` are a fatal error.
-_Owner: M1. Test: full-run hash equality._
+session's `raw/`. Enforced by hashing every file under the sources — not only the
+selected ones — before and after a complete run. Output paths that would land inside
+`raw/` are a fatal error, compared **after resolving symlinks**: a lexical comparison is
+defeated by a single `output -> raw/tx-a` link (M1's verify phase found exactly that).
+When the report's own location is the offending one, no report is written; this invariant
+outranks INV-13 there, because a report is regenerable and a source directory written into
+is not.
+_Owner: M1. Test: full-run hash equality, plus a run that corrupts a source mid-flight to
+prove the check can fail._
 _Future exception (M7): the owner may delete raw files manually after verified
 archival. That happens outside a pipeline run, by explicit human action. No
 pipeline stage ever deletes from `raw/`. Amend this wording when M7 is planned._
