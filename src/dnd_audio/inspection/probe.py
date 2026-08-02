@@ -27,7 +27,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final, Literal
+from typing import Any, ClassVar, Final, Literal
 
 from dnd_audio.determinism import sha256_bytes
 from dnd_audio.errors import DndAudioError
@@ -65,6 +65,8 @@ _BITS_PER_BYTE: Final = 8
 
 class ProbeError(DndAudioError):
     """FFprobe could not be run, failed, or produced something unreadable."""
+
+    default_code: ClassVar[str] = "probe_failed"
 
 
 @dataclass(frozen=True, slots=True)

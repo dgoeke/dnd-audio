@@ -29,7 +29,7 @@ import string
 import struct
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import BinaryIO, Final
+from typing import BinaryIO, ClassVar, Final
 
 from dnd_audio.determinism import sha256_stream
 from dnd_audio.errors import DndAudioError
@@ -70,6 +70,8 @@ class RiffError(DndAudioError):
     Distinct from a warning: a candidate that is not a container cannot be inspected,
     whereas a container with one bad chunk still yields everything before it.
     """
+
+    default_code: ClassVar[str] = "unreadable_container"
 
 
 @dataclass(frozen=True, slots=True)

@@ -68,6 +68,10 @@ Variant = Literal["orig", "edit"]
 _BLEED_DELAY_SAMPLES: Final = 144
 _BLEED_ATTENUATION_DB: Final = 26.0
 
+#: How much quieter a processed `edit` file is than its original. Arbitrary, and only
+#: has to be audible to a hash: what matters is that the two files differ.
+_EDIT_GAIN: Final = 0.9
+
 #: Samples of noise floor generated per seeded block. One second: small enough that a
 #: bounded window never materializes much more than it asked for, large enough that the
 #: per-block seeding overhead is irrelevant.
@@ -524,6 +528,12 @@ def _write_chunk(
     path = directory / relative
 
     samples = _render(events, track.track_id, chunk.start_sample, chunk.n_samples)
+    if chunk.variant == "edit":
+        # A processed file is not a copy of the original — the recorder applies its own
+        # gain and filtering. Writing identical bytes would make every orig/edit fixture
+        # accidentally a *duplicate* fixture, and the selection rule under test would
+        # never run.
+        samples = (samples * _EDIT_GAIN).astype(np.float32)
 
     # `time_reference` is at the file's own rate, which is why a nonconforming 44.1 kHz
     # chunk cannot simply reuse the session-rate number.

@@ -14,9 +14,11 @@ placeholder work from the very check that exists to surface it.
 from __future__ import annotations
 
 from enum import IntEnum
+from typing import ClassVar
 
 __all__ = [
     "ConfigError",
+    "DiscoveryError",
     "DndAudioError",
     "ExitCode",
     "RecoveryError",
@@ -25,11 +27,38 @@ __all__ = [
 
 
 class DndAudioError(Exception):
-    """Base for every error this project raises on purpose."""
+    """Base for every error this project raises on purpose.
+
+    Every one carries a stable machine-readable ``code``, because INV-13 requires the
+    report to hold *structured* errors: a caller has to be able to branch on what went
+    wrong without matching against prose that will be reworded. The class-level default
+    is the usual case; pass ``code=`` where one exception type covers several distinct
+    failures a consumer would want to tell apart.
+    """
+
+    #: Lowercase-with-underscores, and never reworded once something depends on it.
+    default_code: ClassVar[str] = "internal_error"
+
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code or self.default_code
 
 
 class ConfigError(DndAudioError):
     """`session.yaml` is missing, unreadable, or does not describe a usable session."""
+
+    default_code: ClassVar[str] = "invalid_configuration"
+
+
+class DiscoveryError(DndAudioError):
+    """The session's files do not satisfy a rule the operator can only fix themselves.
+
+    A missing required track and a processed-only source are both this: nothing about
+    the run can be adjusted to proceed, and proceeding anyway would mean guessing at
+    what the operator meant.
+    """
+
+    default_code: ClassVar[str] = "discovery_failed"
 
 
 class TimecodeError(DndAudioError):
@@ -38,6 +67,8 @@ class TimecodeError(DndAudioError):
     Raised by configuration parsing and, from M1 onward, by source-metadata parsing.
     INV-12 forbids inventing a time when this happens: it is fatal, not a fallback.
     """
+
+    default_code: ClassVar[str] = "no_reliable_timecode"
 
 
 class RecoveryError(DndAudioError):
@@ -50,6 +81,8 @@ class RecoveryError(DndAudioError):
     (ADR-0005), and an override aimed at a mistyped path is that failure with a typo in
     front of it (ADR-0007).
     """
+
+    default_code: ClassVar[str] = "recovery_override_unusable"
 
 
 class ExitCode(IntEnum):
