@@ -22,7 +22,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | ID  | Milestone                  | Status      | Closed at |
 | --- | -------------------------- | ----------- | --------- |
 | M0  | Foundation                 | closed      | `67b70ed` |
-| M1  | Inspection                 | verified    | —         |
+| M1  | Inspection                 | closed      | `fd16931` |
 | M2  | Timeline                   | not started | —         |
 | M3  | Activity                   | not started | —         |
 | M4  | Fake transcript            | not started | —         |
