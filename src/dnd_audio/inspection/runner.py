@@ -344,7 +344,26 @@ def _capture(
     if cached is not None and _sidecar_exists(session_dir, cached):
         return ManifestSource(**base, **cached)  # type: ignore[arg-type]
 
-    capture = _inspect_one(session_dir, config, source)
+    try:
+        capture = _inspect_one(session_dir, config, source)
+    except DndAudioError as exc:
+        if source.role == "selected":
+            raise
+        # A file the pipeline will not use must not be able to fail the session. One
+        # corrupt stray `.wav` in a directory nobody configured is a thing to report,
+        # not a reason to refuse to inspect five good transmitters — and probing every
+        # candidate would otherwise have *introduced* that failure while fixing a
+        # different one.
+        return ManifestSource(
+            **base,  # type: ignore[arg-type]
+            warnings=[
+                ManifestNote(
+                    code="capture_failed",
+                    message=f"could not be inspected, which is recorded rather than fatal "
+                    f"because this source is {source.role!r} and no stage will use it: {exc}",
+                )
+            ],
+        )
     cache.stage(key, capture.as_payload())
     return ManifestSource(**base, **capture.as_payload())  # type: ignore[arg-type]
 

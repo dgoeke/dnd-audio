@@ -773,3 +773,39 @@ def _two_track_session(tmp_path: Path) -> Path:
         tmp_path,
     )
     return tmp_path
+
+
+class TestAnUnusableStrayDoesNotFailTheSession:
+    """A regression introduced *by* the fix that made every candidate get probed.
+
+    Capturing everything is right; letting everything fail the run is not. These pin the
+    asymmetry: a source the pipeline will use must be inspectable, and one it will not
+    must merely be described as best it can be.
+    """
+
+    def test_a_corrupt_stray_is_recorded_not_fatal(self, canonical_fixture: FixtureTruth) -> None:
+        stranger = canonical_fixture.session_dir / "raw" / "tx-z"
+        stranger.mkdir()
+        (stranger / "broken.wav").write_bytes(b"this is not a wav at all")
+
+        result = run_inspect(canonical_fixture.session_dir, now=EARLY)
+        assert result.exit_code is ExitCode.OK, "five good transmitters must still inspect"
+
+        broken = next(s for s in result.manifest.unassigned if "broken" in s.relative_path)
+        assert broken.container is None
+        assert "capture_failed" in {note.code for note in broken.warnings}
+
+        stage = next(s for s in result.report.stages if s.stage.value == "inspect")
+        assert "capture_failed" in {w.code for w in stage.warnings}
+
+    def test_a_corrupt_selected_source_is_still_fatal(self, tmp_path: Path) -> None:
+        """The asymmetry has to bite in the other direction too, or it is just leniency."""
+        session = _one_track_session(tmp_path)
+        target = session / "raw/tx-a/TX01_MIC001_20260815_190000_orig.wav"
+        target.write_bytes(b"this is not a wav at all")
+
+        result = run_inspect(session, now=EARLY)
+        assert result.exit_code is ExitCode.FATAL
+        codes = [e.code for s in result.report.stages for e in s.errors]
+        assert len(codes) == 1
+        assert codes[0] in {"probe_failed", "unreadable_container"}
