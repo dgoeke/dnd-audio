@@ -23,6 +23,7 @@ import datetime as dt
 import hashlib
 import itertools
 from dataclasses import dataclass, field
+from fractions import Fraction
 from pathlib import Path
 from typing import Final, Literal
 
@@ -35,6 +36,12 @@ from dnd_audio.determinism import sha256_file
 from dnd_audio.fixtures import synth
 from dnd_audio.fixtures.wav import BroadcastMetadata, ExtraChunk, write_wav
 from dnd_audio.interfaces import SpeechSpan
+from dnd_audio.timecode import (
+    FrameRate,
+    frame_index,
+    parse_frame_rate,
+    parse_timecode,
+)
 
 __all__ = [
     "CANONICAL_ORIGIN_DATE",
@@ -121,11 +128,19 @@ class SpeechInterval:
 
 @dataclass(frozen=True, slots=True)
 class ClapInterval:
-    """The shared transient every live transmitter hears at the same sample."""
+    """A shared transient. Every live transmitter hears it at the same sample.
+
+    ``tracks`` restricts it to a subset, which is how a *drift* fixture is built: the same
+    physical clap is written to two tracks at slightly different samples, so the only way
+    to find the difference is to correlate the audio. Moving the metadata instead would
+    let a drift test pass while the correlator was never exercised.
+    """
 
     start_sample: int
     n_samples: int = int(0.8 * SAMPLE_RATE)
     gain: float = 0.7
+    #: ``None`` means every track, which is what a real clap in a shared room is.
+    tracks: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,7 +191,13 @@ class FixtureSession:
     title: str
     tracks: tuple[FixtureTrack, ...]
     origin_date: dt.date = CANONICAL_ORIGIN_DATE
+    #: Where the session's audio actually sits in the day. Always used to place the
+    #: fixture; written to `session.yaml` only when ``origin_timecode`` is not overridden.
     session_zero_timecode: str = CANONICAL_SESSION_ZERO_TIMECODE
+    #: What `session.yaml` states as `timecode.origin_timecode`. Defaults to the fixture's
+    #: own zero; set it to ``None`` to build a session whose origin must be *derived* from
+    #: the earliest source, which is the other half of ADR-0009 and has no other coverage.
+    origin_timecode: str | None = "="
     frame_rate: str = "30F"
     sample_rate: int = SAMPLE_RATE
     speech: tuple[SpeechInterval, ...] = ()
@@ -380,7 +401,9 @@ def canonical_session() -> FixtureSession:
 def build_session(spec: FixtureSession, directory: Path) -> FixtureTruth:
     """Write ``spec`` into ``directory`` and return what was written."""
     directory.mkdir(parents=True, exist_ok=True)
-    zero = _samples_since_midnight(spec.session_zero_timecode, spec.sample_rate)
+    zero = _samples_since_midnight(
+        spec.session_zero_timecode, spec.sample_rate, parse_frame_rate(spec.frame_rate)
+    )
     events = _build_events(spec)
 
     written: list[WrittenChunk] = []
@@ -418,13 +441,17 @@ def _build_events(spec: FixtureSession) -> tuple[_Event, ...]:
     live = {track.track_id: _live_intervals(track) for track in spec.tracks}
 
     for clap in spec.claps:
+        # Seeded by position alone, so a clap written to two tracks at different samples
+        # is still recognisably the *same* transient to a correlator.
         samples = synth.clap(
             clap.n_samples,
             spec.sample_rate,
-            seed=_seed("clap", clap.start_sample),
+            seed=_seed("clap", clap.start_sample if clap.tracks is None else "shared"),
             gain=clap.gain,
         )
         for track in spec.tracks:
+            if clap.tracks is not None and track.track_id not in clap.tracks:
+                continue
             events.append(_Event(track.track_id, clap.start_sample, samples))
 
     for interval in spec.speech:
@@ -597,47 +624,83 @@ def _write_chunk(
     )
 
 
-def _samples_since_midnight(timecode: str, sample_rate: int) -> int:
-    """Whole samples since midnight for a ``HH:MM:SS:FF`` string at 30 fps.
+def _samples_since_midnight(timecode: str, sample_rate: int, frame_rate: FrameRate) -> int:
+    """Whole samples since the day origin for a ``HH:MM:SS:FF`` string, at any rate.
 
-    The fixture generator is deliberately restricted to rates where this is exact. A
-    fixture that had to round would be encoding an approximation as ground truth, and
-    every test built on it would inherit the error.
+    Exact or nothing. The generator is deliberately restricted to positions that land on a
+    whole sample: a fixture that had to round would be encoding an approximation as ground
+    truth, and every test built on it would inherit the error rather than detect it.
+
+    At 30000/1001 fps one frame is 8008/5 samples at 48 kHz, so only every fifth frame is
+    expressible — which is why the drop-frame fixture's offsets are multiples of 8008.
     """
-    hours, minutes, seconds, frames = (int(part) for part in timecode.replace(";", ":").split(":"))
-    total_seconds = hours * 3600 + minutes * 60 + seconds
-    exact = total_seconds * sample_rate + frames * sample_rate // 30
-    if frames * sample_rate % 30:
+    parsed = parse_timecode(timecode, frame_rate)
+    frames = frame_index(parsed)
+    exact = Fraction(frames) / frame_rate.rate * sample_rate
+    if exact.denominator != 1:
         message = (
-            f"fixture timecode {timecode!r} does not land on a whole sample at "
-            f"{sample_rate} Hz; choose a rate and frame count that divide exactly"
+            f"fixture timecode {timecode!r} at {frame_rate.label} is {float(exact):.4f} "
+            f"samples at {sample_rate} Hz, which is not a whole sample. Choose a frame "
+            f"count that divides exactly — at 29.97 that means a multiple of five frames."
         )
         raise ValueError(message)
-    return exact
-
-
-def _wall_clock(spec: FixtureSession, start_sample: int) -> dt.datetime:
-    zero = _samples_since_midnight(spec.session_zero_timecode, spec.sample_rate)
-    seconds, _ = divmod(zero + start_sample, spec.sample_rate)
-    midnight = dt.datetime.combine(spec.origin_date, dt.time(), tzinfo=dt.UTC)
-    return midnight + dt.timedelta(seconds=seconds)
+    return int(exact)
 
 
 def _timecode_text(spec: FixtureSession, start_sample: int) -> str:
-    """``HH:MM:SS:FF`` for a chunk start, at the fixture's 30 fps."""
-    zero = _samples_since_midnight(spec.session_zero_timecode, spec.sample_rate)
-    absolute = zero + start_sample
-    seconds, remainder = divmod(absolute, spec.sample_rate)
-    frames = remainder * 30 // spec.sample_rate
-    if remainder * 30 % spec.sample_rate:
+    """``HH:MM:SS:FF`` for a chunk start, at the fixture's configured rate.
+
+    The inverse of :func:`~dnd_audio.timecode.frame_index`, drop-frame included.
+    ``tests/test_fixtures.py`` round-trips the two against each other rather than trusting
+    either: an inverse that is subtly wrong would put a fixture's declared truth and its
+    written metadata into quiet disagreement, which is the one bug a ground-truth fixture
+    must not have.
+    """
+    frame_rate = parse_frame_rate(spec.frame_rate)
+    zero = _samples_since_midnight(spec.session_zero_timecode, spec.sample_rate, frame_rate)
+    exact = Fraction(zero + start_sample, spec.sample_rate) * frame_rate.rate
+    if exact.denominator != 1:
         message = (
-            f"chunk start {start_sample} is not on a 30 fps frame boundary, so it "
-            f"cannot be expressed as a timecode tag; move it or use bext"
+            f"chunk start {start_sample} is not on a {frame_rate.label} frame boundary, "
+            f"so it cannot be written as a timecode tag; move it, or use bext"
         )
         raise ValueError(message)
-    hours, rest = divmod(seconds, 3600)
-    minutes, secs = divmod(rest, 60)
-    return f"{hours:02d}:{minutes:02d}:{secs:02d}:{frames:02d}"
+    return _frames_to_timecode(int(exact), frame_rate)
+
+
+def _frames_to_timecode(frames: int, frame_rate: FrameRate) -> str:
+    """Turn an exact frame index back into the label a recorder would write."""
+    nominal = frame_rate.frames_per_timecode_second
+    counted = frames
+    if frame_rate.drop_frame:
+        dropped = nominal // 15
+        per_ten_minutes = nominal * 600 - dropped * 9
+        per_minute = nominal * 60 - dropped
+        tens, rest = divmod(frames, per_ten_minutes)
+        counted = frames + dropped * 9 * tens
+        if rest > dropped:
+            counted += dropped * ((rest - dropped) // per_minute)
+
+    frame_part = counted % nominal
+    total_seconds = counted // nominal
+    hours, rest_seconds = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(rest_seconds, 60)
+    separator = ";" if frame_rate.drop_frame else ":"
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}{separator}{frame_part:02d}"
+
+
+def _wall_clock(spec: FixtureSession, start_sample: int) -> dt.datetime:
+    """The calendar instant a chunk starts at, for the filename and the `bext` fields.
+
+    Counted from the *timecode* day origin, which is real midnight at every integer rate.
+    At a fractional non-drop rate the two differ (OQ-015); the fixtures that use those
+    rates carry no origination date, so nothing here depends on the difference.
+    """
+    frame_rate = parse_frame_rate(spec.frame_rate)
+    zero = _samples_since_midnight(spec.session_zero_timecode, spec.sample_rate, frame_rate)
+    seconds, _ = divmod(zero + start_sample, spec.sample_rate)
+    midnight = dt.datetime.combine(spec.origin_date, dt.time(), tzinfo=dt.UTC)
+    return midnight + dt.timedelta(seconds=seconds)
 
 
 def _write_config(spec: FixtureSession, directory: Path) -> None:
@@ -655,7 +718,9 @@ def _write_config(spec: FixtureSession, directory: Path) -> None:
         "timecode": {
             "frame_rate": spec.frame_rate,
             "origin_date": spec.origin_date.isoformat(),
-            "origin_timecode": spec.session_zero_timecode,
+            "origin_timecode": (
+                spec.session_zero_timecode if spec.origin_timecode == "=" else spec.origin_timecode
+            ),
             "rollover_policy": "infer_forward",
         },
         "tracks": [

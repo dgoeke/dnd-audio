@@ -47,6 +47,7 @@ __all__ = [
     "CachedDerivative",
     "DerivativeCache",
     "derivative_identity",
+    "derivative_identity_document",
     "derivative_relative_path",
 ]
 
@@ -63,7 +64,33 @@ def derivative_identity(
     filter_identity: str | None,
 ) -> str:
     """The full cache identity of one track's derived audio. See the module docstring."""
-    identity: dict[str, Any] = {
+    return sha256_bytes(
+        canonical_json(
+            derivative_identity_document(
+                track,
+                config_hash=config_hash,
+                target_rate=target_rate,
+                filter_identity=filter_identity,
+            )
+        ).encode("utf-8")
+    )
+
+
+def derivative_identity_document(
+    track: TimelineTrack,
+    *,
+    config_hash: str,
+    target_rate: int,
+    filter_identity: str | None,
+) -> dict[str, Any]:
+    """Everything the key is derived from, before it is hashed.
+
+    Separate from :func:`derivative_identity` so a test can assert *which components are
+    present* rather than only that some change produced some different hash. A key that
+    changes for the right reason in one test can still be missing a component, and the
+    missing one is always the one that matters later.
+    """
+    return {
         "cache_record_version": CACHE_RECORD_VERSION,
         "config_hash": config_hash,
         "filter_identity": filter_identity,
@@ -76,7 +103,6 @@ def derivative_identity(
         "track_id": track.track_id,
         "track_extent": [track.start_sample, track.end_sample],
     }
-    return sha256_bytes(canonical_json(identity).encode("utf-8"))
 
 
 def derivative_relative_path(target_rate: int, key: str) -> str:
