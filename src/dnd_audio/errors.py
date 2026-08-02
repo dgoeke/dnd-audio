@@ -19,6 +19,7 @@ __all__ = [
     "ConfigError",
     "DndAudioError",
     "ExitCode",
+    "RecoveryError",
     "TimecodeError",
 ]
 
@@ -36,6 +37,18 @@ class TimecodeError(DndAudioError):
 
     Raised by configuration parsing and, from M1 onward, by source-metadata parsing.
     INV-12 forbids inventing a time when this happens: it is fatal, not a fallback.
+    """
+
+
+class RecoveryError(DndAudioError):
+    """A `recovery` escape hatch was configured but cannot be applied as written.
+
+    Separate from :class:`ConfigError` because the configuration is well formed: an
+    override whose hash does not match, or which names a file that was never found, is
+    valid YAML describing something that is not true. Both are fatal. A silently ignored
+    override is precisely the failure the recovery mechanism exists to prevent
+    (ADR-0005), and an override aimed at a mistyped path is that failure with a typo in
+    front of it (ADR-0007).
     """
 
 
