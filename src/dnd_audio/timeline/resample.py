@@ -36,7 +36,6 @@ pipeline and is confined to the last two of a derivative.
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
-from typing import Final
 
 import numpy as np
 import numpy.typing as npt
@@ -51,10 +50,6 @@ __all__ = [
     "to_derivative_interval",
     "to_source_sample",
 ]
-
-#: Blocks are processed in whole multiples of the decimation factor so the phase of the
-#: decimation never has to be tracked across a boundary — see :class:`Decimator`.
-_ALIGNMENT: Final = 1
 
 
 def output_length(n_input: int, decimation: int) -> int:

@@ -234,7 +234,7 @@ def _ingest(
     before = snapshot(session_dir, roots)
     reject_outputs_inside_raw(session_dir, config, roots, ingest_outputs(session_dir))
 
-    manifest = _inspect(session_dir, config, builder=builder, use_cache=use_cache)
+    inspection_cache, manifest = _inspect(session_dir, config, builder=builder, use_cache=use_cache)
     reject_unusable_sources(manifest)
 
     origin = determine_origin(manifest, config, warp=warp)
@@ -270,7 +270,14 @@ def _ingest(
 
     notes.extend(run_sync_qa(session_dir, config, tracks, builder=builder))
 
+    # Verify first, publish second. A source that changed under the pipeline must not be
+    # able to leave behind a cache entry describing bytes that no longer exist — M1's
+    # inspection cache stages for exactly this reason, and the derivative cache now does
+    # too. Until commit() runs, a derivative's audio is on disk with no sidecar naming it,
+    # which reads as a miss.
     verify_unchanged(session_dir, roots, before)
+    inspection_cache.commit()
+    cache.commit()
     builder.record_cache(hits=cache.hits, misses=cache.misses)
     builder.record_package_version("dnd_audio.timeline", str(TIMELINE_SEMANTICS_VERSION))
     builder.record_tool_version("numpy", np.__version__)
@@ -306,8 +313,12 @@ def _ingest(
 
 def _inspect(
     session_dir: Path, config: SessionConfig, *, builder: ReportBuilder, use_cache: bool
-) -> Manifest:
+) -> tuple[InspectionCache, Manifest]:
     """Run inspection and write a current manifest.
+
+    Returns the cache **uncommitted**. Its entries are published by the caller once INV-01
+    has been re-verified, so a run that discovers a source changed under it cannot leave a
+    record describing bytes that are gone.
 
     Unconditional, and cheap when warm. See the module docstring's second step for why a
     configuration-hash match is not sufficient evidence that a manifest still describes
@@ -326,7 +337,7 @@ def _inspect(
     )
     builder.add_deliverable(manifest_path, relative_to=session_dir)
     builder.record_cache(hits=cache.hits, misses=cache.misses)
-    return manifest
+    return cache, manifest
 
 
 def _as_track(layout: TrackLayout) -> TimelineTrack:
@@ -402,7 +413,7 @@ def _derive(
     )
     expected = output_length(duration, decimation_filter.decimation) if resampling else duration
 
-    found = cache.get(key, target_rate)
+    found = cache.get(key, target_rate, expected_samples=expected)
     if found is None:
         audio_path = cache.audio_path(key, target_rate)
         with TrackReader(session_dir, track, duration) as reader:

@@ -7,10 +7,10 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 
 ## Right now
 
-- **Current milestone:** M2 — Timeline (not started)
+- **Current milestone:** M2 — Timeline (verified, closing)
 - **Branch:** `main`
 - **Last closed milestone:** M1 — Inspection
-- **Gate status at HEAD:** passes, zero skips (8 checks, 551 tests)
+- **Gate status at HEAD:** passes, zero skips (8 checks, 923 tests)
 - **Blocked on:** nothing for M2. **H1 is now the oldest outstanding item in the
   project** and gates five open questions (OQ-001, OQ-002, OQ-003, OQ-004, OQ-007). It
   needs a physical recording session, not code. Every DJI layout assumption M1 made sits
@@ -23,7 +23,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | --- | -------------------------- | ----------- | --------- |
 | M0  | Foundation                 | closed      | `67b70ed` |
 | M1  | Inspection                 | closed      | `fd16931` |
-| M2  | Timeline                   | not started | —         |
+| M2  | Timeline                   | verified    | —         |
 | M3  | Activity                   | not started | —         |
 | M4  | Fake transcript            | not started | —         |
 | M5  | Automix                    | not started | —         |

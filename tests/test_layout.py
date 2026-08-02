@@ -227,6 +227,58 @@ class TestOverlaps:
         assert audio[1].shift_samples == SECOND
         assert [w.code for w in warnings] == ["chunk_overlap_nudged"]
 
+    def test_a_later_chunk_keeps_its_own_evidence_position(self) -> None:
+        """Nudging moves the overlapping chunk, not everything after it.
+
+        A: [0,2), B's evidence [1,3), C's evidence [4,5). B is nudged to [2,4). C is *not*
+        shifted — it lands at 4, where its own timecode says, because cross-track alignment
+        matters more than this track's internal gap durations: a chunk whose timecode is
+        good belongs where its timecode says, and moving it would misalign it against the
+        five other transmitters.
+
+        The visible consequence is that B's tail now occupies what used to be a gap. That
+        is inherent to nudging — the alternatives are trimming B (forbidden) or shifting C
+        (misaligning it) — and it is why ADR-0010's default is `reject`.
+        """
+        layouts, decisions, warnings = lay_out(
+            {
+                "tx-a": [
+                    source("raw/tx-a/a.wav", bwf(19 * 3600 * RATE), n_samples=2 * SECOND),
+                    source("raw/tx-a/b.wav", bwf(19 * 3600 * RATE + SECOND), n_samples=2 * SECOND),
+                    source("raw/tx-a/c.wav", bwf(19 * 3600 * RATE + 4 * SECOND), n_samples=SECOND),
+                ]
+            },
+            chunk_overlap_policy="nudge_later",
+        )
+        audio = _audio(layouts, "tx-a")
+        assert [s.session_start_sample for s in audio] == [0, 2 * SECOND, 4 * SECOND]
+        assert [s.shift_samples for s in audio] == [0, SECOND, 0]
+        assert audio[2].evidence_start_sample == 4 * SECOND
+
+        # Every sample survives, which is the property no policy may break.
+        assert sum(s.n_samples for s in audio) == 5 * SECOND
+        # Exactly one nudge is recorded, and it names the chunk that moved.
+        nudged = [d for d in decisions if d.code == "chunk_overlap_nudged"]
+        assert [d.subject for d in nudged] == ["raw/tx-a/b.wav"]
+        assert [w.path for w in warnings] == ["raw/tx-a/b.wav"]
+
+    def test_a_nudge_that_still_overlaps_cascades(self) -> None:
+        """B is long enough that moving it collides with C, so C moves too."""
+        layouts, _, warnings = lay_out(
+            {
+                "tx-a": [
+                    source("raw/tx-a/a.wav", bwf(19 * 3600 * RATE), n_samples=2 * SECOND),
+                    source("raw/tx-a/b.wav", bwf(19 * 3600 * RATE + SECOND), n_samples=3 * SECOND),
+                    source("raw/tx-a/c.wav", bwf(19 * 3600 * RATE + 4 * SECOND), n_samples=SECOND),
+                ]
+            },
+            chunk_overlap_policy="nudge_later",
+        )
+        audio = _audio(layouts, "tx-a")
+        assert [s.session_start_sample for s in audio] == [0, 2 * SECOND, 5 * SECOND]
+        assert sum(s.n_samples for s in audio) == 6 * SECOND
+        assert len(warnings) == 2
+
     def test_the_tolerance_follows_the_evidence_not_the_session_rate(self) -> None:
         """Two sample-exact chunks overlapping by 1000 samples is a real overlap.
 

@@ -166,7 +166,71 @@ class TestAnIncompleteEntryIsNeverAHit:
         audio.parent.mkdir(parents=True, exist_ok=True)
         audio.write_bytes(b"\x00" * 128)
         cache.publish(key, target_rate=DERIVATIVE_SAMPLE_RATE, n_samples=32)
+        cache.commit()
         return key
+
+    def test_nothing_is_findable_until_commit(self, cache: DerivativeCache) -> None:
+        """Publication stages; the caller commits after INV-01 has been re-verified.
+
+        Until then the audio sits on disk with no sidecar naming it, which reads as a miss
+        — so a run that discovers a source changed under it cannot leave behind an entry
+        keyed on the bytes it *read* but built from the bytes that replaced them.
+        """
+        key = "k" * 64
+        audio = cache.audio_path(key, DERIVATIVE_SAMPLE_RATE)
+        audio.parent.mkdir(parents=True, exist_ok=True)
+        audio.write_bytes(b"\x00" * 128)
+        cache.publish(key, target_rate=DERIVATIVE_SAMPLE_RATE, n_samples=32)
+
+        assert cache.get(key, DERIVATIVE_SAMPLE_RATE) is None
+        assert cache.commit() == 1
+        assert cache.get(key, DERIVATIVE_SAMPLE_RATE) is not None
+
+    def test_discarding_leaves_the_audio_inert(self, cache: DerivativeCache) -> None:
+        key = "k" * 64
+        audio = cache.audio_path(key, DERIVATIVE_SAMPLE_RATE)
+        audio.parent.mkdir(parents=True, exist_ok=True)
+        audio.write_bytes(b"\x00" * 128)
+        cache.publish(key, target_rate=DERIVATIVE_SAMPLE_RATE, n_samples=32)
+        cache.discard()
+        assert cache.commit() == 0
+        assert cache.get(key, DERIVATIVE_SAMPLE_RATE) is None
+        assert audio.exists()
+
+    def test_a_sidecar_naming_another_file_is_a_miss(self, cache: DerivativeCache) -> None:
+        """It would grant a hit on the strength of a file nothing goes on to read.
+
+        The runner reads the *canonical* path, so a record pointing elsewhere — even at a
+        real file of the right size — is a hit for the wrong reasons.
+        """
+        key = self.a_published_entry(cache)
+        decoy = cache.audio_path("d" * 64, DERIVATIVE_SAMPLE_RATE)
+        decoy.write_bytes(b"\xff" * 128)
+        self._edit_sidecar(cache, key, relative_path=str(decoy.relative_to(cache.session_dir)))
+        assert cache.get(key, DERIVATIVE_SAMPLE_RATE) is None
+
+    def test_a_sidecar_recording_another_rate_is_a_miss(self, cache: DerivativeCache) -> None:
+        key = self.a_published_entry(cache)
+        self._edit_sidecar(cache, key, sample_rate=44100)
+        assert cache.get(key, DERIVATIVE_SAMPLE_RATE) is None
+
+    def test_a_record_shape_this_code_never_wrote_is_a_miss(self, cache: DerivativeCache) -> None:
+        key = self.a_published_entry(cache)
+        self._edit_sidecar(cache, key, cache_record_version=999)
+        assert cache.get(key, DERIVATIVE_SAMPLE_RATE) is None
+
+    def test_a_length_the_caller_did_not_expect_is_a_miss(self, cache: DerivativeCache) -> None:
+        """The caller knows how many samples this track should decimate to."""
+        key = self.a_published_entry(cache)
+        assert cache.get(key, DERIVATIVE_SAMPLE_RATE, expected_samples=32) is not None
+        assert cache.get(key, DERIVATIVE_SAMPLE_RATE, expected_samples=33) is None
+
+    @staticmethod
+    def _edit_sidecar(cache: DerivativeCache, key: str, **changes: object) -> None:
+        path = cache.session_dir / f"work/cache/audio/{DERIVATIVE_SAMPLE_RATE}/{key}.json"
+        document = json.loads(path.read_text())
+        document.update(changes)
+        path.write_text(json.dumps(document), encoding="utf-8")
 
     def test_a_complete_entry_is_a_hit(self, cache: DerivativeCache) -> None:
         key = self.a_published_entry(cache)

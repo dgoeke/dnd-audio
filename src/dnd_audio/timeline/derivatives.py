@@ -21,16 +21,23 @@ So the identity is deliberately broad. It carries:
   legitimately change the samples;
 * **the target rate**, so the 16 kHz and 48 kHz artifacts of one track cannot collide.
 
-Publication is two steps in a fixed order: the audio is written temp-then-rename, and only
-then is a sidecar written naming it. An entry is a hit only when the sidecar parses *and*
-the audio it names exists at the recorded size — so a crash between the two leaves a miss,
-never a truncated file dressed as a hit.
+Publication is three steps in a fixed order: the audio is written temp-then-rename, the
+sidecar that makes it findable is *staged in memory*, and the staged sidecars are committed
+only once the caller has re-verified that every source is byte-identical to what it read
+(INV-01). M1's inspection cache does exactly this, for exactly this reason, and skipping it
+here was a real defect: a run that failed INV-01 left behind a sidecar keyed on the
+*pre-change* source hash pointing at audio built from the *post-change* bytes. Restore the
+file and that derivative is served as a valid hit forever.
+
+An entry is a hit only when the sidecar parses, agrees with itself about the path, rate,
+and record shape, *and* the audio it names exists at the recorded size. Each of those is
+a way a half-written or hand-edited entry could otherwise be mistaken for a good one.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
@@ -141,8 +148,11 @@ class DerivativeCache:
     read_enabled: bool = True
     hits: int = 0
     misses: int = 0
+    _staged: dict[tuple[str, int], dict[str, Any]] = field(default_factory=dict, repr=False)
 
-    def get(self, key: str, target_rate: int) -> CachedDerivative | None:
+    def get(
+        self, key: str, target_rate: int, *, expected_samples: int | None = None
+    ) -> CachedDerivative | None:
         """The complete artifact for ``key``, or ``None``. Counts the hit or the miss.
 
         Incompleteness is a miss rather than an error, in every form it takes: no sidecar,
@@ -156,7 +166,12 @@ class DerivativeCache:
             return None
 
         record = self._read_sidecar(key, target_rate)
-        if record is None:
+        wrong_length = (
+            expected_samples is not None
+            and record is not None
+            and (record.n_samples != expected_samples)
+        )
+        if record is None or wrong_length:
             self.misses += 1
             return None
 
@@ -174,11 +189,13 @@ class DerivativeCache:
         return record
 
     def publish(self, key: str, *, target_rate: int, n_samples: int) -> CachedDerivative:
-        """Record that the audio for ``key`` is now complete.
+        """Stage the record that will make ``key`` findable.
 
         Called *after* the audio has been renamed into place, never before: the sidecar is
         what makes an entry a hit, so writing it first would advertise a file that does not
-        exist yet.
+        exist yet. Nothing reaches disk until :meth:`commit`, which the runner calls only
+        once INV-01 has been re-verified — otherwise a run that discovered a source had
+        changed would still leave a usable entry describing bytes that no longer exist.
         """
         relative = derivative_relative_path(target_rate, key)
         audio = self.session_dir / relative
@@ -189,18 +206,28 @@ class DerivativeCache:
             n_samples=n_samples,
             size_bytes=audio.stat().st_size,
         )
-        write_json_atomic(
-            self._sidecar_path(key, target_rate),
-            {
-                "cache_record_version": CACHE_RECORD_VERSION,
-                "key": record.key,
-                "n_samples": record.n_samples,
-                "relative_path": record.relative_path,
-                "sample_rate": record.sample_rate,
-                "size_bytes": record.size_bytes,
-            },
-        )
+        self._staged[key, target_rate] = {
+            "cache_record_version": CACHE_RECORD_VERSION,
+            "key": record.key,
+            "n_samples": record.n_samples,
+            "relative_path": record.relative_path,
+            "sample_rate": record.sample_rate,
+            "size_bytes": record.size_bytes,
+        }
         return record
+
+    def commit(self) -> int:
+        """Write every staged sidecar atomically. Returns how many were written."""
+        written = 0
+        for (key, target_rate), payload in sorted(self._staged.items()):
+            write_json_atomic(self._sidecar_path(key, target_rate), payload)
+            written += 1
+        self._staged.clear()
+        return written
+
+    def discard(self) -> None:
+        """Drop everything staged. The audio remains, and without a sidecar it is inert."""
+        self._staged.clear()
 
     def audio_path(self, key: str, target_rate: int) -> Path:
         return self.session_dir / derivative_relative_path(target_rate, key)
@@ -220,12 +247,24 @@ class DerivativeCache:
         if not isinstance(document, dict) or document.get("key") != key:
             return None
         try:
-            return CachedDerivative(
+            record = CachedDerivative(
                 key=key,
                 relative_path=str(document["relative_path"]),
                 sample_rate=int(document["sample_rate"]),
                 n_samples=int(document["n_samples"]),
                 size_bytes=int(document["size_bytes"]),
             )
+            version = int(document["cache_record_version"])
         except (KeyError, TypeError, ValueError):
             return None
+
+        # A sidecar that disagrees with itself is not a usable entry. The caller reads the
+        # *canonical* path, so a record naming a different file would grant a hit on the
+        # strength of a file nothing goes on to read.
+        if (
+            version != CACHE_RECORD_VERSION
+            or record.sample_rate != target_rate
+            or record.relative_path != derivative_relative_path(target_rate, key)
+        ):
+            return None
+        return record

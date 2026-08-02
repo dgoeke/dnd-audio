@@ -90,6 +90,20 @@ Under `infer_forward`, exactly when both hold:
   genuinely not unique, which is the mathematical definition of the ambiguity the spec
   refuses to resolve by guessing.
 
+**With no configured origin there is no such anchor, and the rule is weaker than this
+document originally claimed.** The first version of this ADR said the widest-gap analysis
+made the ordering "unambiguous". It does not. Starts at 23:00 and 01:00 admit two readings
+— a two-hour session across midnight, or a twenty-two-hour session within one day — and
+the algorithm picks the first because it is the **shortest arc** containing every start,
+not because the evidence excludes the second. Independent review caught the overstatement
+(`docs/plan/reviews/M2-code-20260802-1508.md`).
+
+That is still the right default: sessions are short, and the spec's own wording points at
+"session-span constraints". But it is a *heuristic about how long a session is*, so it is
+registered as **OQ-016**, cited from the code that applies it, and every session that
+relies on it gets a `midnight_rollover_inferred` warning saying the day was inferred rather
+than read. An operator who records `origin_date` and `origin_timecode` never meets it.
+
 Every inference is recorded as a decision naming the source, the cycle added, and the
 resulting position. `reject` never infers and fails with the same diagnostic. A span that
 is unambiguous but implausibly long warns rather than failing (**OQ-014**).
@@ -127,6 +141,10 @@ rollover therefore does **not** depend on OQ-003.
   amendment.
 - Sessions are still capped at one 24-hour cycle. A recording that genuinely spans longer
   needs a dated origin, which is the actionable diagnostic the failure prints.
+- The shortest-arc rule is a heuristic and is named as one (**OQ-016**). A session that
+  genuinely spans more than half a day with no configured origin will be read as a short
+  session across midnight, which is wrong. Nothing in the evidence distinguishes the two;
+  a dated origin does, and the diagnostic says so.
 - If H1 shows DJI stamps an origination *date* on every chunk (OQ-001), most of the
   inference disappears: a dated chunk needs no rollover reasoning at all, and this ADR's
   inference rules become the fallback rather than the common path.

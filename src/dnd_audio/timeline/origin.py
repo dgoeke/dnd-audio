@@ -201,7 +201,7 @@ def determine_origin(
     _warn_about_mixed_domains([item.evidence for item in candidates], frame_rate, warnings)
 
     return SessionOrigin(
-        zero=_zero_record(config, zero_source, zero_domain, zero_seconds, frame_rate),
+        zero=_zero_record(config, zero_source, zero_domain, zero_seconds, frame_rate, shift=shift),
         starts=starts,
         decisions=tuple(decisions),
         warnings=tuple(warnings),
@@ -351,13 +351,18 @@ def _cycles_by_largest_gap(
 
     With no configured origin, the evidence is a set of points on a 24-hour circle and the
     session is an arc through them. The arc that does not contain the largest gap is the
-    session; midnight, if it was crossed, falls inside that gap. This is the only reading
-    that uses "session span" the way the spec's `infer_forward` description does, and it
-    needs no anchor.
+    session; midnight, if it was crossed, falls inside that gap.
 
-    Ambiguity is real and is refused rather than resolved: two gaps of equal size mean two
-    equally good readings, and INV-12 says a time that cannot be established is an error
-    with a diagnostic, not a coin flip.
+    **This picks the shortest arc, which is a heuristic and not a proof** (OQ-016). Starts
+    at 23:00 and 01:00 admit two readings — two hours across midnight, or twenty-two hours
+    within one day — and nothing in the evidence excludes the second. Sessions are short,
+    so the shortest arc is the right default, and every session that relies on it is warned
+    that its days were inferred rather than read. An operator who records `origin_date` and
+    `origin_timecode` never reaches this function.
+
+    A *tie* is refused rather than resolved: two gaps of equal size mean two equally good
+    readings with nothing to choose between them, which is the case where INV-12's "fail
+    with an actionable diagnostic" applies rather than a coin flip.
     """
     cycle = _common_cycle(absolute, frame_rate)
     values = sorted(
@@ -410,7 +415,9 @@ def _cycles_by_largest_gap(
             code="midnight_rollover_inferred",
             message=(
                 "the day each chunk belongs to was inferred from the spread of start "
-                "times rather than read from the files. Recording an origin_date and "
+                "times: the session was taken to be the shortest arc containing every "
+                "start (OQ-016). That is a heuristic about how long a session runs, not a "
+                "reading forced by the evidence. Recording an origin_date and "
                 "origin_timecode in session.yaml turns this inference into evidence."
             ),
         )
@@ -532,8 +539,29 @@ def _zero_record(
     zero_domain: str,
     zero_seconds: Fraction,
     frame_rate: FrameRate,
+    *,
+    shift: int,
 ) -> SessionZero:
+    """Where zero is, as the artifact records it.
+
+    ``shift`` is subtracted from the recorded origin. When a signed offset reached below
+    the earliest absolute source the whole timeline moved later by that much, which means
+    session sample 0 is now *earlier* in the day than the source that used to define it —
+    and recording the unshifted origin would declare a time of day that sample 0 does not
+    have. Every mapping from a session sample back to wall clock would then be wrong by
+    the shift, in a way nothing downstream could detect.
+    """
     if zero_source == "configured_origin":
+        # A configured origin is never shifted: `_shift_for` refuses rather than moving an
+        # origin the operator stated, so reaching here with a shift would mean those two
+        # functions had drifted apart. Asserted rather than silently subtracted, because
+        # `- shift` on a value that is always zero is arithmetic nothing can test.
+        if shift:  # pragma: no cover - `_shift_for` raises before this is reachable
+            message = (
+                f"a configured origin was shifted by {shift} samples, which cannot happen: "
+                f"audio before a stated origin is fatal, not something to move the origin for"
+            )
+            raise TimecodeError(message, code="audio_before_session_zero")
         return SessionZero(
             source="configured_origin",
             domain="timecode",
@@ -559,7 +587,7 @@ def _zero_record(
         source="earliest_source",
         domain="timecode" if zero_domain == "timecode" else "real_time",
         origin_date=config.timecode.origin_date,
-        since_day_origin_samples=to_samples(zero_seconds, CANONICAL_SAMPLE_RATE),
+        since_day_origin_samples=to_samples(zero_seconds, CANONICAL_SAMPLE_RATE) - shift,
         detail=("no origin was configured, so session zero is the earliest valid source start"),
     )
 

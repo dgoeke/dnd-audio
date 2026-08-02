@@ -282,7 +282,7 @@ cross-correlation ever detecting an acoustic lag change.
 | 44.1 kHz or intra-track disagreement fatal *before* construction | `test_ingest_run.py`, both through the CLI, **starting from a stale `timeline.json` on disk**: exit 1, structured error, the stale artifact removed, and the layout builder, PCM reader, and derivative writer spied on and proven un-entered |
 | Clap correlation is QA only; lag at both ends; changed lag warns | `test_syncqa.py` — agreement; a constant offset reported while the timeline stays byte-identical; a drift fixture whose end transient moved in the audio; a no-clap case that reports low confidence rather than a lag |
 | An affine time-warp hook exists, unused | `test_warp.py::test_a_non_identity_warp_moves_the_timeline`, with a test-local affine implementation — a seam that cannot fire is decoration |
-| Report behaviour (added after review) | `test_ingest_report.py` — fresh vs `origin: reused` stage status, preserved inspect warnings and decisions, current manifest and timeline deliverable hashes, changed raw input forcing re-inspection, each mismatch case, and a fatal run invalidating a previously successful `timeline.json` **that was already on disk** |
+| Report behaviour (added after review) | `test_ingest_run.py::TestTheCanonicalSession` — `origin: reused` on a warm run, the manifest rewritten rather than trusted, both deliverables hashed — and `::TestRefusalsHappenBeforeConstruction`, where every failure case starts from a stale `timeline.json` **already on disk** and asserts it is gone. *(This row named a `test_ingest_report.py` that was never written; corrected during verify.)* |
 
 ### Invariants at risk, and what stops each
 

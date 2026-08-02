@@ -74,10 +74,22 @@ chunk.
 
 - The default is the safe one, and an operator who hits it gets a message with the two
   filenames and a number rather than a silently repaired timeline.
-- `nudge_later` shifts everything after the overlap by the overlap amount, so a session
-  recovered that way has a known, recorded, monotonically accumulating error against its
-  own timecode. The decision record makes that auditable; using it on a session with real
-  timecode is a choice, not an accident.
+- `nudge_later` moves **only the chunk that would overlap**, not everything after it. The
+  first version of this document said otherwise, and the implementation is the better of
+  the two: a later chunk whose own timecode is good belongs where its timecode says, and
+  shifting it would misalign it against the other five transmitters to preserve one
+  track's internal spacing. Cross-track alignment is what this pipeline exists to produce.
+  Independent review found the discrepancy between the document and the code
+  (`docs/plan/reviews/M2-code-20260802-1508.md`); the document was wrong.
+- The visible consequence is that a nudged chunk's **tail can occupy what used to be a
+  gap**: move a two-second chunk one second later and it now covers a second that was
+  silence. That is inherent to nudging — the alternatives are trimming the chunk, which
+  the spec forbids, or shifting everything after it, which misaligns good timecode — and
+  it is a large part of why the default is `reject`. Each nudge is recorded as a decision
+  and a warning naming the chunk and the distance, so the effect is auditable rather than
+  silent.
+- Nudges cascade. If moving a chunk makes it overlap the next one, that one is nudged in
+  turn, and so on; every sample survives each time.
 - The segment map carries both the rasterized start and the placed start, so a consumer
   can always see what the evidence said before the layout adjusted it.
 - If H1 shows DJI chunk boundaries routinely overlap by a fixed amount, the fixed amount

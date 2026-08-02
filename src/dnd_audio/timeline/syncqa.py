@@ -243,12 +243,15 @@ def _assess(
 
 
 def _derivative(session_dir: Path, track: TimelineTrack) -> PcmReader:
-    """An open reader over this track's 16 kHz working audio."""
+    """A reader over this track's 16 kHz working audio, for the caller's ``with``.
+
+    Deliberately *not* entered here. An earlier version called ``__enter__`` itself and
+    every caller then entered it again, which opens a second handle and drops the first
+    without closing it — relying on the garbage collector to clean up a file descriptor.
+    """
     record = next(
         derivative
         for derivative in track.derivatives
         if derivative.sample_rate == DERIVATIVE_SAMPLE_RATE
     )
-    reader = PcmReader(open_pcm(session_dir / record.relative_path))
-    reader.__enter__()
-    return reader
+    return PcmReader(open_pcm(session_dir / record.relative_path))

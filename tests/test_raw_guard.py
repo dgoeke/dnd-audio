@@ -112,6 +112,29 @@ class TestSnapshotAndVerify:
         with pytest.raises(DiscoveryError):
             verify_unchanged(session, roots, before)
 
+    def test_a_source_under_a_directory_named_work_is_still_hashed(self, tmp_path: Path) -> None:
+        """The exclusion is the session's own `work/`, not the name at any depth.
+
+        An earlier version matched the component anywhere in the path, so every file under
+        `raw/tx-a/work/` — or under a source root called `archive/work` — was silently
+        dropped from the snapshot and could be mutated without verification noticing. A
+        check that is present, looks right, and verifies nothing.
+        """
+        session = a_session(tmp_path)
+        (session / "raw/tx-a/work").mkdir()
+        (session / "raw/tx-a/work/notes.txt").write_bytes(b"field notes")
+        (session / "raw/output").mkdir()
+        (session / "raw/output/take2.wav").write_bytes(b"a second take")
+
+        roots = raw_roots(a_config())
+        before = snapshot(session, roots)
+        assert "raw/tx-a/work/notes.txt" in before
+        assert "raw/output/take2.wav" in before
+
+        (session / "raw/tx-a/work/notes.txt").write_bytes(b"tampered")
+        with pytest.raises(DiscoveryError, match="modified"):
+            verify_unchanged(session, roots, before)
+
     def test_generated_directories_are_excluded(self, tmp_path: Path) -> None:
         """`work/` and `output/` are inside the root when a track sits in the session
         directory, and they are the two places a run is *supposed* to write."""

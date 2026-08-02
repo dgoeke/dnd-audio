@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Final
 
 import pytest
+import yaml
 
 from dnd_audio.artifacts.manifest import Manifest
 from dnd_audio.errors import ExitCode
@@ -334,6 +335,84 @@ class TestFractionalRatesEndToEnd:
         assert starts["tx-b"] - starts["tx-a"] != 50 * 1602
 
 
+class TestExplicitOverrides:
+    """Criterion 6's override case, through a real `session.yaml` rather than in unit form.
+
+    `tests/test_origin.py` places a `SessionOffsetRecord` correctly, but at that boundary an
+    override is indistinguishable from any other evidence. Only a session on disk proves
+    the whole chain: the YAML is parsed, M1's strategy chain prefers the override over the
+    file's own `bext` reference, and M2 places the result where the operator said.
+    """
+
+    def override_session(self, tmp_path: Path, **override: object) -> FixtureTruth:
+        spec = no_origin_session()
+        truth = build_session(spec, tmp_path / "override")
+        target = sorted(truth.for_track("tx-b"), key=lambda c: c.start_sample)[0]
+        document = yaml.safe_load((truth.session_dir / "session.yaml").read_text())
+        document["recovery"]["source_time_overrides"] = {
+            target.relative_path: {
+                "sha256": target.sha256,
+                "reason": "verification fixture: the field log disagrees with the file",
+                **override,
+            }
+        }
+        (truth.session_dir / "session.yaml").write_text(
+            yaml.safe_dump(document, sort_keys=True), encoding="utf-8"
+        )
+        return truth
+
+    def test_a_signed_offset_override_places_the_source(self, tmp_path: Path) -> None:
+        """`tx-b`'s file says 2 s; the override says 5 s, and the override wins."""
+        truth = self.override_session(tmp_path, start_offset_samples=5 * RATE)
+        result = run_ingest(truth.session_dir)
+        assert result.exit_code is ExitCode.OK
+        assert result.timeline is not None
+
+        starts = {track.track_id: track.start_sample for track in result.timeline.tracks}
+        assert starts == {"tx-a": 0, "tx-b": 5 * RATE}
+
+        # The fixture wrote `tx-b`'s own metadata saying 2 s. The override says 5 s, and
+        # the placement follows the override — so this is the override winning, not the
+        # file happening to agree with it.
+        declared = {chunk.track_id: chunk.start_sample for chunk in truth.chunks}
+        assert declared["tx-b"] == 2 * RATE
+        assert starts["tx-b"] != declared["tx-b"]
+
+    def test_a_negative_offset_override_shifts_the_timeline(self, tmp_path: Path) -> None:
+        """The signed half of the field the spec permits, end to end.
+
+        `tx-b` is placed a second *before* `tx-a`, and with no configured origin session
+        zero is redefined as that earlier start — so `tx-a` moves to 1 s and every distance
+        between the two is unchanged.
+        """
+        truth = self.override_session(tmp_path, start_offset_samples=-RATE)
+        result = run_ingest(truth.session_dir)
+        assert result.exit_code is ExitCode.OK
+        assert result.timeline is not None
+        starts = {track.track_id: track.start_sample for track in result.timeline.tracks}
+        assert starts == {"tx-a": RATE, "tx-b": 0}
+
+    def test_a_timecode_override_places_the_source(self, tmp_path: Path) -> None:
+        """The other override form: a time of day copied out of a field log.
+
+        `tx-a` starts at 19:00:00 by its own `bext`; the override puts `tx-b` at 19:00:03,
+        which is three seconds later regardless of what `tx-b`'s own metadata says.
+        """
+        truth = self.override_session(tmp_path, start_timecode="19:00:03:00")
+        result = run_ingest(truth.session_dir)
+        assert result.exit_code is ExitCode.OK
+        assert result.timeline is not None
+        starts = {track.track_id: track.start_sample for track in result.timeline.tracks}
+        assert starts == {"tx-a": 0, "tx-b": 3 * RATE}
+
+    def test_the_override_is_recorded_as_a_decision(self, tmp_path: Path) -> None:
+        """The spec requires overrides recorded prominently; a placement is not enough."""
+        truth = self.override_session(tmp_path, start_offset_samples=5 * RATE)
+        result = run_ingest(truth.session_dir)
+        codes = {decision["code"] for decision in report_of(result)["decisions"]}
+        assert "recovery_override_applied" in codes
+
+
 class TestMaterializing48k:
     def test_it_is_off_by_default(self, canonical_fixture: FixtureTruth) -> None:
         """The segment map is the working path; 16 GB per session is opt-in."""
@@ -412,6 +491,54 @@ class TestRawSourcesAreUntouched:
         assert result.exit_code is not ExitCode.OK
         assert result.timeline is None
         assert "raw_sources_modified" in _error_codes(result)
+
+    def test_a_failed_run_leaves_no_usable_derivative_behind(
+        self, canonical_fixture: FixtureTruth, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The sequence that poisoned the cache before the sidecars were staged.
+
+        Run once cleanly. Corrupt a source mid-run so INV-01 fails — but note the
+        derivative for that run was built from the *corrupted* bytes while its cache key
+        was computed from the manifest, which describes the *original* bytes. Restore the
+        file and the key matches again. Before staging, that served corrupted audio as a
+        valid hit, permanently and silently.
+        """
+        from dnd_audio.determinism import sha256_file
+        from dnd_audio.timeline import layout
+
+        session_dir = canonical_fixture.session_dir
+        victim = session_dir / canonical_fixture.chunks[0].relative_path
+        pristine = victim.read_bytes()
+
+        clean = run_ingest(session_dir)
+        assert clean.timeline is not None
+        good = {
+            derivative.relative_path: sha256_file(session_dir / derivative.relative_path)
+            for track in clean.timeline.tracks
+            for derivative in track.derivatives
+        }
+
+        original = layout.reject_unusable_sources
+
+        def corrupting(manifest: Manifest) -> None:
+            original(manifest)
+            victim.write_bytes(pristine[:-2000] + b"\x40" * 2000)
+
+        monkeypatch.setattr("dnd_audio.timeline.runner.reject_unusable_sources", corrupting)
+        failed = run_ingest(session_dir)
+        assert failed.exit_code is not ExitCode.OK
+        monkeypatch.undo()
+
+        victim.write_bytes(pristine)
+        again = run_ingest(session_dir)
+        assert again.exit_code is ExitCode.OK
+        assert again.timeline is not None
+        for track in again.timeline.tracks:
+            for derivative in track.derivatives:
+                served = sha256_file(session_dir / derivative.relative_path)
+                assert served == good[derivative.relative_path], (
+                    f"{derivative.relative_path} was served from a run that failed INV-01"
+                )
 
     def test_an_output_that_would_land_inside_raw_writes_nothing(
         self, canonical_fixture: FixtureTruth

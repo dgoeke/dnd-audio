@@ -22,7 +22,6 @@ from dnd_audio.config import SessionConfig, load_session_config
 from dnd_audio.errors import ExitCode
 from dnd_audio.fixtures import FixtureTruth
 from dnd_audio.inspection.runner import run_inspect
-from dnd_audio.timeline import CANONICAL_SAMPLE_RATE
 from dnd_audio.timeline.layout import TrackLayout, build_layout, reject_unusable_sources
 from dnd_audio.timeline.origin import SessionOrigin, determine_origin
 
@@ -166,9 +165,13 @@ class TestAlignedDuration:
     def test_the_session_spans_ten_and_a_half_seconds(
         self, layouts: tuple[TrackLayout, ...]
     ) -> None:
-        """A sanity check on the fixture itself, so a silently empty run cannot pass."""
+        """A sanity check on the fixture itself, so a silently empty run cannot pass.
+
+        The second assertion is about the *tracks*, not about arithmetic: comparing
+        `504000 / 48000` to `10.5` would be true whatever the code did.
+        """
         assert max(track.end_sample for track in layouts) == 504000
-        assert pytest.approx(10.5) == 504000 / CANONICAL_SAMPLE_RATE
+        assert sum(len(track.segments) for track in layouts) == 13
 
 
 class TestSegmentsPointAtRealAudio:

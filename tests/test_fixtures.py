@@ -30,8 +30,14 @@ from dnd_audio.fixtures import (
     build_session,
     canonical_session,
 )
-from dnd_audio.fixtures.session import SAMPLE_RATE
+from dnd_audio.fixtures.session import SAMPLE_RATE, _frames_to_timecode
 from dnd_audio.fixtures.wav import RF64_SENTINEL
+from dnd_audio.timecode import (
+    FRAME_RATE_LABELS,
+    FRAME_RATES,
+    frame_index,
+    parse_timecode,
+)
 
 
 def read_samples(path: Path) -> npt.NDArray[np.float32]:
@@ -393,3 +399,51 @@ def _probe_format_tags(session_dir: Path, relative_path: str) -> dict[str, str]:
     if not isinstance(tags, dict):  # pragma: no cover - ffprobe always emits an object
         pytest.fail(f"unexpected tags shape: {tags!r}")
     return {str(key): str(value) for key, value in tags.items()}
+
+
+class TestTimecodeTextRoundTrips:
+    """`_frames_to_timecode` is the inverse of `frame_index`, at every rate.
+
+    The fixture generator writes an `INFO`/`ISMP` timecode tag from a frame index, and the
+    strategy chain reads it back into one. An inverse that was subtly wrong — the
+    drop-frame arm is where it would be — would put the fixture's *declared* truth and its
+    *written* metadata into quiet disagreement, which is the one bug a ground-truth fixture
+    must not have. The module docstring claimed this test existed before it did.
+    """
+
+    @pytest.mark.parametrize("label", list(FRAME_RATE_LABELS))
+    def test_every_frame_of_a_day_round_trips(self, label: str) -> None:
+        rate = FRAME_RATES[label]
+        last = frame_index(
+            parse_timecode(
+                f"23:59:59{';' if rate.drop_frame else ':'}"
+                f"{rate.frames_per_timecode_second - 1:02d}",
+                rate,
+            )
+        )
+        # Every frame would be a minute of CPU; a stride that is coprime with the
+        # drop-frame cycle still lands inside and outside every dropped minute.
+        for index in range(0, last, 997):
+            text = _frames_to_timecode(index, rate)
+            assert frame_index(parse_timecode(text, rate)) == index, f"{label} frame {index}"
+
+    def test_the_drop_frame_arm_skips_the_labels_it_should(self) -> None:
+        """At 29.97DF the labels `:00` and `:01` never appear at the start of a minute,
+        except every tenth — which is the whole of what drop-frame is."""
+        rate = FRAME_RATES["29.97DF"]
+        produced = {_frames_to_timecode(i, rate) for i in range(0, 30 * 60 * 11)}
+        assert "00:01:00;00" not in produced
+        assert "00:01:00;01" not in produced
+        assert "00:01:00;02" in produced
+        assert "00:10:00;00" in produced
+
+    def test_it_disagrees_with_a_naive_inverse(self) -> None:
+        """A non-drop conversion applied to a drop-frame index is the tempting error."""
+        rate = FRAME_RATES["29.97DF"]
+        index = frame_index(parse_timecode("01:00:00;00", rate))
+        seconds, frames = divmod(index, 30)
+        hours, rest = divmod(seconds, 3600)
+        minutes, secs = divmod(rest, 60)
+        naive = f"{hours:02d}:{minutes:02d}:{secs:02d};{frames:02d}"
+        assert _frames_to_timecode(index, rate) == "01:00:00;00"
+        assert naive != "01:00:00;00"

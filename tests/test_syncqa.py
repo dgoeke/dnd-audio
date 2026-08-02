@@ -119,9 +119,13 @@ class TestDriftDetection:
         assert result.exit_code is ExitCode.OK
 
         found = measurements(result.report_path)
+        # 960 samples at 48 kHz is 320 at 16 kHz, so the answer lands exactly on the
+        # measurement grid. A tolerance here would be hiding up to three samples of error
+        # in a quantity that has none.
         expected_ms = DRIFT_END_SHIFT_SAMPLES * 1000 / CANONICAL_SAMPLE_RATE
-        assert float(found["tx-b:start"]["lag_ms"]) == pytest.approx(0.0, abs=0.2)
-        assert float(found["tx-b:end"]["lag_ms"]) == pytest.approx(expected_ms, abs=0.2)
+        assert expected_ms == 20.0
+        assert float(found["tx-b:start"]["lag_ms"]) == 0.0
+        assert float(found["tx-b:end"]["lag_ms"]) == expected_ms
 
     def test_a_changing_lag_warns_about_drift(self, drift: FixtureTruth) -> None:
         result = run_ingest(drift.session_dir)

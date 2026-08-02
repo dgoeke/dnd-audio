@@ -64,9 +64,15 @@ def raw_roots(config: SessionConfig) -> tuple[str, ...]:
 def snapshot(session_dir: Path, roots: tuple[str, ...]) -> RawSnapshot:
     """Hash and size every file under the source roots.
 
-    ``work/`` and ``output/`` are excluded: when a track's input sits directly in the
-    session root they are inside a scanned root, and they are the two directories a run is
-    *supposed* to write.
+    The session's own ``work/`` and ``output/`` are excluded: when a track's input sits
+    directly in the session root they are inside a scanned root, and they are the two
+    directories a run is *supposed* to write.
+
+    **Excluded at the session root only.** Matching those names at any depth — which is
+    what an earlier version did — silently drops every file beneath a source directory that
+    happens to contain one, so ``raw/tx-a/work/notes.txt`` was never hashed and mutating it
+    passed verification unconditionally. Same shape as the defect M1's closeout describes:
+    a check that is present, looks right, and verifies nothing.
     """
     generated = {WORK_DIRNAME, OUTPUT_DIRNAME}
     found: RawSnapshot = {}
@@ -78,7 +84,7 @@ def snapshot(session_dir: Path, roots: tuple[str, ...]) -> RawSnapshot:
             if not path.is_file():
                 continue
             relative = path.relative_to(session_dir).as_posix()
-            if generated.intersection(PurePosixPath(relative).parts):
+            if PurePosixPath(relative).parts[0] in generated:
                 continue
             found[relative] = (sha256_file(path), path.stat().st_size)
     return found

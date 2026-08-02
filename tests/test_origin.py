@@ -158,6 +158,33 @@ class TestSignedRecoveryOffsets:
             )
         assert caught.value.code == "audio_before_session_zero"
 
+    def test_a_shifted_timeline_records_the_origin_it_actually_has(self) -> None:
+        """The declared zero and sample 0 must be the same instant.
+
+        An absolute source at 19:00 alongside an offset reaching a second below it moves
+        the whole timeline, so sample 0 is 18:59:59 — and recording 19:00 would make every
+        mapping from a session sample back to wall clock wrong by exactly the shift, in a
+        way nothing downstream could detect.
+        """
+        found = determine_origin(
+            manifest(
+                {
+                    "tx-a": [source("raw/tx-a/one.wav", bwf(19 * HOUR))],
+                    "tx-b": [source("raw/tx-b/one.wav", offset(-RATE))],
+                }
+            ),
+            config(),
+        )
+        assert placed(found, "raw/tx-b/one.wav") == 0
+        assert placed(found, "raw/tx-a/one.wav") == RATE
+
+        recorded = found.zero.since_day_origin_samples
+        assert recorded is not None
+        # Session zero, plus where the absolute source sits on the timeline, is that
+        # source's own time of day. Nothing else is a consistent reading.
+        assert recorded + placed(found, "raw/tx-a/one.wav") == 19 * HOUR
+        assert recorded == 19 * HOUR - RATE
+
     def test_absolute_evidence_fixes_zero_and_offsets_are_placed_against_it(self) -> None:
         """Mixed absolute and relative: the absolute set decides, the offset follows."""
         found = determine_origin(

@@ -172,6 +172,22 @@ a session whose timecode is a day out.
 on one.
 **Needs:** H2 or the first real session · **Blocks:** nothing · **Status:** open
 
+## OQ-016 — Is a session always the shortest arc through its chunk start times?
+**Assumption:** Yes. With no configured origin, M2 infers which chunks fall after midnight
+by treating the widest quiet stretch in the sources' start times as the one containing
+midnight — which is the same as assuming the session is the *shortest* arc that contains
+every start (ADR-0009, `timeline/origin.py::_cycles_by_largest_gap`).
+**Why it matters:** Starts at 23:00 and 01:00 admit two readings: a two-hour session across
+midnight, or a twenty-two-hour session within one day. The evidence does not distinguish
+them; this assumption picks the first. A session that genuinely ran longer than half a day
+without a configured origin would be reconstructed with its chunks on the wrong days, which
+moves audio by hours. Every session relying on the inference is warned
+(`midnight_rollover_inferred`), and a recorded `origin_date` plus `origin_timecode` removes
+the question entirely.
+**Evidence:** The wall-clock span of real sessions, and whether any is ever run without a
+configured origin. Overlaps with OQ-014, which asks the same thing from the other side.
+**Needs:** H2 or the first real session · **Blocks:** nothing · **Status:** open
+
 ## OQ-015 — Where is the DJI receivers' timecode zero relative to real midnight?
 **Assumption:** `00:00:00:00` is jammed to real midnight, so a timecode and a BWF sample
 reference in the same session share a day origin.
