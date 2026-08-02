@@ -1,0 +1,69 @@
+# A complete session, with every optional field stated explicitly.
+# tests/data/session-minimal.yaml is the same session with every default omitted; the
+# two must produce identical resolved configuration hashes (INV-08).
+schema_version: 1
+session_id: "2026-08-15"
+title: "Session 01"
+language: "English"
+active_tracks: "auto"
+timecode:
+  frame_rate: "30F"
+  origin_date: "2026-08-15"
+  origin_timecode: null
+  rollover_policy: "infer_forward"
+tracks:
+  - track_id: "tx-a"
+    receiver_id: "rx-a"
+    receiver_channel: 1
+    speaker_id: "alice"
+    speaker_name: "Alice"
+    input: "raw/tx-a"
+  - track_id: "tx-b"
+    receiver_id: "rx-a"
+    receiver_channel: 2
+    speaker_id: "bob"
+    speaker_name: "Bob"
+    input: "raw/tx-b"
+  - track_id: "tx-c"
+    receiver_id: "rx-b"
+    receiver_channel: 1
+    speaker_id: "carol"
+    speaker_name: "Carol"
+    input: "raw/tx-c"
+  - track_id: "tx-d"
+    receiver_id: "rx-b"
+    receiver_channel: 2
+    speaker_id: "dan"
+    speaker_name: "Dan"
+    input: "raw/tx-d"
+  - track_id: "tx-e"
+    receiver_id: "rx-c"
+    receiver_channel: 1
+    speaker_id: "erin"
+    speaker_name: "Erin"
+    input: "raw/tx-e"
+  - track_id: "tx-f"
+    receiver_id: "rx-c"
+    receiver_channel: 2
+    speaker_id: "frank"
+    speaker_name: "Frank"
+    input: "raw/tx-f"
+asr:
+  model: "Qwen/Qwen3-ASR-1.7B"
+  model_revision: null
+  aligner: "Qwen/Qwen3-ForcedAligner-0.6B"
+  aligner_revision: null
+  context_file: "glossary.txt"
+  device: "auto"
+  dtype: "auto"
+  max_segment_s: 120
+  max_new_tokens: 1024
+activity:
+  correlation_max_lag_ms: 30
+mix:
+  integrated_lufs: -16.0
+  true_peak_dbtp: -1.5
+  mp3_bitrate_kbps: 128
+recovery:
+  allow_processed_audio: false
+  source_time_overrides: {}

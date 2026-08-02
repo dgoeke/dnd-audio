@@ -24,6 +24,12 @@ SKIP_MARK = re.compile(r"\bmark\.(skip|skipif|xfail)\b")
 DEFERRED = re.compile(r"DEFERRED:\s*(M\d+[a-z]?|H\d+|OQ-\d+)")
 LOOSE = re.compile(r"\b(TODO|FIXME|XXX|HACK)\b")
 
+# Only a `raise` is placeholder work. Matching the bare name would also flag an
+# `except NotImplementedError` handler — the CLI has one, to turn a stub into a clean
+# message — and any docstring that explains the convention. Both are the opposite of
+# unexplained, and flagging them pressures people to stop naming the thing.
+RAISES_NOT_IMPLEMENTED = re.compile(r"^\s*raise\s+NotImplementedError\b")
+
 # A decorator's reason= may sit a few lines below the mark itself.
 WINDOW = 4
 
@@ -52,7 +58,7 @@ def main() -> int:
                             f"milestone or OQ\n      {line.strip()}"
                         )
 
-                if root == "src" and "NotImplementedError" in line:
+                if root == "src" and RAISES_NOT_IMPLEMENTED.match(line):
                     context = line + ("\n" + lines[i - 1] if i else "")
                     if not DEFERRED.search(context):
                         violations.append(
@@ -76,7 +82,8 @@ def main() -> int:
             print(f"    {entry}")
         return 1
 
-    print(f"  no unexplained placeholders ({sum(len(python_files(r)) for r in ROOTS)} files scanned)")
+    scanned = sum(len(python_files(root)) for root in ROOTS)
+    print(f"  no unexplained placeholders ({scanned} files scanned)")
     return 0
 
 

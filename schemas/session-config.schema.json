@@ -1,0 +1,406 @@
+{
+  "$defs": {
+    "ActivityConfig": {
+      "additionalProperties": false,
+      "description": "Pre-ASR activity and bleed-gate parameters. M3 extends this.",
+      "properties": {
+        "correlation_max_lag_ms": {
+          "default": 30,
+          "exclusiveMinimum": 0,
+          "maximum": 1000,
+          "title": "Correlation Max Lag Ms",
+          "type": "integer"
+        }
+      },
+      "title": "ActivityConfig",
+      "type": "object"
+    },
+    "AsrConfig": {
+      "additionalProperties": false,
+      "description": "Model identity and inference parameters. Every field affects output.",
+      "properties": {
+        "aligner": {
+          "default": "Qwen/Qwen3-ForcedAligner-0.6B",
+          "minLength": 1,
+          "title": "Aligner",
+          "type": "string"
+        },
+        "aligner_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Aligner Revision"
+        },
+        "context_file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": "glossary.txt",
+          "title": "Context File"
+        },
+        "device": {
+          "default": "auto",
+          "enum": [
+            "auto",
+            "cpu",
+            "cuda"
+          ],
+          "title": "Device",
+          "type": "string"
+        },
+        "dtype": {
+          "default": "auto",
+          "enum": [
+            "auto",
+            "float32",
+            "bfloat16"
+          ],
+          "title": "Dtype",
+          "type": "string"
+        },
+        "max_new_tokens": {
+          "default": 1024,
+          "exclusiveMinimum": 0,
+          "title": "Max New Tokens",
+          "type": "integer"
+        },
+        "max_segment_s": {
+          "default": 120,
+          "exclusiveMinimum": 0,
+          "maximum": 120,
+          "title": "Max Segment S",
+          "type": "integer"
+        },
+        "model": {
+          "default": "Qwen/Qwen3-ASR-1.7B",
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "model_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Revision"
+        }
+      },
+      "title": "AsrConfig",
+      "type": "object"
+    },
+    "MixConfig": {
+      "additionalProperties": false,
+      "description": "Automix and encode targets. M5 extends this.",
+      "properties": {
+        "integrated_lufs": {
+          "default": -16.0,
+          "maximum": 0.0,
+          "minimum": -70.0,
+          "title": "Integrated Lufs",
+          "type": "number"
+        },
+        "mp3_bitrate_kbps": {
+          "default": 128,
+          "title": "Mp3 Bitrate Kbps",
+          "type": "integer"
+        },
+        "true_peak_dbtp": {
+          "default": -1.5,
+          "maximum": 0.0,
+          "minimum": -20.0,
+          "title": "True Peak Dbtp",
+          "type": "number"
+        }
+      },
+      "title": "MixConfig",
+      "type": "object"
+    },
+    "RecoveryConfig": {
+      "additionalProperties": false,
+      "description": "Escape hatches, all of them off by default and all of them recorded.",
+      "properties": {
+        "allow_processed_audio": {
+          "default": false,
+          "title": "Allow Processed Audio",
+          "type": "boolean"
+        },
+        "source_time_overrides": {
+          "additionalProperties": {
+            "$ref": "#/$defs/SourceTimeOverride"
+          },
+          "title": "Source Time Overrides",
+          "type": "object"
+        }
+      },
+      "title": "RecoveryConfig",
+      "type": "object"
+    },
+    "SourceTimeOverride": {
+      "additionalProperties": false,
+      "description": "Exceptional replacement timing for one source file.\n\nExists because file presence cannot recover missing timing metadata, and INV-12\nforbids inventing it. An override supplies evidence from outside the file — a field\nlog — and says so in ``reason``, which is required so the manifest and report can\nshow why a time was not read from the source.",
+      "properties": {
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "recording_date": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Recording Date"
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sha256"
+        },
+        "start_offset_samples": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Start Offset Samples"
+        },
+        "start_timecode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Start Timecode"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "title": "SourceTimeOverride",
+      "type": "object"
+    },
+    "TimecodeConfig": {
+      "additionalProperties": false,
+      "description": "How to interpret the timecode embedded in the source files.",
+      "properties": {
+        "frame_rate": {
+          "default": "30F",
+          "enum": [
+            "23.98F",
+            "24F",
+            "25F",
+            "29.97F",
+            "29.97DF",
+            "30F",
+            "50F",
+            "60F"
+          ],
+          "title": "Frame Rate",
+          "type": "string"
+        },
+        "origin_date": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Origin Date"
+        },
+        "origin_timecode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Origin Timecode"
+        },
+        "rollover_policy": {
+          "default": "infer_forward",
+          "enum": [
+            "infer_forward",
+            "reject"
+          ],
+          "title": "Rollover Policy",
+          "type": "string"
+        }
+      },
+      "title": "TimecodeConfig",
+      "type": "object"
+    },
+    "TrackConfig": {
+      "additionalProperties": false,
+      "description": "One physical transmitter, and the person wearing it.\n\nThe roster is durable: a track stays configured whether or not its wearer attended.\nPresence is decided by discovery in M1, not by editing this list.",
+      "properties": {
+        "input": {
+          "title": "Input",
+          "type": "string"
+        },
+        "receiver_channel": {
+          "maximum": 2,
+          "minimum": 1,
+          "title": "Receiver Channel",
+          "type": "integer"
+        },
+        "receiver_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "title": "Receiver Id",
+          "type": "string"
+        },
+        "speaker_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "title": "Speaker Id",
+          "type": "string"
+        },
+        "speaker_name": {
+          "minLength": 1,
+          "title": "Speaker Name",
+          "type": "string"
+        },
+        "track_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "title": "Track Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "track_id",
+        "receiver_id",
+        "receiver_channel",
+        "speaker_id",
+        "speaker_name",
+        "input"
+      ],
+      "title": "TrackConfig",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A complete, self-describing session.",
+  "properties": {
+    "active_tracks": {
+      "anyOf": [
+        {
+          "const": "auto",
+          "type": "string"
+        },
+        {
+          "items": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z0-9][a-z0-9_-]*$",
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ],
+      "default": "auto",
+      "title": "Active Tracks"
+    },
+    "activity": {
+      "$ref": "#/$defs/ActivityConfig"
+    },
+    "asr": {
+      "$ref": "#/$defs/AsrConfig"
+    },
+    "language": {
+      "default": "English",
+      "minLength": 1,
+      "title": "Language",
+      "type": "string"
+    },
+    "mix": {
+      "$ref": "#/$defs/MixConfig"
+    },
+    "recovery": {
+      "$ref": "#/$defs/RecoveryConfig"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "session_id": {
+      "minLength": 1,
+      "title": "Session Id",
+      "type": "string"
+    },
+    "timecode": {
+      "$ref": "#/$defs/TimecodeConfig"
+    },
+    "title": {
+      "minLength": 1,
+      "title": "Title",
+      "type": "string"
+    },
+    "tracks": {
+      "items": {
+        "$ref": "#/$defs/TrackConfig"
+      },
+      "minItems": 1,
+      "title": "Tracks",
+      "type": "array"
+    }
+  },
+  "required": [
+    "session_id",
+    "title",
+    "tracks"
+  ],
+  "title": "SessionConfig",
+  "type": "object"
+}

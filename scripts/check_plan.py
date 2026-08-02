@@ -32,8 +32,14 @@ ROADMAP = PLAN / "ROADMAP.md"
 INVARIANTS = PLAN / "INVARIANTS.md"
 QUESTIONS = PLAN / "OPEN-QUESTIONS.md"
 
-REQUIRED = (STATE, ROADMAP, INVARIANTS, QUESTIONS,
-            MILESTONES / "_template.md", DECISIONS / "0000-template.md")
+REQUIRED = (
+    STATE,
+    ROADMAP,
+    INVARIANTS,
+    QUESTIONS,
+    MILESTONES / "_template.md",
+    DECISIONS / "0000-template.md",
+)
 
 # Milestone ID prefixes in use — see ROADMAP.md. Add one when a new parallel
 # track is introduced. Keep in sync with scripts/scan_placeholders.py.
@@ -118,21 +124,21 @@ def main() -> int:
         for path in sorted(base.rglob("*")):
             if not path.is_file() or EXCLUDE_DIRS & set(path.parts):
                 continue
-            for m in PLACEHOLDER.finditer(read(path)):
-                problems.append(f"{path}: unfilled scaffold placeholder {m.group(0)}")
+            for found in PLACEHOLDER.finditer(read(path)):
+                problems.append(f"{path}: unfilled scaffold placeholder {found.group(0)}")
 
     # 3. Charters are well formed.
     charters: dict[str, Path] = {}
     for path in sorted(MILESTONES.glob("*.md")):
-        m = CHARTER_NAME.match(path.name)
-        if not m:
+        named = CHARTER_NAME.match(path.name)
+        if not named:
             if path.name != "_template.md":
                 problems.append(
                     f"{path}: filename does not start with a milestone ID "
                     f"({'/'.join(MILESTONE_PREFIXES)}<n>-<slug>.md)"
                 )
             continue
-        ms_id = m.group(1)
+        ms_id = named.group(1)
         charters[ms_id] = path
         text = read(path)
         if "**Status:**" not in text:
@@ -179,9 +185,9 @@ def main() -> int:
             problems.append(f"{QUESTIONS}: {oq} has no 'Needs:' field")
 
     adrs = {
-        m.group(1)
+        numbered.group(1)
         for p in DECISIONS.glob("*.md")
-        if (m := re.match(r"^(\d{4})-", p.name))
+        if (numbered := re.match(r"^(\d{4})-", p.name))
     }
 
     # 6. Every reference resolves.

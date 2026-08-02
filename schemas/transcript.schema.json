@@ -1,0 +1,207 @@
+{
+  "$defs": {
+    "SegmentProvenance": {
+      "additionalProperties": false,
+      "description": "Where a segment came from, so a surprising line can be traced back.",
+      "properties": {
+        "alignment_status": {
+          "enum": [
+            "aligned",
+            "segment_only",
+            "not_attempted"
+          ],
+          "title": "Alignment Status",
+          "type": "string"
+        },
+        "asr_model": {
+          "title": "Asr Model",
+          "type": "string"
+        },
+        "asr_model_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Asr Model Revision"
+        },
+        "source_candidate_id": {
+          "title": "Source Candidate Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "asr_model",
+        "alignment_status",
+        "source_candidate_id"
+      ],
+      "title": "SegmentProvenance",
+      "type": "object"
+    },
+    "TranscriptSegment": {
+      "additionalProperties": false,
+      "description": "One attributed utterance.",
+      "properties": {
+        "end_s": {
+          "minimum": 0.0,
+          "title": "End S",
+          "type": "number"
+        },
+        "overlap": {
+          "default": false,
+          "title": "Overlap",
+          "type": "boolean"
+        },
+        "provenance": {
+          "$ref": "#/$defs/SegmentProvenance"
+        },
+        "segment_id": {
+          "pattern": "^seg_\\d{6,}$",
+          "title": "Segment Id",
+          "type": "string"
+        },
+        "speaker_id": {
+          "title": "Speaker Id",
+          "type": "string"
+        },
+        "speaker_name": {
+          "title": "Speaker Name",
+          "type": "string"
+        },
+        "start_s": {
+          "minimum": 0.0,
+          "title": "Start S",
+          "type": "number"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "track_id": {
+          "title": "Track Id",
+          "type": "string"
+        },
+        "words": {
+          "items": {
+            "$ref": "#/$defs/TranscriptWord"
+          },
+          "title": "Words",
+          "type": "array"
+        }
+      },
+      "required": [
+        "segment_id",
+        "start_s",
+        "end_s",
+        "speaker_id",
+        "speaker_name",
+        "track_id",
+        "text",
+        "provenance"
+      ],
+      "title": "TranscriptSegment",
+      "type": "object"
+    },
+    "TranscriptSpeaker": {
+      "additionalProperties": false,
+      "description": "A participant, and the transmitter that captured them.",
+      "properties": {
+        "speaker_id": {
+          "title": "Speaker Id",
+          "type": "string"
+        },
+        "speaker_name": {
+          "title": "Speaker Name",
+          "type": "string"
+        },
+        "track_id": {
+          "title": "Track Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "speaker_id",
+        "speaker_name",
+        "track_id"
+      ],
+      "title": "TranscriptSpeaker",
+      "type": "object"
+    },
+    "TranscriptWord": {
+      "additionalProperties": false,
+      "description": "One word, with times in seconds at millisecond precision.",
+      "properties": {
+        "end_s": {
+          "minimum": 0.0,
+          "title": "End S",
+          "type": "number"
+        },
+        "start_s": {
+          "minimum": 0.0,
+          "title": "Start S",
+          "type": "number"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start_s",
+        "end_s",
+        "text"
+      ],
+      "title": "TranscriptWord",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The whole transcript, sorted and stable.",
+  "properties": {
+    "duration_s": {
+      "minimum": 0.0,
+      "title": "Duration S",
+      "type": "number"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "segments": {
+      "items": {
+        "$ref": "#/$defs/TranscriptSegment"
+      },
+      "title": "Segments",
+      "type": "array"
+    },
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
+    "speakers": {
+      "items": {
+        "$ref": "#/$defs/TranscriptSpeaker"
+      },
+      "title": "Speakers",
+      "type": "array"
+    },
+    "title": {
+      "title": "Title",
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id",
+    "title",
+    "duration_s"
+  ],
+  "title": "Transcript",
+  "type": "object"
+}

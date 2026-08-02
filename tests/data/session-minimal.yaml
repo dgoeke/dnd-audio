@@ -1,0 +1,51 @@
+# The same session as session-valid.yaml with every default omitted.
+#
+# This file exists to prove one property: a configuration that leaves a default unstated
+# must resolve — and therefore hash — identically to one that states it. Without that,
+# adding an explicit `max_new_tokens: 1024` to a session file would invalidate every
+# cached ASR result for no reason (INV-08).
+#
+# `timecode.origin_date` is stated because it has no default and must not be inferred
+# from a date-looking session_id.
+schema_version: 1
+session_id: "2026-08-15"
+title: "Session 01"
+timecode:
+  origin_date: "2026-08-15"
+tracks:
+  - track_id: "tx-a"
+    receiver_id: "rx-a"
+    receiver_channel: 1
+    speaker_id: "alice"
+    speaker_name: "Alice"
+    input: "raw/tx-a"
+  - track_id: "tx-b"
+    receiver_id: "rx-a"
+    receiver_channel: 2
+    speaker_id: "bob"
+    speaker_name: "Bob"
+    input: "raw/tx-b"
+  - track_id: "tx-c"
+    receiver_id: "rx-b"
+    receiver_channel: 1
+    speaker_id: "carol"
+    speaker_name: "Carol"
+    input: "raw/tx-c"
+  - track_id: "tx-d"
+    receiver_id: "rx-b"
+    receiver_channel: 2
+    speaker_id: "dan"
+    speaker_name: "Dan"
+    input: "raw/tx-d"
+  - track_id: "tx-e"
+    receiver_id: "rx-c"
+    receiver_channel: 1
+    speaker_id: "erin"
+    speaker_name: "Erin"
+    input: "raw/tx-e"
+  - track_id: "tx-f"
+    receiver_id: "rx-c"
+    receiver_channel: 2
+    speaker_id: "frank"
+    speaker_name: "Frank"
+    input: "raw/tx-f"
