@@ -1,9 +1,18 @@
 ---
 description: Begin a milestone — orient from the ledger, check preconditions, plan, then implement
-argument-hint: "<milestone id, e.g. 0, 2, 6a, H1>"
+argument-hint: "<milestone id, e.g. 0, 2, 6a, H1> [additional context]"
 ---
 
-Begin milestone **$1**. Work through these phases in order. Do not skip the
+**Invocation:** `$ARGUMENTS` — the milestone ID first, then anything else.
+
+Resolve **$0** to its charter under `docs/plan/milestones/`; a bare number means
+the M track (`2` is M2, never H2). That charter's own ID — `M0`, `M6a`, `H1` — is
+what `<ID>` means below. Anything the invoker typed after the ID is additional
+context for this run: a constraint, a correction, a place to start. Treat it as an
+amendment to the charter. Honor it, and if it conflicts with the charter, say so
+before writing code rather than silently picking one.
+
+Begin milestone **<ID>**. Work through these phases in order. Do not skip the
 orientation phase even if you think you remember the project — you do not, the
 context was cleared.
 
@@ -36,7 +45,7 @@ Report each explicitly, and stop if any fail:
 
 ## 3. Branch
 
-`git switch -c milestone/M$1-<short-slug>`
+`git switch -c milestone/<ID>-<short-slug>`
 
 ## 4. Plan
 
@@ -63,7 +72,7 @@ Then run an independent critique — Codex reasons differently and is worth hear
 before the code exists, not only after:
 
 ```bash
-./scripts/codex-review.sh plan $1
+./scripts/codex-review.sh plan <ID>
 ```
 
 Read its output, tell the user which points you accept and which you reject **with
@@ -86,4 +95,4 @@ Ground rules while working:
   drift; the next agent will trust the charter.
 - Run `./scripts/gate.sh` often. Commit to the branch at meaningful checkpoints.
 
-When the gate criteria are met, run `/ms-verify $1`.
+When the gate criteria are met, run `/ms-verify <ID>`.

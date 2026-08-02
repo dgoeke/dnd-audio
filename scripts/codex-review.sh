@@ -17,19 +17,30 @@ MS="${2:-}"
 BASE="${3:-main}"
 
 if [ -z "$MODE" ] || [ -z "$MS" ]; then
-    sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+    # The header comment block below the shebang is the usage message. Read it
+    # rather than hardcoding a line range, which silently rots when it is edited.
+    awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
     exit 2
 fi
 
 command -v codex >/dev/null 2>&1 || { echo "codex not on PATH"; exit 127; }
 
-MS="${MS#M}"; MS="${MS#m}"
-CHARTER=$(ls docs/plan/milestones/[MH]"${MS}"-*.md 2>/dev/null | head -1)
+# Resolve the charter, accepting 0, m1, M6a, or H1. A bare number means the M
+# track: '2' is M2, never H2. Getting this wrong reviews the wrong milestone
+# against a prompt that still looks plausible, so it is deliberately explicit.
+MS="${MS^}"
+CHARTER=$(ls docs/plan/milestones/"${MS}"-*.md 2>/dev/null | head -1)
+[ -n "$CHARTER" ] || CHARTER=$(ls docs/plan/milestones/M"${MS}"-*.md 2>/dev/null | head -1)
+[ -n "$CHARTER" ] || CHARTER=$(ls docs/plan/milestones/[A-Z]"${MS}"-*.md 2>/dev/null | head -1)
 [ -n "$CHARTER" ] || { echo "no charter found for milestone '$MS'"; exit 2; }
+
+# Canonical ID from the file that actually matched, so the review filename and
+# title name the milestone being reviewed rather than what was typed.
+MS=$(basename "$CHARTER" | cut -d- -f1)
 
 mkdir -p docs/plan/reviews
 STAMP=$(date +%Y%m%d-%H%M)
-OUT="docs/plan/reviews/M${MS}-${MODE}-${STAMP}.md"
+OUT="docs/plan/reviews/${MS}-${MODE}-${STAMP}.md"
 
 COMMON="Read these before forming an opinion, even if some are already in context:
 
@@ -68,7 +79,7 @@ Critique the plan before it is implemented. Specifically:
   5. What would you do differently, and why?
 
 Do not modify any files. Output a review, not a patch."
-    echo "codex: critiquing plan for milestone M${MS} -> ${OUT}"
+    echo "codex: critiquing plan for milestone ${MS} -> ${OUT}"
     codex exec -s read-only "$PROMPT" </dev/null 2>&1 | tee "$OUT"
     ;;
 
@@ -96,8 +107,8 @@ Ignore formatting and naming preferences; ruff and the type checker already ran.
         echo "warning: working tree is dirty; uncommitted changes are NOT in this review."
         echo "         commit to the milestone branch first, or re-run with CODEX_UNCOMMITTED=1."
     fi
-    echo "codex: reviewing milestone M${MS} (${SCOPE[*]}) -> ${OUT}"
-    codex review "${SCOPE[@]}" --title "Milestone M${MS}" "$PROMPT" </dev/null 2>&1 | tee "$OUT"
+    echo "codex: reviewing milestone ${MS} (${SCOPE[*]}) -> ${OUT}"
+    codex review "${SCOPE[@]}" --title "Milestone ${MS}" "$PROMPT" </dev/null 2>&1 | tee "$OUT"
     ;;
 
   *)

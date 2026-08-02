@@ -64,6 +64,9 @@ record which findings were rejected and why.
   that would fail if the behavior regressed.
 - **No unexplained skipped tests.** Every `skip`/`xfail` needs a `reason=` naming
   the milestone (`M6b`) or open question (`OQ-004`) that will resolve it.
+- **The ledger stays consistent.** `scripts/check_plan.py` runs in the gate: every
+  milestone has a charter, a roadmap entry, and a `STATE.md` row, and every
+  `INV-`/`OQ-`/`ADR-` reference resolves to something that exists.
 - **Deterministic artifacts stay byte-stable.** See `INVARIANTS.md`.
 
 ## Recording knowledge as you go

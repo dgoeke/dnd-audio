@@ -72,6 +72,7 @@ fi
 # --- process checks -----------------------------------------------------------
 
 step "placeholder scan" python3 scripts/scan_placeholders.py
+step "plan consistency" python3 scripts/check_plan.py
 
 # --- summary ------------------------------------------------------------------
 

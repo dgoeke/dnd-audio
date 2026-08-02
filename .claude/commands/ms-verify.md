@@ -1,9 +1,17 @@
 ---
 description: Verify a milestone — run the gate, prove each criterion, and get independent review
-argument-hint: "<milestone id, e.g. 0, 2, 6a, H1>"
+argument-hint: "<milestone id, e.g. 0, 2, 6a, H1> [additional context]"
 ---
 
-Verify milestone **$1**. Your job in this command is to be the adversary of the
+**Invocation:** `$ARGUMENTS` — the milestone ID first, then anything else.
+
+Resolve **$0** to its charter under `docs/plan/milestones/`; a bare number means
+the M track (`2` is M2, never H2). That charter's own ID — `M0`, `M6a`, `H1` — is
+what `<ID>` means below. Anything the invoker typed after the ID names something
+to scrutinize particularly hard. Add it to the hunt; it never replaces a gate
+criterion or lowers the bar for a verdict.
+
+Verify milestone **<ID>**. Your job in this command is to be the adversary of the
 code, including code you wrote yourself an hour ago. A milestone is not complete
 because it looks complete.
 
@@ -55,7 +63,7 @@ Check for each of these and report what you find:
 Commit the branch first, then:
 
 ```bash
-./scripts/codex-review.sh code $1
+./scripts/codex-review.sh code <ID>
 ```
 
 Codex has a genuinely different read on this kind of code; the point of this step
@@ -81,7 +89,7 @@ State either:
 
 - **VERIFIED** — every criterion has a named, executed proof; the gate passes;
   outstanding findings are deferred or rejected with reasons. Set the milestone to
-  `verified` in `STATE.md` and run `/ms-close $1`.
+  `verified` in `STATE.md` and run `/ms-close <ID>`.
 - **NOT VERIFIED** — list precisely what is missing and what the next step is.
 
 Do not report VERIFIED with caveats. A caveat means not verified.

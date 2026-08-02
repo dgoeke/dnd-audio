@@ -29,8 +29,9 @@ The repository is the memory. Durable knowledge has exactly one home:
 one line — `@AGENTS.md` — plus the Claude-only slash-command section, so Claude
 and Codex cannot drift apart on project rules. Three slash commands (`/ms-start`,
 `/ms-verify`, `/ms-close`) enforce the cycle. `scripts/gate.sh` is the mechanical
-gate; `scripts/codex-review.sh` is an independent second opinion that supplies
-*role* in its prompt and *context* by pointing at `AGENTS.md`.
+gate; `scripts/check_plan.py` keeps the ledger internally consistent;
+`scripts/codex-review.sh` is an independent second opinion that supplies *role* in
+its prompt and *context* by pointing at `AGENTS.md`.
 
 Charters are deliberately thin — goal, gate, non-goals, risks — because early
 milestones will change what later ones should do. Task-level planning happens at
@@ -50,6 +51,8 @@ milestones will change what later ones should do. Task-level planning happens at
 
 - Every milestone pays a small closeout tax. That is the point.
 - Two places can drift: charters vs. reality, and `STATE.md` vs. the tree.
-  `/ms-close` updates both, and `/ms-start` re-reads them before trusting them.
+  `/ms-close` updates both, `/ms-start` re-reads them before trusting them, and
+  `scripts/check_plan.py` fails the gate when their cross-references disagree.
+  Reality still needs a human; the cross-references do not.
 - A milestone that changes a later milestone's premise must edit that charter at
   close time. If it does not, the next agent inherits a false plan.

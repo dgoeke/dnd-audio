@@ -1,17 +1,25 @@
 ---
 description: Close a milestone — record decisions, notes, and state, then commit
-argument-hint: "<milestone id, e.g. 0, 2, 6a, H1>"
+argument-hint: "<milestone id, e.g. 0, 2, 6a, H1> [additional context]"
 ---
 
-Close milestone **$1**. This is where the context you are about to lose gets
+**Invocation:** `$ARGUMENTS` — the milestone ID first, then anything else.
+
+Resolve **$0** to its charter under `docs/plan/milestones/`; a bare number means
+the M track (`2` is M2, never H2). That charter's own ID — `M0`, `M6a`, `H1` — is
+what `<ID>` means below. Anything the invoker typed after the ID is something they
+want recorded in the closeout. Write it in; it never substitutes for a section you
+would otherwise have filled.
+
+Close milestone **<ID>**. This is where the context you are about to lose gets
 written down. Treat it as the deliverable, not the paperwork.
 
-Precondition: `/ms-verify $1` returned **VERIFIED** and `STATE.md` shows this
+Precondition: `/ms-verify <ID>` returned **VERIFIED** and `STATE.md` shows this
 milestone as `verified`. If not, stop and verify first.
 
 ## 1. Write the closeout
 
-In `docs/plan/milestones/M$1-*.md`, **replace the `## Working plan` section** with
+In `docs/plan/milestones/<ID>-*.md`, **replace the `## Working plan` section** with
 a filled-in `## Closeout`. Every heading in the template gets a real answer:
 
 - **What works end to end.** What a user can actually run now, and what they get.
@@ -50,7 +58,7 @@ This is the step that keeps the plan honest, and the one most likely to be skipp
 Commit on the milestone branch:
 
 ```
-M$1: <one-line summary>
+<ID>: <one-line summary>
 
 <what landed, in a few lines>
 
@@ -62,7 +70,7 @@ Open questions: OQ-NNN raised, OQ-NNN answered
 Then **ask the user** before touching `main`. Propose:
 
 - merge to `main` (`--no-ff` so the milestone stays a visible unit), and
-- tag `m$1-closed` so a later bisect can find the boundary.
+- tag `<ID>-closed` so a later bisect can find the boundary.
 
 Confirm `main` is green after merging.
 
