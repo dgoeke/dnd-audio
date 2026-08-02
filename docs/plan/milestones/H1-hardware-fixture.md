@@ -20,7 +20,10 @@ multi-hour clock stability, which is H2.
 - [ ] Jam: receiver A LTC out → receiver B LTC in, Sync, disconnect. Then A → C,
       Sync, disconnect.
 - [ ] Record the displayed timecode and rate on all three receivers after the
-      procedure — this is evidence for OQ-012 and cannot be recovered later.
+      procedure, **against wall-clock time** — this is the only evidence for OQ-012 and
+      OQ-015 and it cannot be recovered later. OQ-015 asks whether `00:00:00:00` is real
+      midnight; at a fractional non-drop rate a timecode day is 86 486.4 s rather than
+      86 400, so a session mixing BWF and timecode evidence rests on the answer (ADR-0009).
 - [ ] Confirm 32-bit-float internal recording, storage, and battery on all six
       transmitters; confirm the recording indicator on each after starting.
 - [ ] Start the transmitters a few seconds apart.
@@ -35,7 +38,7 @@ multi-hour clock stability, which is H2.
 
 - [ ] Every `OQ-` entry with `Needs: H1` is marked `answered` (with the evidence) or
       explicitly re-scoped: **OQ-001, OQ-002, OQ-003, OQ-004, OQ-005, OQ-007,
-      OQ-011, OQ-012**.
+      OQ-011, OQ-012, OQ-015**.
 - [ ] A fixture note in `docs/` documents the discovered filename grammar, metadata
       layout, and timecode behavior, including what differed from the assumptions.
 - [ ] Sanitized `ffprobe` JSON and the generic RIFF chunk inventory are committed.

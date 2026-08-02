@@ -7,8 +7,10 @@ Three properties, one module, so that no later milestone has to reinvent them:
   floats are rejected rather than emitted as the invalid JSON tokens ``NaN`` and
   ``Infinity``.
 * **Exact time** (INV-04). Timeline arithmetic stays in :class:`~fractions.Fraction`.
-  :func:`to_milliseconds` is the one quantizer, with an explicit tie rule, and
-  :func:`public_seconds` is the one place a float is produced.
+  :func:`to_milliseconds` and :func:`to_samples` are the only quantizers and share one
+  explicit tie rule; :func:`public_seconds` is the one place a float is produced. Two
+  destinations, one rounding rule, so a millisecond and a sample position can never
+  disagree about which way a half goes (ADR-0008).
 * **Bounded memory** (INV-07). :func:`sha256_file` streams. Nothing here reads a whole
   file into memory, because from M1 onward these helpers are pointed at multi-gigabyte
   recordings.
@@ -38,6 +40,7 @@ __all__ = [
     "sha256_file",
     "sha256_stream",
     "to_milliseconds",
+    "to_samples",
     "write_atomic",
     "write_json_atomic",
 ]
@@ -180,22 +183,55 @@ def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def to_milliseconds(seconds: Fraction | int) -> int:
-    """Quantize an exact time to integer milliseconds, halves away from zero.
+def _quantize(scaled: Fraction) -> int:
+    """Round an exact value to an integer, halves away from zero.
 
-    The tie rule is stated rather than inherited: Python's :func:`round` is
-    banker's rounding, so ``round(0.0005 * 1000)`` and ``round(0.0015 * 1000)`` disagree
-    about which way a half goes. An artifact whose timestamps depend on that is not
-    byte-stable in any useful sense (INV-02).
-
-    Takes a :class:`~fractions.Fraction` because INV-04 forbids accumulating floats;
-    the conversion is exact and happens once, at the boundary.
+    The one place this project rounds. The tie rule is stated rather than inherited:
+    Python's :func:`round` is banker's rounding, so ``round(0.5)`` and ``round(1.5)``
+    disagree about which way a half goes, and an artifact whose values depend on that is
+    not byte-stable in any useful sense (INV-02).
     """
-    scaled = Fraction(seconds) * 1000
     magnitude, remainder = divmod(abs(scaled.numerator), scaled.denominator)
     if 2 * remainder >= scaled.denominator:
         magnitude += 1
     return -magnitude if scaled.numerator < 0 else magnitude
+
+
+def to_milliseconds(seconds: Fraction | int) -> int:
+    """Quantize an exact time to integer milliseconds, halves away from zero.
+
+    Takes a :class:`~fractions.Fraction` because INV-04 forbids accumulating floats;
+    the conversion is exact and happens once, at the boundary.
+    """
+    return _quantize(Fraction(seconds) * 1000)
+
+
+def to_samples(seconds: Fraction | int, rate: int) -> int:
+    """Quantize an exact time to an integer sample index at ``rate``.
+
+    The rule ADR-0008 defines, and the only place rational time reaches the sample grid.
+    One frame at 30000/1001 fps is 8008/5 samples at 48 kHz, so an integer sample position
+    is a property of this rounding rule rather than of the evidence — which is why the
+    rule is named, shared with :func:`to_milliseconds`, and tested rather than inlined at
+    each call site.
+
+    Callers pass a **session-relative** time, already reduced by a single exact
+    subtraction. Quantizing an absolute position and then subtracting a quantized origin
+    rounds twice, doubles the worst-case error, and makes a chunk's position depend on
+    where ``origin_timecode`` happens to sit inside a sample.
+
+    Args:
+        seconds: Exact time. May be negative — a session-relative offset legitimately is.
+        rate: Samples per second of the target grid.
+
+    Raises:
+        ValueError: if ``rate`` is not positive. A zero or negative rate would make every
+            position infinite or mirrored, and defaulting one would invent a timeline.
+    """
+    if rate <= 0:
+        message = f"rate must be positive, got {rate}"
+        raise ValueError(message)
+    return _quantize(Fraction(seconds) * rate)
 
 
 def public_seconds(seconds: Fraction | int) -> float:

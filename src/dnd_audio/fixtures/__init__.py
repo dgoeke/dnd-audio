@@ -18,20 +18,24 @@ Three modules, deliberately separate:
 from __future__ import annotations
 
 from dnd_audio.fixtures.session import (
+    ClapInterval,
     FixtureChunk,
     FixtureSession,
     FixtureTrack,
     FixtureTruth,
+    SpeechInterval,
     WrittenChunk,
     build_session,
     canonical_session,
 )
 
 __all__ = [
+    "ClapInterval",
     "FixtureChunk",
     "FixtureSession",
     "FixtureTrack",
     "FixtureTruth",
+    "SpeechInterval",
     "WrittenChunk",
     "build_session",
     "canonical_session",

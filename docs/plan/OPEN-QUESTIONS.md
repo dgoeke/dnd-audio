@@ -54,6 +54,13 @@ is a timecode tag plus configured frame rate.
 **Evidence:** `bext` chunk contents from a file whose wall-clock start is known.
 **Needs:** H1 · **Blocks:** M1, M2 · **Status:** open
 
+**What M2 does with it.** `timeline/rasterize.py` treats a `bwf_sample_reference` as
+unsigned samples since **midnight at the file's own rate**, converts it to exact rational
+seconds in that domain, and unwraps a 24-hour cycle by adding whole samples-per-day before
+any conversion. If the real answer is "midnight-relative but at 48 kHz regardless of the
+file's rate", or "relative to power-on rather than midnight", the change is localized to
+that one conversion — but every placement in every session moves. `rg 'OQ-004'` finds it.
+
 ## OQ-005 — Are there DJI-private or iXML chunks, and do they carry timing?
 **Assumption:** There may be; the generic RIFF inventory captures ID/offset/size
 regardless, with bounded textual payloads retained and every payload hashed in full.
@@ -82,6 +89,14 @@ future coherent processing degrade over four hours.
 **Evidence:** Differential clap lag measured near the start and near the end of a
 ~4-hour recording.
 **Needs:** H2 · **Blocks:** nothing (warning threshold tuning) · **Status:** open
+
+**M2 built the instrument.** `session.sync_qa` (off by default) correlates each track
+against a reference near both ends and reports the lag at each, never a correction — a
+constant lag is a timecode disagreement, a lag that changes between the ends is drift.
+Answering this is now enabling a config flag on a long recording and reading the warnings,
+not writing measurement code. Proven on a synthetic drift fixture whose tracks carry
+identical metadata and differ only in where the end transient sits in the audio: +0.000 ms
+at the start, +20.000 ms at the end.
 
 ## OQ-007 — Does dual-file mode produce `orig`/`edit` pairs as assumed?
 **Assumption:** Yes, distinguishable by filename suffix; `orig` is 32-bit float and
@@ -152,3 +167,52 @@ preflight, which knows the actual session length instead of assuming four hours.
 **Evidence:** Measure `work/` after the first complete run.
 **Needs:** M2 (preflight), H2 or the first real session (real numbers) ·
 **Blocks:** nothing · **Status:** open
+
+**Partially answered in M2, and the arithmetic's premise changed.** M2 builds a preflight
+that estimates work-space from the session's *actual* length rather than an assumed four
+hours, and from the artifacts actually requested. Two of the three terms in the original
+estimate are now wrong by construction: the 48 kHz working audio is a segment map rather
+than 15 GiB of materialized float32 (ADR-0011), and the mix intermediate belongs to M5.
+What M2 can measure is its own footprint; the full-pipeline number this question asks for
+still needs H2 or a real session, so this stays **open**.
+
+## OQ-014 — How long is a real session, and when is an inferred span implausible?
+**Assumption:** Under 12 hours. A span longer than that is unambiguous arithmetically —
+midnight rollover is unique within one 24-hour cycle — but implausible enough to be worth
+a human's attention, so it warns rather than failing (ADR-0009).
+**Why it matters:** Only whether a warning fires. It changes no placement and no artifact.
+Set too low it is noise; set too high it never fires and the operator learns nothing from
+a session whose timecode is a day out.
+**Evidence:** The wall-clock length of real sessions, and whether the warning ever fires
+on one.
+**Needs:** H2 or the first real session · **Blocks:** nothing · **Status:** open
+
+## OQ-016 — Is a session always the shortest arc through its chunk start times?
+**Assumption:** Yes. With no configured origin, M2 infers which chunks fall after midnight
+by treating the widest quiet stretch in the sources' start times as the one containing
+midnight — which is the same as assuming the session is the *shortest* arc that contains
+every start (ADR-0009, `timeline/origin.py::_cycles_by_largest_gap`).
+**Why it matters:** Starts at 23:00 and 01:00 admit two readings: a two-hour session across
+midnight, or a twenty-two-hour session within one day. The evidence does not distinguish
+them; this assumption picks the first. A session that genuinely ran longer than half a day
+without a configured origin would be reconstructed with its chunks on the wrong days, which
+moves audio by hours. Every session relying on the inference is warned
+(`midnight_rollover_inferred`), and a recorded `origin_date` plus `origin_timecode` removes
+the question entirely.
+**Evidence:** The wall-clock span of real sessions, and whether any is ever run without a
+configured origin. Overlaps with OQ-014, which asks the same thing from the other side.
+**Needs:** H2 or the first real session · **Blocks:** nothing · **Status:** open
+
+## OQ-015 — Where is the DJI receivers' timecode zero relative to real midnight?
+**Assumption:** `00:00:00:00` is jammed to real midnight, so a timecode and a BWF sample
+reference in the same session share a day origin.
+**Why it matters:** At a fractional non-drop rate a timecode day is not a real day —
+2 592 000 frames at 30000/1001 fps is 86 486.4 seconds, 86.4 seconds longer than a
+calendar day. Within a session that costs nothing, because elapsed time converts exactly;
+it matters only where the two domains are anchored to each other. A session mixing BWF and
+timecode evidence at 23.98F or 29.97F therefore rests on this assumption, and M2 warns when
+one does (ADR-0009). The canonical fixture mixes exactly these domains, at 30F, where a
+timecode day *is* 86 400 seconds and the question does not arise.
+**Evidence:** The displayed timecode on all three receivers after the LTC jam, recorded
+against wall-clock time, cross-checked with the `bext` origination time in the files.
+**Needs:** H1 · **Blocks:** nothing directly · **Status:** open

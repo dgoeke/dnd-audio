@@ -217,10 +217,60 @@
       "title": "SourceTimeOverride",
       "type": "object"
     },
+    "SyncQaConfig": {
+      "additionalProperties": false,
+      "description": "Optional clap cross-correlation, as synchronization QA only.\n\nThe spec is explicit that this \"should report disagreement with timecode, not override\nvalid timecode automatically\", so nothing here can move a sample. Off by default: it\ncosts a correlation over two windows per track and answers a question most sessions do\nnot have.\n\nMeasuring near *both* ends is the point. A constant lag is a constant timecode offset;\na lag that *changes* between the start and the end is evidence of sample-clock drift\n(OQ-006), which is the thing the MVP assumes is negligible and never corrects.",
+      "properties": {
+        "drift_warn_ms": {
+          "default": 5,
+          "exclusiveMinimum": 0,
+          "maximum": 1000,
+          "title": "Drift Warn Ms",
+          "type": "integer"
+        },
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "max_lag_ms": {
+          "default": 100,
+          "exclusiveMinimum": 0,
+          "maximum": 5000,
+          "title": "Max Lag Ms",
+          "type": "integer"
+        },
+        "min_correlation": {
+          "default": 0.5,
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "Min Correlation",
+          "type": "number"
+        },
+        "window_s": {
+          "default": 30,
+          "exclusiveMinimum": 0,
+          "maximum": 300,
+          "title": "Window S",
+          "type": "integer"
+        }
+      },
+      "title": "SyncQaConfig",
+      "type": "object"
+    },
     "TimecodeConfig": {
       "additionalProperties": false,
       "description": "How to interpret the timecode embedded in the source files.",
       "properties": {
+        "chunk_overlap_policy": {
+          "default": "reject",
+          "enum": [
+            "reject",
+            "nudge_later"
+          ],
+          "title": "Chunk Overlap Policy",
+          "type": "string"
+        },
         "frame_rate": {
           "default": "30F",
           "enum": [
@@ -378,6 +428,9 @@
       "minLength": 1,
       "title": "Session Id",
       "type": "string"
+    },
+    "sync_qa": {
+      "$ref": "#/$defs/SyncQaConfig"
     },
     "timecode": {
       "$ref": "#/$defs/TimecodeConfig"

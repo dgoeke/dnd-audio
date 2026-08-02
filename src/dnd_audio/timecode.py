@@ -33,6 +33,7 @@ __all__ = [
     "FrameRate",
     "Timecode",
     "frame_index",
+    "frames_per_day",
     "parse_frame_rate",
     "parse_timecode",
 ]
@@ -182,6 +183,31 @@ def frame_index(timecode: Timecode) -> int:
     total_minutes = timecode.hours * 60 + timecode.minutes
     dropped_per_minute = nominal // 15  # 2 at 30 fps, 4 at 60 fps
     return index - dropped_per_minute * (total_minutes - total_minutes // 10)
+
+
+def frames_per_day(frame_rate: FrameRate) -> int:
+    """How many frames one full 24-hour timecode cycle contains.
+
+    The number a wrapped timecode must be unwrapped by, and **not** something that can be
+    expressed in seconds without knowing the rate (ADR-0009). At 30000/1001 non-drop a day
+    is 2 592 000 frames, which is 86 486.4 real seconds — 86.4 seconds longer than a
+    calendar day, because non-drop fractional timecode does not track wall time. That is
+    the entire reason drop-frame exists, and at 29.97DF the same cycle is 2 589 408 frames
+    and 86 399.9136 seconds.
+
+    Adding "a day" in seconds instead would misplace a wrapped chunk by those 86.4 seconds
+    and manufacture a large false overlap out of correct evidence.
+
+    This is :func:`frame_index` evaluated at ``24:00:00:00`` — the first label a day does
+    not have — expressed directly, because that timecode cannot be parsed.
+    """
+    nominal = frame_rate.frames_per_timecode_second
+    total = nominal * 86400
+    if not frame_rate.drop_frame:
+        return total
+    total_minutes = 24 * 60
+    dropped_per_minute = nominal // 15
+    return total - dropped_per_minute * (total_minutes - total_minutes // 10)
 
 
 def _reject_out_of_range(

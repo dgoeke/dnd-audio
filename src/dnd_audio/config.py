@@ -38,6 +38,7 @@ __all__ = [
     "RecoveryConfig",
     "SessionConfig",
     "SourceTimeOverride",
+    "SyncQaConfig",
     "TimecodeConfig",
     "TrackConfig",
     "config_hash",
@@ -57,6 +58,12 @@ FrameRateLabel = Literal["23.98F", "24F", "25F", "29.97F", "29.97DF", "30F", "50
 #: and session span make it unambiguous. ``reject`` never infers and fails instead;
 #: the spec named only the former, so the latter is this project's choice (ADR-0005).
 RolloverPolicy = Literal["infer_forward", "reject"]
+
+#: ``reject`` makes a material chunk overlap fatal; ``nudge_later`` places the later chunk
+#: immediately after the earlier one and records the shift. The spec requires "an explicit
+#: policy rather than silently discarding audio" without naming values, so these are this
+#: project's (ADR-0010). There is deliberately no value that trims or drops a chunk.
+ChunkOverlapPolicy = Literal["reject", "nudge_later"]
 
 #: MPEG-1 Layer III bitrates. Anything else makes the encoder pick for us.
 _MP3_BITRATES: Final = frozenset({32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320})
@@ -105,6 +112,13 @@ class TimecodeConfig(_Strict):
     #: zero is the earliest normalized valid source time.
     origin_timecode: str | None = None
     rollover_policy: RolloverPolicy = "infer_forward"
+    #: What to do when two chunks of one track claim overlapping time. The spec requires
+    #: "an explicit policy rather than silently discarding audio" and names no values;
+    #: these are ADR-0010's. Overlaps within the quantization tolerance are resolved under
+    #: either policy — at 29.97 fps a timecode start is quantized to 1602 samples, so
+    #: ordinary contiguous chunks routinely appear to overlap by less than a frame.
+    #: Neither value discards a sample.
+    chunk_overlap_policy: ChunkOverlapPolicy = "reject"
 
     @model_validator(mode="after")
     def _check_origin(self) -> TimecodeConfig:
@@ -208,6 +222,38 @@ class ActivityConfig(_Strict):
     correlation_max_lag_ms: int = Field(default=30, gt=0, le=1000)
 
 
+class SyncQaConfig(_Strict):
+    """Optional clap cross-correlation, as synchronization QA only.
+
+    The spec is explicit that this "should report disagreement with timecode, not override
+    valid timecode automatically", so nothing here can move a sample. Off by default: it
+    costs a correlation over two windows per track and answers a question most sessions do
+    not have.
+
+    Measuring near *both* ends is the point. A constant lag is a constant timecode offset;
+    a lag that *changes* between the start and the end is evidence of sample-clock drift
+    (OQ-006), which is the thing the MVP assumes is negligible and never corrects.
+    """
+
+    enabled: bool = False
+    #: Seconds of audio correlated at each end. Bounded, because this window is one of the
+    #: few places in the pipeline that holds a contiguous array, and an unbounded value in
+    #: a session file would be an INV-07 violation an operator could configure.
+    window_s: int = Field(default=30, gt=0, le=300)
+    #: How far apart two tracks' transients may be and still be matched. Wider than
+    #: `activity.correlation_max_lag_ms`, which is about acoustic bleed across a table;
+    #: this one is about receivers whose timecode disagrees.
+    max_lag_ms: int = Field(default=100, gt=0, le=5000)
+    #: A start-to-end change in measured lag beyond this warns. Integer milliseconds
+    #: rather than a float, so a threshold comparison cannot depend on binary rounding.
+    drift_warn_ms: int = Field(default=5, gt=0, le=1000)
+    #: Below this normalized peak correlation, QA reports that it found no shared
+    #: transient instead of reporting a lag. Without it, correlating two independent noise
+    #: floors yields a confident-looking number for a clap that was never recorded. The
+    #: value is a starting point; H1 and H2 are what will tune it (OQ-006).
+    min_correlation: float = Field(default=0.5, gt=0.0, le=1.0)
+
+
 class MixConfig(_Strict):
     """Automix and encode targets. M5 extends this."""
 
@@ -309,6 +355,7 @@ class SessionConfig(_Strict):
     tracks: list[TrackConfig] = Field(min_length=1)
     asr: AsrConfig = Field(default_factory=AsrConfig)
     activity: ActivityConfig = Field(default_factory=ActivityConfig)
+    sync_qa: SyncQaConfig = Field(default_factory=SyncQaConfig)
     mix: MixConfig = Field(default_factory=MixConfig)
     recovery: RecoveryConfig = Field(default_factory=RecoveryConfig)
 

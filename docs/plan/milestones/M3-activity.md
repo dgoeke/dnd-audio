@@ -47,6 +47,39 @@ that both the transcript branch and the automixer consume.
   that track" for the MVP baseline.
 - Gain envelopes. That is M5 consuming this graph.
 
+## What M2 already provides (read before starting)
+
+- **The 16 kHz audio VAD consumes already exists, cached and byte-stable.** Each track's
+  `DerivativeRecord` in `work/timeline.json` names its `relative_path` under
+  `work/cache/audio/16000/`. Read it through `timeline.pcm.open_pcm`; do not resample
+  anything yourself. `DerivativeCache.get()` takes the expected output length, because a
+  cache entry that is the wrong length must be a miss rather than a subtly short track.
+- **The 48↔16 kHz mapping is a settled contract — use it, do not re-derive it.**
+  `timeline.resample.to_source_sample` and `to_derivative_interval`. Output sample `k`
+  corresponds to input sample `3k` exactly (the FIR's group delay divides by the decimation
+  factor). The reverse direction lands between grid points, so an interval **floors its
+  start and ceils its end**. Rounding both ends the same way shrinks a speech region by up
+  to two samples, which is how a word loses its first phoneme. M3 is this contract's first
+  real consumer.
+- **Silence has three causes and they are deliberately indistinguishable** to a
+  `TrackReader` caller: before the track started, inside a real gap, and after it stopped.
+  A VAD sees zeros in all three. Every track answers to the session's aligned
+  `duration_samples`, so do not special-case a track that ended early.
+- **The lag-tolerant normalized cross-correlation this milestone's bleed gate needs already
+  exists.** `timeline.syncqa.measure_lag` returns the peak correlation and the lag it
+  occurred at, over a bounded lag window, normalized by both signals' energy — an
+  unnormalized correlation ranks tracks by volume and calls the loudest one the best match.
+  Reuse it rather than writing a second one; if M3 needs a variant, extend it there.
+- **INV-08 for the activity cache.** Whatever key M3 builds must carry
+  `TIMELINE_SEMANTICS_VERSION` and the derivative's own `cache_key`, not just the source
+  hashes: a placement fix moves a chunk without changing a source byte, and a stale
+  activity graph aligned to a timeline that has moved is not obviously wrong.
+- **Commit a cache entry only after INV-01 has been re-verified**, never at publish time.
+  M2 shipped the other ordering and it meant a run that correctly *failed* on a changed
+  source still left a poisoned entry keyed on the bytes it read. See M2's closeout.
+- **`timeline.json`'s schema is frozen at version 1** — additive optional fields only.
+  Every interval in it is half-open and there are no floats anywhere in the document.
+
 ## Known risks and open questions
 
 - Depends on **OQ-010**.

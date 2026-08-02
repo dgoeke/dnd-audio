@@ -1,0 +1,508 @@
+{
+  "$defs": {
+    "DerivativeRecord": {
+      "additionalProperties": false,
+      "description": "A cached resampling of one track, and everything needed to map back to 48 kHz.\n\nOutput sample `k` corresponds to input sample `k * decimation`, exactly, because the\ngroup delay divides by the decimation factor — see :mod:`dnd_audio.timeline.fir`. The\nreverse direction lands between grid points, so an interval is converted by flooring\nits start and ceiling its end (`timeline.resample.to_derivative_interval`) rather than\nby one rounding rule for both ends.",
+      "properties": {
+        "cache_key": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Cache Key",
+          "type": "string"
+        },
+        "decimation": {
+          "exclusiveMinimum": 0,
+          "title": "Decimation",
+          "type": "integer"
+        },
+        "filter_identity": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Filter Identity",
+          "type": "string"
+        },
+        "filter_name": {
+          "minLength": 1,
+          "title": "Filter Name",
+          "type": "string"
+        },
+        "group_delay_input_samples": {
+          "minimum": 0,
+          "title": "Group Delay Input Samples",
+          "type": "integer"
+        },
+        "group_delay_output_samples": {
+          "minimum": 0,
+          "title": "Group Delay Output Samples",
+          "type": "integer"
+        },
+        "input_samples": {
+          "minimum": 0,
+          "title": "Input Samples",
+          "type": "integer"
+        },
+        "length_rule": {
+          "const": "ceil",
+          "default": "ceil",
+          "title": "Length Rule",
+          "type": "string"
+        },
+        "output_samples": {
+          "minimum": 0,
+          "title": "Output Samples",
+          "type": "integer"
+        },
+        "relative_path": {
+          "minLength": 1,
+          "title": "Relative Path",
+          "type": "string"
+        },
+        "sample_rate": {
+          "exclusiveMinimum": 0,
+          "title": "Sample Rate",
+          "type": "integer"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sample_rate",
+        "relative_path",
+        "cache_key",
+        "size_bytes",
+        "input_samples",
+        "output_samples",
+        "decimation",
+        "filter_name",
+        "filter_identity",
+        "group_delay_input_samples",
+        "group_delay_output_samples"
+      ],
+      "title": "DerivativeRecord",
+      "type": "object"
+    },
+    "RationalRate": {
+      "additionalProperties": false,
+      "description": "An exact rate, as the two integers it actually is.\n\nINV-04: 30000/1001 is never serialized as 29.97. A consumer that wants a float can\ndivide; a consumer that wants exactness cannot recover it from one.",
+      "properties": {
+        "denominator": {
+          "exclusiveMinimum": 0,
+          "title": "Denominator",
+          "type": "integer"
+        },
+        "numerator": {
+          "exclusiveMinimum": 0,
+          "title": "Numerator",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "numerator",
+        "denominator"
+      ],
+      "title": "RationalRate",
+      "type": "object"
+    },
+    "SessionZero": {
+      "additionalProperties": false,
+      "description": "Where session time zero is, and how that was decided (ADR-0009).",
+      "properties": {
+        "detail": {
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "domain": {
+          "enum": [
+            "real_time",
+            "timecode",
+            "relative"
+          ],
+          "title": "Domain",
+          "type": "string"
+        },
+        "origin_date": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Origin Date"
+        },
+        "origin_timecode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Origin Timecode"
+        },
+        "since_day_origin_samples": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Since Day Origin Samples"
+        },
+        "source": {
+          "enum": [
+            "configured_origin",
+            "earliest_source"
+          ],
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "domain",
+        "detail"
+      ],
+      "title": "SessionZero",
+      "type": "object"
+    },
+    "TimelineDecision": {
+      "additionalProperties": false,
+      "description": "A placement choice worth auditing — a rollover inferred, an overlap nudged.\n\nDeterministic by construction: no counters, no timings. Two identical runs produce\nidentical decisions (INV-02, INV-03).",
+      "properties": {
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "detail": {
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "subject": {
+          "minLength": 1,
+          "title": "Subject",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "subject",
+        "detail"
+      ],
+      "title": "TimelineDecision",
+      "type": "object"
+    },
+    "TimelineNote": {
+      "additionalProperties": false,
+      "description": "A warning: worth a human's attention, did not stop the run.",
+      "properties": {
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "TimelineNote",
+      "type": "object"
+    },
+    "TimelineProvenance": {
+      "additionalProperties": false,
+      "description": "What produced this timeline. Deterministic, and part of every cache identity.\n\nNumPy and SciPy are here for the same reason M1 records FFmpeg's version: they are\nexternal implementations whose upgrade can legitimately change what the derivatives\ncontain, and INV-08 requires that to invalidate the work rather than serve it stale.",
+      "properties": {
+        "inspection_semantics_version": {
+          "minimum": 1,
+          "title": "Inspection Semantics Version",
+          "type": "integer"
+        },
+        "numpy_version": {
+          "minLength": 1,
+          "title": "Numpy Version",
+          "type": "string"
+        },
+        "scipy_version": {
+          "minLength": 1,
+          "title": "Scipy Version",
+          "type": "string"
+        },
+        "timeline_semantics_version": {
+          "minimum": 1,
+          "title": "Timeline Semantics Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "timeline_semantics_version",
+        "inspection_semantics_version",
+        "numpy_version",
+        "scipy_version"
+      ],
+      "title": "TimelineProvenance",
+      "type": "object"
+    },
+    "TimelineSegment": {
+      "additionalProperties": false,
+      "description": "One contiguous run on a track's timeline: audio from a source, or silence.\n\nSilence is a first-class segment rather than an absence. A transmitter switched off\nand back on leaves a real hole, and representing it explicitly is what stops a reader\nfrom sliding the later audio earlier to close it.",
+      "properties": {
+        "evidence_start_sample": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Evidence Start Sample"
+        },
+        "kind": {
+          "enum": [
+            "audio",
+            "silence"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "n_samples": {
+          "exclusiveMinimum": 0,
+          "title": "N Samples",
+          "type": "integer"
+        },
+        "session_start_sample": {
+          "minimum": 0,
+          "title": "Session Start Sample",
+          "type": "integer"
+        },
+        "shift_samples": {
+          "default": 0,
+          "title": "Shift Samples",
+          "type": "integer"
+        },
+        "source_relative_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Relative Path"
+        },
+        "source_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Sha256"
+        },
+        "source_start_sample": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Start Sample"
+        }
+      },
+      "required": [
+        "kind",
+        "session_start_sample",
+        "n_samples"
+      ],
+      "title": "TimelineSegment",
+      "type": "object"
+    },
+    "TimelineTrack": {
+      "additionalProperties": false,
+      "description": "One person's reconstructed virtual track.",
+      "properties": {
+        "derivatives": {
+          "items": {
+            "$ref": "#/$defs/DerivativeRecord"
+          },
+          "title": "Derivatives",
+          "type": "array"
+        },
+        "end_sample": {
+          "minimum": 0,
+          "title": "End Sample",
+          "type": "integer"
+        },
+        "segments": {
+          "items": {
+            "$ref": "#/$defs/TimelineSegment"
+          },
+          "title": "Segments",
+          "type": "array"
+        },
+        "speaker_id": {
+          "minLength": 1,
+          "title": "Speaker Id",
+          "type": "string"
+        },
+        "speaker_name": {
+          "minLength": 1,
+          "title": "Speaker Name",
+          "type": "string"
+        },
+        "start_sample": {
+          "minimum": 0,
+          "title": "Start Sample",
+          "type": "integer"
+        },
+        "track_id": {
+          "minLength": 1,
+          "title": "Track Id",
+          "type": "string"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/TimelineNote"
+          },
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "track_id",
+        "speaker_id",
+        "speaker_name",
+        "start_sample",
+        "end_sample"
+      ],
+      "title": "TimelineTrack",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The deterministic segment map `ingest` writes to ``work/timeline.json``.",
+  "properties": {
+    "config_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Config Hash",
+      "type": "string"
+    },
+    "decisions": {
+      "items": {
+        "$ref": "#/$defs/TimelineDecision"
+      },
+      "title": "Decisions",
+      "type": "array"
+    },
+    "duration_samples": {
+      "minimum": 0,
+      "title": "Duration Samples",
+      "type": "integer"
+    },
+    "frame_rate": {
+      "$ref": "#/$defs/RationalRate"
+    },
+    "frame_rate_label": {
+      "minLength": 1,
+      "title": "Frame Rate Label",
+      "type": "string"
+    },
+    "manifest_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Manifest Sha256",
+      "type": "string"
+    },
+    "provenance": {
+      "$ref": "#/$defs/TimelineProvenance"
+    },
+    "sample_rate": {
+      "exclusiveMinimum": 0,
+      "title": "Sample Rate",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "session_id": {
+      "minLength": 1,
+      "title": "Session Id",
+      "type": "string"
+    },
+    "session_zero": {
+      "$ref": "#/$defs/SessionZero"
+    },
+    "tracks": {
+      "items": {
+        "$ref": "#/$defs/TimelineTrack"
+      },
+      "title": "Tracks",
+      "type": "array"
+    },
+    "warnings": {
+      "items": {
+        "$ref": "#/$defs/TimelineNote"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "session_id",
+    "config_hash",
+    "manifest_sha256",
+    "provenance",
+    "sample_rate",
+    "duration_samples",
+    "session_zero",
+    "frame_rate_label",
+    "frame_rate"
+  ],
+  "title": "Timeline",
+  "type": "object"
+}

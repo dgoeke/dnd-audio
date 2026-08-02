@@ -52,6 +52,31 @@ streamed mix, two-pass loudness normalization, and MP3 encode/decode verificatio
 - Naive summing of six channels — explicitly forbidden by the spec.
 - Neural source separation or crosstalk subtraction.
 
+## What M2 already provides (read before starting)
+
+- **The 48 kHz working path is a segment map, not files.** `work/timeline.json` is the
+  authoritative document; `timeline.reader.TrackReader.read(start, n)` returns a bounded
+  window of one reconstructed track, silence included. `ingest --materialize-48k` will
+  write contiguous RF64 files, but they are **disposable content-addressed cache
+  artifacts** and nothing in the mix may depend on their existence (ADR-0011). Mixing means
+  stepping six `TrackReader`s over the same window range.
+- **Every track answers to the session's aligned `duration_samples`**, returning silence
+  past its own end, so the mix does not need to pad or special-case a short track.
+- **`timeline.wavwrite` is the streamed float32 writer** for the lossless mix intermediate:
+  temp-then-rename, and it chooses RF64 from the *declared* length rather than discovering
+  the 4 GiB limit partway through. Use it. `determinism.write_atomic` is for JSON and holds
+  its whole payload in memory — reaching for it here is a direct INV-07 violation.
+- **`timeline.preflight` sizes a run from the timeline's actual duration and the artifacts
+  requested.** M5 must add its own term: the mix intermediate is the third term of
+  `doctor`'s original 40 GiB estimate and it does not exist yet (OQ-013).
+- **The technique for proving INV-07 over a composed path is in `tests/test_memory.py`.**
+  Instrument reads and writes into one ordered event log and assert a write happens before
+  the last read — nothing that accumulates a session-length array can satisfy that.
+  Bounding one component proves nothing about a caller that collects every window.
+- **`TrackReader` holds one file descriptor per audio segment.** Six tracks with a handful
+  of chunks each is fine; if M5 ever opens many sessions' worth at once, that is where the
+  limit is.
+
 ## Known risks and open questions
 
 - Decoded loudness alone is *not* evidence of correct channel selection. If the

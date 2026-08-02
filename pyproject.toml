@@ -13,6 +13,7 @@ dependencies = [
     "numpy>=2.1",
     "pydantic>=2.9",
     "pyyaml>=6.0",
+    "scipy>=1.14",
     "typer>=0.15",
 ]
 
@@ -25,6 +26,7 @@ dev = [
     "mypy>=1.13",
     "pytest>=8.3",
     "ruff>=0.8",
+    "scipy-stubs>=1.18.0.1",
     "types-jsonschema>=4.23",
     "types-pyyaml>=6.0",
 ]

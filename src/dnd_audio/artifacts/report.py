@@ -43,6 +43,7 @@ __all__ = [
     "ReportWarning",
     "RosterSummary",
     "StageName",
+    "StageOrigin",
     "StageReport",
     "StageStatus",
     "StructuredError",
@@ -145,11 +146,29 @@ class Deliverable(_Artifact):
     size_bytes: int = Field(ge=0)
 
 
+class StageOrigin(StrEnum):
+    """Whether a completed stage did its work or was served from cache.
+
+    Separate from :class:`StageStatus` because they answer different questions. A stage
+    served entirely from cache genuinely *completed* — its outputs are current and its
+    deliverables are real — so calling it `skipped` would be false, and a caller checking
+    whether the manifest reflects the sources on disk would read the wrong answer.
+    """
+
+    EXECUTED = "executed"
+    #: Every unit of work was a cache hit. The outputs are current; nothing was recomputed.
+    REUSED = "reused"
+
+
 class StageReport(_Artifact):
     """One stage's outcome."""
 
     stage: StageName
     status: StageStatus
+    #: Whether the work ran or came from cache. Present only on a completed stage: a
+    #: skipped or failed one did not produce outputs, so "executed" would be noise on
+    #: four stages out of six.
+    origin: StageOrigin | None = None
     #: Why the stage was skipped. Required when skipped, absent otherwise — "skipped"
     #: with no reason is indistinguishable from a stage nobody remembered to run.
     skip_reason: str | None = None
@@ -166,6 +185,12 @@ class StageReport(_Artifact):
             raise ValueError(message)
         if self.status is StageStatus.FAILED and not self.errors:
             message = f"stage {self.stage} failed without a structured error"
+            raise ValueError(message)
+        if self.origin is not None and self.status is not StageStatus.COMPLETE:
+            message = (
+                f"stage {self.stage} is {self.status} and cannot carry an origin: only a "
+                f"completed stage either ran or was served from cache"
+            )
             raise ValueError(message)
         return self
 
@@ -347,9 +372,20 @@ class ReportBuilder:
         self._cache_misses = 0
 
     def stage_complete(
-        self, stage: StageName, *, warnings: list[ReportWarning] | None = None
+        self,
+        stage: StageName,
+        *,
+        warnings: list[ReportWarning] | None = None,
+        origin: StageOrigin = StageOrigin.EXECUTED,
     ) -> None:
-        self._record(StageReport(stage=stage, status=StageStatus.COMPLETE, warnings=warnings or []))
+        self._record(
+            StageReport(
+                stage=stage,
+                status=StageStatus.COMPLETE,
+                origin=origin,
+                warnings=warnings or [],
+            )
+        )
 
     def stage_failed(
         self,
@@ -366,6 +402,16 @@ class ReportBuilder:
                 warnings=warnings or [],
             )
         )
+
+    def recorded(self, stage: StageName) -> bool:
+        """Whether this stage already has an outcome.
+
+        Exists so a caller failing partway through a multi-stage run can account for the
+        stages that never got the chance to report. :meth:`build` refuses a report with a
+        gap in it, so without this a failure early in `ingest` produced no report at all —
+        the exact outcome INV-13 exists to prevent.
+        """
+        return stage in self._stages
 
     def stage_skipped(self, stage: StageName, reason: str) -> None:
         self._record(StageReport(stage=stage, status=StageStatus.SKIPPED, skip_reason=reason))
