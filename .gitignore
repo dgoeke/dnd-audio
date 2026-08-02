@@ -1,0 +1,45 @@
+# Never commit session material or model artifacts.
+**/raw/
+**/work/
+**/output/
+*.wav
+*.mp3
+*.flac
+*.m4a
+models/
+.hf-cache/
+*.safetensors
+*.ckpt
+*.pt
+*.onnx
+
+# Secrets
+.env
+.env.*
+*token*
+!**/*token*.py
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Nix / direnv
+result
+result-*
+.direnv/
+
+# Operator-local notes: host, user, and absolute paths that must not reach a
+# public repository. Committed docs refer to it but never quote it.
+LOCAL.md
+
+# Scratch
+.scratch/
