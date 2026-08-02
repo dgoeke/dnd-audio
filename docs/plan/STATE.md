@@ -7,7 +7,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 
 ## Right now
 
-- **Current milestone:** M1 — Inspection (in progress)
+- **Current milestone:** M1 — Inspection (verified, awaiting close)
 - **Branch:** `milestone/M1-inspection`
 - **Last closed milestone:** M0 — Foundation
 - **Gate status at HEAD:** passes, zero skips (8 checks, 311 tests)
@@ -20,7 +20,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | ID  | Milestone                  | Status      | Closed at |
 | --- | -------------------------- | ----------- | --------- |
 | M0  | Foundation                 | closed      | `67b70ed` |
-| M1  | Inspection                 | in progress | —         |
+| M1  | Inspection                 | verified    | —         |
 | M2  | Timeline                   | not started | —         |
 | M3  | Activity                   | not started | —         |
 | M4  | Fake transcript            | not started | —         |
