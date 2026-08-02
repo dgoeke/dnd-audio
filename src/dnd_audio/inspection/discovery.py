@@ -32,6 +32,7 @@ from typing import Final, Literal
 from dnd_audio.config import SessionConfig, TrackConfig
 from dnd_audio.determinism import sha256_file
 from dnd_audio.errors import DiscoveryError, RecoveryError
+from dnd_audio.inspection import OUTPUT_DIRNAME, WORK_DIRNAME
 from dnd_audio.inspection.naming import (
     AUDIO_SUFFIXES,
     FilenameHints,
@@ -174,8 +175,10 @@ def discover(session_dir: Path, config: SessionConfig) -> Discovery:
 
     extra_dirs, unassigned_files = _scan_unconfigured(session_dir, config, warnings)
 
+    unassigned_paths = {item.relative_path for item in unassigned_files}
     duplicates = _duplicate_map(
-        [item for items in found.values() for item in items] + unassigned_files
+        [item for items in found.values() for item in items] + unassigned_files,
+        unassigned_paths=unassigned_paths,
     )
 
     tracks: list[TrackDiscovery] = []
@@ -187,15 +190,7 @@ def discover(session_dir: Path, config: SessionConfig) -> Discovery:
     tracks = _apply_roster(tracks, config, warnings, decisions)
 
     unassigned = tuple(
-        DiscoveredSource(
-            file=item,
-            role="unassigned",
-            reason_code="directory_not_configured",
-            detail=(
-                "found outside every configured track directory, so it is recorded but "
-                "attributed to nobody (INV-11)"
-            ),
-        )
+        _as_unassigned(item, duplicates.get(item.relative_path))
         for item in sorted(unassigned_files, key=lambda item: item.relative_path)
     )
 
@@ -215,15 +210,25 @@ def discover(session_dir: Path, config: SessionConfig) -> Discovery:
 
 
 def _scan(
-    session_dir: Path, directory: Path, warnings: list[DiscoveryWarning]
+    session_dir: Path,
+    directory: Path,
+    warnings: list[DiscoveryWarning],
+    *,
+    recursive: bool = False,
 ) -> list[DiscoveredFile]:
     """Hash every audio candidate in one directory.
 
     Candidacy is by file extension, never by name shape. The DJI grammar is still a
     guess (OQ-003), and a guess used as a filter silently hides real hardware.
+
+    ``recursive`` is used for directories nobody configured, where the layout is by
+    definition unknown: a recorder that writes into a subfolder would otherwise leave
+    files that exist under the session's sources, are protected by INV-01, and appear
+    nowhere in the manifest. A configured track directory is scanned flat, because that
+    is the layout the session contract describes.
     """
     files: list[DiscoveredFile] = []
-    for path in sorted(directory.iterdir()):
+    for path in sorted(directory.rglob("*") if recursive else directory.iterdir()):
         if not path.is_file():
             continue
         relative = path.relative_to(session_dir).as_posix()
@@ -263,6 +268,12 @@ def _scan_unconfigured(
             continue
         for path in sorted(directory.iterdir()):
             relative = path.relative_to(session_dir).as_posix()
+            if relative in (WORK_DIRNAME, OUTPUT_DIRNAME):
+                # This pipeline's own output. Reachable when a track's input sits
+                # directly in the session root, where `work/` and `output/` really are
+                # siblings of the track directories — treating them as unconfigured
+                # source directories would make the tool ingest its own artifacts.
+                continue
             if path.is_dir():
                 if relative in configured:
                     continue
@@ -275,7 +286,7 @@ def _scan_unconfigured(
                         path=relative,
                     )
                 )
-                files.extend(_scan(session_dir, path, warnings))
+                files.extend(_scan(session_dir, path, warnings, recursive=True))
             elif path.is_file() and path.suffix.lower() in AUDIO_SUFFIXES:
                 warnings.append(
                     DiscoveryWarning(
@@ -296,30 +307,72 @@ def _scan_unconfigured(
     return extra, files
 
 
-def _duplicate_map(files: Sequence[DiscoveredFile]) -> dict[str, str]:
+def _duplicate_map(
+    files: Sequence[DiscoveredFile], *, unassigned_paths: frozenset[str] | set[str] = frozenset()
+) -> dict[str, str]:
     """``{relative_path: the copy that was kept}`` for every byte-identical duplicate.
 
-    Ordering is ``(is the file processed, path)``. The path breaks ties so that which
-    copy survives does not depend on directory iteration order (INV-02); the variant
-    comes first so a processed file can never displace an original it happens to sort
-    before. Getting that backwards turns "the edit is ignored" into "the original is
-    ignored and the track has only processed audio", which is a fatal error two rules
-    downstream and gives no hint where it came from.
+    Ordering is ``(is the file attached to no track, is the file processed, path)``, and
+    every term earns its place:
+
+    * **Unassigned last.** A file in a directory nobody configured must never displace a
+      configured track's recording. It can otherwise: a stray ``raw/aaa.wav`` sorts
+      before ``raw/tx-a/TX01_…`` and would win on path alone, marking Alice's real
+      original a duplicate of a file attributed to nobody — INV-11 violated from the
+      other direction, and the track silently loses its source.
+    * **Processed last among the rest.** ``_edit`` sorts before ``_orig``, so ranking by
+      path alone lets a byte-identical edit win and turns "the edit is ignored" into
+      "the track has only processed audio", which is fatal two rules downstream with
+      nothing pointing back here.
+    * **Path as the final tie-break**, so which copy survives never depends on directory
+      iteration order (INV-02).
     """
     by_hash: dict[str, list[DiscoveredFile]] = {}
     for item in files:
         by_hash.setdefault(item.sha256, []).append(item)
 
+    def rank(item: DiscoveredFile) -> tuple[bool, bool, str]:
+        return (
+            item.relative_path in unassigned_paths,
+            item.hints.variant == "edit",
+            item.relative_path,
+        )
+
     duplicates: dict[str, str] = {}
     for group in by_hash.values():
         if len(group) < 2:
             continue
-        keep, *rest = sorted(
-            group, key=lambda item: (item.hints.variant == "edit", item.relative_path)
-        )
+        keep, *rest = sorted(group, key=rank)
         for item in rest:
             duplicates[item.relative_path] = keep.relative_path
     return duplicates
+
+
+def _as_unassigned(item: DiscoveredFile, duplicate_of: str | None) -> DiscoveredSource:
+    """A candidate nobody configured a track for.
+
+    It still takes part in duplicate detection — a stray copy of a track's recording is
+    worth saying so about — but it can never win that contest, and it never acquires a
+    ``track_id`` either way (INV-11).
+    """
+    if duplicate_of is not None:
+        return DiscoveredSource(
+            file=item,
+            role="duplicate",
+            reason_code="duplicate_content",
+            detail=f"byte-identical to {duplicate_of}, which was kept; found outside every "
+            f"configured track directory",
+            associated_with=duplicate_of,
+        )
+    return DiscoveredSource(
+        file=item,
+        role="unassigned",
+        reason_code="directory_not_configured",
+        detail=(
+            "found outside every configured track directory, so it is recorded but "
+            "attributed to nobody (INV-11)"
+        ),
+    )
 
 
 def _decide_track(
@@ -389,14 +442,40 @@ def _decide_track(
 
     _warn_about_sequences(track, files, warnings)
 
+    active = any(source.role == "selected" for source in sources)
     return TrackDiscovery(
         track_id=track.track_id,
         speaker_id=track.speaker_id,
         speaker_name=track.speaker_name,
         input_path=track.input,
-        active=any(source.role == "selected" for source in sources),
-        inactive_reason=None if sources else "no usable original recording was found",
+        active=active,
+        inactive_reason=None if active else _why_inactive(sources),
         sources=tuple(sorted(sources, key=lambda source: source.file.relative_path)),
+    )
+
+
+def _why_inactive(sources: Sequence[DiscoveredSource]) -> str:
+    """Why a track has no usable recording, in terms an operator can act on.
+
+    Keyed off whether anything was *selected*, not off whether any file was found. Those
+    differ exactly when a directory holds files that were all rejected — every one a
+    duplicate, say — and the earlier version's "no reason" then reached ``ManifestTrack``
+    and raised an uncaught validation error, so the run produced no report at all
+    (INV-13). An inactive track with no reason is indistinguishable from one nobody
+    looked at, which is why the artifact refuses it.
+    """
+    if not sources:
+        return "no usable original recording was found"
+    roles = sorted({source.role for source in sources})
+    if roles == ["duplicate"]:
+        kept = sorted({s.associated_with for s in sources if s.associated_with})
+        return (
+            f"every file here is a byte-identical copy of another source "
+            f"({', '.join(kept)}), so none of them was selected"
+        )
+    return (
+        f"files were found but none was usable as an original "
+        f"({len(sources)} candidate(s), roles: {', '.join(roles)})"
     )
 
 

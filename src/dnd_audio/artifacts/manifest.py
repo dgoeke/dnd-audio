@@ -60,6 +60,14 @@ MANIFEST_SCHEMA_VERSION: Final = 1
 Sha256Hex = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
 SourceRole = Literal["selected", "associated_edit", "duplicate", "unassigned", "unusable"]
+
+#: What a source found outside every configured track directory may be. ``duplicate`` is
+#: allowed alongside ``unassigned`` because a stray copy of a track's recording is worth
+#: saying so about — noting that a file duplicates another is a statement about bytes,
+#: not an attribution to a speaker, and INV-11 is about the latter. What must never
+#: appear here is ``selected`` or ``associated_edit``: those mean a track is using the
+#: file, and no track was configured for it.
+_TRACK_INDEPENDENT_ROLES: Final = frozenset({"unassigned", "duplicate"})
 Variant = Literal["orig", "edit", "unknown"]
 
 
@@ -345,13 +353,16 @@ class Manifest(_Artifact):
         )
 
         misfiled = [
-            source.relative_path for source in self.unassigned if source.role != "unassigned"
+            source.relative_path
+            for source in self.unassigned
+            if source.role not in _TRACK_INDEPENDENT_ROLES
         ]
         if misfiled:
             message = (
-                f"unassigned sources must have role 'unassigned', but "
-                f"{', '.join(sorted(misfiled))} do not. A file nobody configured a track "
-                f"for cannot be given one here (INV-11)."
+                f"a source outside every configured track may only be "
+                f"{' or '.join(sorted(_TRACK_INDEPENDENT_ROLES))}, but "
+                f"{', '.join(sorted(misfiled))} is not. A file nobody configured a track "
+                f"for cannot be selected or paired here (INV-11)."
             )
             raise ValueError(message)
         return self

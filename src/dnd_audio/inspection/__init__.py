@@ -21,7 +21,14 @@ from __future__ import annotations
 
 from typing import Final
 
-__all__ = ["INSPECTION_SEMANTICS_VERSION"]
+__all__ = ["INSPECTION_SEMANTICS_VERSION", "OUTPUT_DIRNAME", "WORK_DIRNAME"]
+
+#: The two session-relative directories this pipeline generates. Named here rather than
+#: in the runner because discovery needs them too: when a track's input sits directly in
+#: the session root, these are siblings of the track directories and must not be mistaken
+#: for unconfigured source directories.
+WORK_DIRNAME: Final = "work"
+OUTPUT_DIRNAME: Final = "output"
 
 #: Bumped when **any** module in this package changes what it would produce from
 #: unchanged bytes.

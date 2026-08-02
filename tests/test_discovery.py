@@ -421,8 +421,12 @@ class TestOverridesMustMatchSomething:
         assert discover(session, config).active_track_ids == ("tx-a",)
 
     def test_an_override_may_name_an_unassigned_file(self, tmp_path: Path) -> None:
-        """Unassigned sources are still discovered sources, so an override aimed at one
-        is not a typo — even though nothing will consume it."""
+        """Unassigned sources are still discovered sources, and are now fully captured.
+
+        So an override aimed at one is not a typo and is not inert either: it supplies
+        that file's timing evidence in the manifest, which is what ADR-0007 asks of an
+        override that is accepted at all.
+        """
         session, _ = small_session(tmp_path, chunks=(FixtureChunk(0, 4800, sequence=1),))
         stranger = session / "raw/tx-z"
         stranger.mkdir()
@@ -466,3 +470,79 @@ class TestDeterminism:
         assert codes_seen == sorted(codes_seen)
         subjects = [(d.code, d.subject) for d in discovery.decisions]
         assert subjects == sorted(subjects)
+
+
+class TestUnassignedFilesCannotDisplaceATrack:
+    """INV-11 from the direction nothing else guards.
+
+    Everything else in this module checks that an unconfigured file is not *given* a
+    speaker. These check the converse: that it cannot take one away.
+    """
+
+    def test_a_stray_sorting_first_does_not_win_a_duplicate_contest(self, tmp_path: Path) -> None:
+        session, config = small_session(tmp_path, chunks=(FixtureChunk(0, 4800, sequence=1),))
+        original = session / "raw/tx-a/TX01_MIC001_20260815_190000_orig.wav"
+        stray = session / "raw/aaa-stray.wav"
+        shutil.copy(original, stray)
+        assert original.relative_to(session).as_posix() > "raw/aaa-stray.wav"
+
+        discovery = discover(session, config)
+        assert roles(discovery)[original.relative_to(session).as_posix()] == "selected"
+        assert roles(discovery)["raw/aaa-stray.wav"] == "duplicate"
+
+    def test_the_track_stays_active(self, tmp_path: Path) -> None:
+        """The consequence that made this severe: the track lost its only source."""
+        session, config = small_session(tmp_path, chunks=(FixtureChunk(0, 4800, sequence=1),))
+        shutil.copy(
+            session / "raw/tx-a/TX01_MIC001_20260815_190000_orig.wav",
+            session / "raw/aaa-stray.wav",
+        )
+        assert discover(session, config).active_track_ids == ("tx-a",)
+
+    def test_a_stray_that_is_not_a_copy_stays_unassigned(self, tmp_path: Path) -> None:
+        session, config = small_session(tmp_path, chunks=(FixtureChunk(0, 4800, sequence=1),))
+        write_wav(
+            session / "raw/aaa-stray.wav",
+            np.full(4800, 0.25, dtype=np.float32),
+            sample_rate=48000,
+        )
+        discovery = discover(session, config)
+        assert roles(discovery)["raw/aaa-stray.wav"] == "unassigned"
+
+
+class TestNestedUnconfiguredFiles:
+    def test_audio_nested_inside_an_extra_directory_is_still_captured(self, tmp_path: Path) -> None:
+        """It exists under the session's sources and is protected by INV-01, so a
+        manifest that never mentions it is describing a session that is not there.
+
+        Configured track directories are still scanned flat — that is the layout the
+        session contract describes — but a directory nobody configured can be anything.
+        """
+        session, config = small_session(tmp_path, chunks=(FixtureChunk(0, 4800, sequence=1),))
+        nested = session / "raw/tx-z/deeper"
+        nested.mkdir(parents=True)
+        write_wav(nested / "buried.wav", np.zeros(4800, dtype=np.float32), sample_rate=48000)
+
+        discovery = discover(session, config)
+        assert "raw/tx-z/deeper/buried.wav" in roles(discovery)
+        assert roles(discovery)["raw/tx-z/deeper/buried.wav"] == "unassigned"
+
+    def test_a_track_inactive_because_everything_was_a_duplicate_says_so(
+        self, tmp_path: Path
+    ) -> None:
+        """An inactive track with no reason reached the manifest and raised an uncaught
+        validation error, so the run produced no report at all (INV-13)."""
+        session, config = small_session(
+            tmp_path, chunks=(FixtureChunk(0, 4800, sequence=1),), tracks=2
+        )
+        for path in (session / "raw/tx-b").iterdir():
+            path.unlink()
+        shutil.copy(
+            session / "raw/tx-a/TX01_MIC001_20260815_190000_orig.wav",
+            session / "raw/tx-b/TX02_MIC001_20260815_190000_orig.wav",
+        )
+
+        bob = next(t for t in discover(session, config).tracks if t.track_id == "tx-b")
+        assert not bob.active
+        assert bob.inactive_reason is not None
+        assert "byte-identical" in bob.inactive_reason

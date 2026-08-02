@@ -178,8 +178,10 @@ class Provenance(_Artifact):
     ``tests/test_report.py`` asserts that no field here is time-typed.
     """
 
-    #: Ties the report to the resolved configuration (INV-08).
-    config_hash: Sha256Hex
+    #: Ties the report to the resolved configuration (INV-08). ``None`` only when the
+    #: run failed before a configuration could be resolved — a fabricated hash there
+    #: would be syntactically valid and untrue, which is worse than an absence.
+    config_hash: Sha256Hex | None = None
     #: External tools whose version changes the output — FFmpeg, FFprobe, SoX.
     tool_versions: dict[str, str] = Field(default_factory=dict)
     package_versions: dict[str, str] = Field(default_factory=dict)
@@ -326,9 +328,11 @@ class ReportBuilder:
     and it is why :meth:`write` takes no "only if successful" flag.
     """
 
-    def __init__(self, session_id: str, *, config_hash: str, started_at: dt.datetime) -> None:
+    def __init__(
+        self, session_id: str, *, config_hash: str | None, started_at: dt.datetime
+    ) -> None:
         self._session_id = session_id
-        self._config_hash = config_hash
+        self._config_hash: str | None = config_hash
         self._started_at = started_at
         self._stages: dict[StageName, StageReport] = {}
         self._deliverables: dict[str, Deliverable] = {}

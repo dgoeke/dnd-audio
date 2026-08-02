@@ -201,7 +201,15 @@ def _summarize(result: InspectionResult) -> None:
                 typer.secho(
                     f"  error  {error.code}: {error.message}", fg=typer.colors.RED, err=True
                 )
-    typer.echo(f"  report    {result.report_path}")
+    if result.report_written:
+        typer.echo(f"  report    {result.report_path}")
+    else:
+        typer.secho(
+            f"  no report written: {result.report_path} would land inside the session's "
+            f"own sources, and nothing under them may be written to (INV-01)",
+            fg=typer.colors.RED,
+            err=True,
+        )
 
 
 def main() -> None:

@@ -6,11 +6,17 @@ The ordering here is load-bearing, so it is stated rather than left to be inferr
    what INV-01 is verified against at the end, and it covers *every* file — including
    ones inspection never selected, because "we did not touch what we did not read" is a
    weaker claim than the invariant makes.
-2. **Refuse to run if an output path would land inside a raw root.** The spec lists it
-   among the fatal errors, and it has to be checked before the first write rather than
-   after.
-3. **Discover, then capture.** Only selected sources are probed: a duplicate and an
-   ignored `edit` are recorded and left alone.
+2. **Refuse to run if an output path would land inside a raw root**, comparing
+   *resolved* paths so a symlink cannot walk around it. The spec lists this among the
+   fatal errors, and it has to be checked before the first write rather than after. When
+   the report's own location is the offending one, no report is written: INV-01 outranks
+   INV-13 there, because a report is regenerable and a source directory written into is
+   not.
+3. **Discover, then capture every candidate.** The spec says "for every candidate audio
+   file, run `ffprobe`", and that includes the ones nothing will consume: the operator
+   asking "why was this ignored" is asking about exactly those. Timing is the one thing
+   that differs — missing timing is fatal for a source the pipeline will use (INV-12) and
+   recorded as a warning for one it will not.
 4. **Persist FFprobe's bytes before parsing them.** A document this code cannot read is
    exactly the document a human will want (OQ-001).
 5. **Verify the snapshot, then commit the cache.** In that order, so a source that
@@ -24,6 +30,7 @@ The ordering here is load-bearing, so it is stated rather than left to be inferr
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Final
@@ -60,7 +67,11 @@ from dnd_audio.artifacts.roster import RosterSummary
 from dnd_audio.config import SessionConfig, config_hash, load_session_config
 from dnd_audio.determinism import sha256_file, write_atomic, write_json_atomic
 from dnd_audio.errors import DiscoveryError, DndAudioError, ExitCode
-from dnd_audio.inspection import INSPECTION_SEMANTICS_VERSION
+from dnd_audio.inspection import (
+    INSPECTION_SEMANTICS_VERSION,
+    OUTPUT_DIRNAME,
+    WORK_DIRNAME,
+)
 from dnd_audio.inspection.cache import CACHE_DIRNAME, InspectionCache, cache_key
 from dnd_audio.inspection.discovery import DiscoveredSource, Discovery, discover
 from dnd_audio.inspection.probe import (
@@ -92,11 +103,10 @@ __all__ = [
     "run_inspect",
 ]
 
-MANIFEST_RELATIVE_PATH: Final = "work/manifest.json"
-OUTPUT_DIRNAME: Final = "output"
+MANIFEST_RELATIVE_PATH: Final = f"{WORK_DIRNAME}/manifest.json"
 
 #: Where verbatim FFprobe captures are kept, content-hash-addressed, beside the manifest.
-PROBE_DIRNAME: Final = "work/ffprobe"
+PROBE_DIRNAME: Final = f"{WORK_DIRNAME}/ffprobe"
 
 #: The stages `inspect` does not run, and why. Required: `ReportBuilder.build()` refuses
 #: to assemble a report with any stage unaccounted for, because a stage that is simply
@@ -119,6 +129,10 @@ class InspectionResult:
     report: IngestReport
     report_path: Path
     exit_code: ExitCode
+    #: False only when writing the report would itself have violated INV-01 — see the
+    #: carve-out in :func:`run_inspect`. The report object is still built and returned,
+    #: so the caller can print the error it carries.
+    report_written: bool = True
 
 
 def run_inspect(
@@ -138,9 +152,10 @@ def run_inspect(
         use_cache: Set false to force re-inspection without deleting the cache.
     """
     started_at = now or dt.datetime.now(dt.UTC)
-    builder = ReportBuilder(
-        session_id=session_dir.name, config_hash="0" * 64, started_at=started_at
-    )
+    # No config_hash yet, and `None` rather than a plausible-looking string of zeroes:
+    # a run that never resolved a configuration has no configuration hash, and a
+    # syntactically valid fabrication is worse than an absence a consumer can branch on.
+    builder = ReportBuilder(session_id=session_dir.name, config_hash=None, started_at=started_at)
     for stage, reason in _SKIPPED_STAGES:
         builder.stage_skipped(stage, reason)
 
@@ -161,21 +176,37 @@ def run_inspect(
         manifest = inspect_session(session_dir, config, cache=cache, builder=builder)
         write_json_atomic(manifest_path, manifest.model_dump(mode="json"))
         cache.commit()
-        builder.stage_complete(
-            StageName.INSPECT,
-            warnings=[
-                ReportWarning(code=note.code, message=note.message, path=note.path)
-                for note in manifest.warnings
-            ],
-        )
+        builder.stage_complete(StageName.INSPECT, warnings=_report_warnings(manifest))
         builder.add_deliverable(manifest_path, relative_to=session_dir)
-    except DndAudioError as exc:
+    except Exception as exc:
+        # Every failure, not only the ones this project raises on purpose. INV-13 says
+        # the report is written even on partial failure, and an unreadable source file
+        # raising OSError is exactly the case where an operator most needs one — a
+        # traceback and no report is the worst of both. A bug reaching here still
+        # produces a structured error rather than nothing.
         cache.discard()
+        _remove_stale_manifest(manifest_path)
         builder.stage_failed(
             StageName.INSPECT,
-            [StructuredError(code=exc.code, message=str(exc))],
+            [StructuredError(code=_code_of(exc), message=str(exc) or type(exc).__name__)],
         )
-        report = builder.write(report_path, dt.datetime.now(dt.UTC) if now is None else now)
+        finished = dt.datetime.now(dt.UTC) if now is None else now
+        # The one failure that must not write the report is the one about where writing
+        # is allowed. When `output/` resolves inside a track's source directory, writing
+        # the failure report there commits the very violation being reported, so INV-01
+        # wins over INV-13: nothing is written, the structured error still reaches the
+        # caller, and the CLI prints it. INV-13's report is regenerable; a source
+        # directory written into is not.
+        if isinstance(exc, DiscoveryError) and exc.code == "output_inside_raw":
+            return InspectionResult(
+                manifest=_empty_manifest(session_dir),
+                manifest_path=manifest_path,
+                report=builder.build(finished),
+                report_path=report_path,
+                report_written=False,
+                exit_code=ExitCode.FATAL,
+            )
+        report = builder.write(report_path, finished)
         return InspectionResult(
             manifest=_empty_manifest(session_dir),
             manifest_path=manifest_path,
@@ -205,7 +236,7 @@ def inspect_session(
     """The inspection itself. Raises :class:`DndAudioError` on any fatal condition."""
     roots = _raw_roots(config)
     before = _snapshot(session_dir, roots)
-    _reject_outputs_inside_raw(roots)
+    _reject_outputs_inside_raw(session_dir, config, roots)
 
     tools = tool_versions()
     builder.record_tool_version("ffmpeg", tools.ffmpeg)
@@ -231,14 +262,14 @@ def inspect_session(
         )
 
     unassigned = [
-        _capture(session_dir, config, source, tools, cache, probe_it=False)
-        for source in found.unassigned
+        _capture(session_dir, config, source, tools, cache) for source in found.unassigned
     ]
 
     _verify_unchanged(session_dir, roots, before)
 
     roster = _roster_of(found)
-    _contribute_to_report(builder, found, roster)
+    manifest_tracks = tracks
+    _contribute_to_report(builder, found, roster, manifest_tracks, unassigned)
 
     return Manifest(
         session_id=config.session_id,
@@ -269,14 +300,19 @@ def _capture(
     source: DiscoveredSource,
     tools: ToolVersions,
     cache: InspectionCache,
-    *,
-    probe_it: bool = True,
 ) -> ManifestSource:
     """Probe and walk one source, or reuse an identical capture.
 
-    Only selected sources are probed. A duplicate and an ignored `edit` are recorded
-    with everything discovery knows and left alone: reading them would cost time to
-    learn something no stage will consume.
+    **Every candidate is probed**, not only the selected ones. The spec says "for every
+    candidate audio file, run `ffprobe` and retain…", and an earlier version skipped
+    ignored edits, duplicates, and unassigned files on the grounds that no stage would
+    consume them. That reasoning is wrong for a milestone whose product is a description
+    of what is there: the operator asking "why was this ignored" is asking precisely
+    about a file nothing consumed, and answering needs its container facts.
+
+    Timing is the one thing that differs. A missing start time is fatal for a source the
+    pipeline will use (INV-12) and merely worth recording for one it will not — a stray
+    WAV in an unconfigured directory must not be able to fail the session.
     """
     item = source.file
     hints = FilenameHintsRecord(
@@ -297,9 +333,6 @@ def _capture(
         "associated_with": source.associated_with,
         "filename": hints,
     }
-    if not probe_it or source.role != "selected":
-        return ManifestSource(**base)  # type: ignore[arg-type]
-
     key = cache_key(
         relative_path=item.relative_path,
         source_sha256=item.sha256,
@@ -308,7 +341,7 @@ def _capture(
         ffprobe_args=FFPROBE_ARGS,
     )
     cached = cache.get(key)
-    if cached is not None:
+    if cached is not None and _sidecar_exists(session_dir, cached):
         return ManifestSource(**base, **cached)  # type: ignore[arg-type]
 
     capture = _inspect_one(session_dir, config, source)
@@ -328,7 +361,8 @@ class _Capture:
     container: ContainerRecord
     probe: ProbeRecord
     riff: RiffRecord
-    start_time: StartTimeRecord
+    #: Absent only for a source no stage will use, which carried no timing evidence.
+    start_time: StartTimeRecord | None
     warnings: list[ManifestNote]
 
     def as_payload(self) -> dict[str, object]:
@@ -336,9 +370,27 @@ class _Capture:
             "container": self.container.model_dump(mode="json"),
             "probe": self.probe.model_dump(mode="json"),
             "riff": self.riff.model_dump(mode="json"),
-            "start_time": self.start_time.model_dump(mode="json"),
+            "start_time": None
+            if self.start_time is None
+            else self.start_time.model_dump(mode="json"),
             "warnings": [note.model_dump(mode="json") for note in self.warnings],
         }
+
+
+def _sidecar_exists(session_dir: Path, cached: dict[str, object]) -> bool:
+    """Whether the verbatim FFprobe capture a cached record points at is still there.
+
+    A cache entry outlives the sidecar it references — deleting ``work/ffprobe/`` while
+    keeping ``work/cache/`` is an ordinary thing to do, and without this check the next
+    run exits zero having written a manifest whose ``probe.sidecar_path`` names a file
+    that does not exist. The gate requires the raw JSON to be *retained*, and a reference
+    to a missing file retains nothing. Re-probing costs one subprocess.
+    """
+    probe = cached.get("probe")
+    if not isinstance(probe, dict):
+        return False
+    sidecar = probe.get("sidecar_path")
+    return isinstance(sidecar, str) and (session_dir / sidecar).is_file()
 
 
 def _inspect_one(session_dir: Path, config: SessionConfig, source: DiscoveredSource) -> _Capture:
@@ -360,19 +412,38 @@ def _inspect_one(session_dir: Path, config: SessionConfig, source: DiscoveredSou
         duration_ts=properties.duration_ts,
     )
 
-    start = extract_start_time(
-        SourceContext(
-            relative_path=item.relative_path,
-            sha256=item.sha256,
-            sample_rate=properties.sample_rate,
-            tags=format_tags(document),
-            frame_rate=parse_frame_rate(config.timecode.frame_rate),
-            override=config.recovery.source_time_overrides.get(item.relative_path),
-        )
+    context = SourceContext(
+        relative_path=item.relative_path,
+        sha256=item.sha256,
+        sample_rate=properties.sample_rate,
+        tags=format_tags(document),
+        frame_rate=parse_frame_rate(config.timecode.frame_rate),
+        override=config.recovery.source_time_overrides.get(item.relative_path),
     )
+    warnings = _format_warnings(properties, count.agrees)
+    start: StartTime | None
+    if source.role == "selected":
+        start = extract_start_time(context)
+    else:
+        # A file nothing will consume still gets its timing recorded when it has any.
+        # What it must not do is fail the session: a stray WAV in a directory nobody
+        # configured has no obligation to carry a timecode (INV-12 is about the sources
+        # the pipeline uses).
+        try:
+            start = extract_start_time(context)
+        except DndAudioError as exc:
+            start = None
+            warnings.append(
+                ManifestNote(
+                    code="no_timing_evidence",
+                    message=f"no start time could be established, which is recorded rather "
+                    f"than fatal because this source is {source.role!r} and no stage will "
+                    f"use it: {exc}",
+                )
+            )
 
     return _Capture(
-        warnings=_format_warnings(properties, count.agrees),
+        warnings=warnings,
         container=ContainerRecord(
             codec_name=properties.codec_name,
             sample_format=properties.sample_format,
@@ -392,7 +463,7 @@ def _inspect_one(session_dir: Path, config: SessionConfig, source: DiscoveredSou
             command=["ffprobe", *FFPROBE_ARGS, "-i", item.relative_path],
         ),
         riff=_riff_record(inventory),
-        start_time=_start_time_record(start),
+        start_time=None if start is None else _start_time_record(start),
     )
 
 
@@ -526,12 +597,39 @@ def _roster_of(found: Discovery) -> RosterSummary:
     )
 
 
-def _contribute_to_report(builder: ReportBuilder, found: Discovery, roster: RosterSummary) -> None:
-    """Everything the report carries that the manifest does not carry for it."""
+def _contribute_to_report(
+    builder: ReportBuilder,
+    found: Discovery,
+    roster: RosterSummary,
+    tracks: Sequence[ManifestTrack],
+    unassigned: Sequence[ManifestSource],
+) -> None:
+    """Everything the report carries that the manifest does not carry for it.
+
+    An applied recovery override is recorded here as well as in the manifest, because the
+    gate asks for it "prominently in manifest **and** report" and an earlier version
+    satisfied only the first half — with a test whose name claimed both and which never
+    opened the report.
+    """
     builder.record_roster(roster)
     builder.record_package_version("dnd_audio.inspection", str(INSPECTION_SEMANTICS_VERSION))
     for item in found.decisions:
         builder.record_decision(Decision(code=item.code, subject=item.subject, detail=item.detail))
+
+    for source in [*(s for track in tracks for s in track.sources), *unassigned]:
+        start = source.start_time
+        if start is None or start.override_reason is None:
+            continue
+        builder.record_decision(
+            Decision(
+                code="recovery_override_applied",
+                subject=source.relative_path,
+                detail=(
+                    f"timing came from {start.strategy}, not from the file: {start.override_reason}"
+                ),
+                details={"strategy": start.strategy, "evidence": start.evidence.kind},
+            )
+        )
 
 
 def _raw_roots(config: SessionConfig) -> tuple[str, ...]:
@@ -540,9 +638,16 @@ def _raw_roots(config: SessionConfig) -> tuple[str, ...]:
     Derived from the configured inputs rather than hardcoded to ``raw/``: the spec's
     layout is canonical, not mandatory, and INV-01 protects wherever the sources
     actually are.
+
+    ``"."`` is kept. An earlier version dropped it — reasonably, since every relative
+    path is under ``"."`` and the output check would fire on all of them — but dropping
+    it also emptied the snapshot, so for a session configured as ``input: "tx-a"`` the
+    INV-01 verification compared two empty dicts and passed no matter what happened to
+    the sources. The false-positive problem belongs to the output check alone, and is
+    handled there; the snapshot excludes this pipeline's own directories by name.
     """
-    roots = {str(PurePosixPath(track.input).parent) for track in config.tracks}
-    return tuple(sorted(root for root in roots if root not in ("", ".")))
+    roots = {str(PurePosixPath(track.input).parent) or "." for track in config.tracks}
+    return tuple(sorted("." if root == "" else root for root in roots))
 
 
 def _snapshot(session_dir: Path, roots: tuple[str, ...]) -> dict[str, tuple[str, int]]:
@@ -551,16 +656,24 @@ def _snapshot(session_dir: Path, roots: tuple[str, ...]) -> dict[str, tuple[str,
     Every file, not only the selected sources: INV-01 says nothing under ``raw/`` is
     written, renamed, deleted, or normalized, and a check that looked only at what
     inspection read would miss exactly the accidental rename it exists to catch.
+
+    ``work/`` and ``output/`` are excluded, because when a track's input sits directly in
+    the session root they are inside a scanned root and are the two directories this run
+    is *supposed* to write.
     """
+    generated = {WORK_DIRNAME, OUTPUT_DIRNAME}
     snapshot: dict[str, tuple[str, int]] = {}
     for root in roots:
-        directory = session_dir / root
+        directory = session_dir if root == "." else session_dir / root
         if not directory.is_dir():
             continue
         for path in sorted(directory.rglob("*")):
-            if path.is_file():
-                relative = path.relative_to(session_dir).as_posix()
-                snapshot[relative] = (sha256_file(path), path.stat().st_size)
+            if not path.is_file():
+                continue
+            relative = path.relative_to(session_dir).as_posix()
+            if generated.intersection(PurePosixPath(relative).parts):
+                continue
+            snapshot[relative] = (sha256_file(path), path.stat().st_size)
     return snapshot
 
 
@@ -589,27 +702,110 @@ def _verify_unchanged(
     raise DiscoveryError(message, code="raw_sources_modified")
 
 
-def _reject_outputs_inside_raw(roots: tuple[str, ...]) -> None:
+def _reject_outputs_inside_raw(
+    session_dir: Path, config: SessionConfig, roots: tuple[str, ...]
+) -> None:
     """The spec's "output paths would overwrite raw inputs" fatal error.
 
     Checked before the first write rather than after, which is the only order in which
     it is a check rather than a postmortem.
+
+    **Compared after resolution, not lexically.** A lexical comparison is defeated by one
+    symlink: with ``output -> raw/tx-a``, ``output/ingest-report.json`` does not look like
+    it is inside ``raw/``, and the run cheerfully writes a report into a track's source
+    directory. The snapshot cannot catch it either, because the report is written after
+    the snapshot is verified. So every candidate path and every protected directory is
+    resolved to a real filesystem location first.
+
+    Protected: each configured track's input directory, always; and each scan root, except
+    when the root *is* the session directory, where ``work/`` and ``output/`` are
+    legitimately siblings of the track directories.
     """
+    protected: dict[str, Path] = {
+        track.input: _resolve(session_dir / track.input) for track in config.tracks
+    }
+    for root in roots:
+        if root != ".":
+            protected[root] = _resolve(session_dir / root)
+
     outputs = {
-        "the manifest": PurePosixPath(MANIFEST_RELATIVE_PATH),
-        "the FFprobe sidecars": PurePosixPath(PROBE_DIRNAME),
-        "the inspection cache": PurePosixPath(CACHE_DIRNAME),
-        "the report": PurePosixPath(OUTPUT_DIRNAME) / REPORT_FILENAME,
+        "the manifest": session_dir / MANIFEST_RELATIVE_PATH,
+        "the FFprobe sidecars": session_dir / PROBE_DIRNAME,
+        "the inspection cache": session_dir / CACHE_DIRNAME,
+        "the report": session_dir / OUTPUT_DIRNAME / REPORT_FILENAME,
     }
     for label, target in outputs.items():
-        for root in roots:
-            if target == PurePosixPath(root) or PurePosixPath(root) in target.parents:
+        resolved = _resolve(target)
+        for name, directory in sorted(protected.items()):
+            if resolved == directory or directory in resolved.parents:
                 message = (
-                    f"{label} would be written to {target}, inside the source directory "
-                    f"{root}. Nothing under a session's raw sources may be written to "
-                    f"(INV-01); move the tracks' input directories out of {root}."
+                    f"{label} would be written to {resolved}, inside the source directory "
+                    f"{name} ({directory}). Nothing under a session's raw sources may be "
+                    f"written to (INV-01). If a symlink put it there, that counts."
                 )
                 raise DiscoveryError(message, code="output_inside_raw")
+
+
+def _resolve(path: Path) -> Path:
+    """The real location a path names, following symlinks as far as they exist.
+
+    ``strict=False`` because most of these paths have not been created yet; what matters
+    is where they *would* land, and that is decided by the symlinks that already exist on
+    the way there.
+    """
+    return path.resolve()
+
+
+def _report_warnings(manifest: Manifest) -> list[ReportWarning]:
+    """Every warning the run produced, flattened for the report.
+
+    Session-level discovery warnings *and* per-source ones — an unexpected sample rate, a
+    sample-count disagreement, a truncated RIFF chunk. Those were previously reachable
+    only by opening the manifest and walking into a track's sources, which is not what
+    the spec means by a structured report of warnings.
+    """
+    flattened = [
+        ReportWarning(code=note.code, message=note.message, path=note.path)
+        for note in manifest.warnings
+    ]
+    for source in [*(s for t in manifest.tracks for s in t.sources), *manifest.unassigned]:
+        flattened.extend(
+            ReportWarning(code=note.code, message=note.message, path=source.relative_path)
+            for note in source.warnings
+        )
+        if source.riff is not None:
+            flattened.extend(
+                ReportWarning(
+                    code=f"riff_{note.code}",
+                    message=note.message,
+                    path=source.relative_path,
+                )
+                for note in source.riff.warnings
+            )
+    return sorted(flattened, key=lambda note: (note.code, note.path or "", note.message))
+
+
+def _remove_stale_manifest(manifest_path: Path) -> None:
+    """Delete a manifest left by an earlier successful run.
+
+    A failed run that leaves the previous manifest in place is worse than one that
+    leaves none: the file looks current, describes a session that no longer inspects,
+    and nothing in it says so. The report records the failure; the stale artifact would
+    contradict it.
+    """
+    manifest_path.unlink(missing_ok=True)
+
+
+def _code_of(exc: BaseException) -> str:
+    """The structured error code for a failure (INV-13).
+
+    Errors this project raises carry their own; anything else is `internal_error`, which
+    is honest — an unexpected exception is a bug, and labelling it as one of the known
+    failure modes would send an operator looking in the wrong place.
+    """
+    if isinstance(exc, DndAudioError):
+        return exc.code
+    return "internal_error"
 
 
 def _empty_manifest(session_dir: Path) -> Manifest:

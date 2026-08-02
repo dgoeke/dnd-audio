@@ -325,8 +325,14 @@ class TestFailurePaths:
         self._assert_failed_cleanly(tmp_path, "invalid_configuration")
 
     def test_no_manifest_is_left_behind_by_a_failed_run(self, tmp_path: Path) -> None:
-        """A stale manifest from an earlier success would be worse than none: it looks
-        current and describes a session that no longer inspects."""
+        """A first run that fails must not leave a manifest.
+
+        The *stale* case — an earlier run succeeded and a later one failed — is the one
+        that actually bit, and it lives in
+        `test_inspect_run.py::test_a_failed_rerun_removes_the_manifest_the_last_success_left`
+        because it needs a successful run first. This test cannot see it, and no longer
+        claims to.
+        """
         session = override_session(tmp_path, {"active_tracks: auto": "active_tracks: [tx-a]"})
         for path in (session / "raw/tx-a").iterdir():
             path.unlink()
@@ -343,3 +349,47 @@ class TestFailurePaths:
         )
         runner.invoke(app, ["inspect", str(session)])
         assert not list((session / "work/cache/inspect").glob("*.json"))
+
+
+class TestPerSourceWarningsReachTheReport:
+    """The spec asks the report to carry warnings; nesting them in the manifest hides
+    them from every consumer that reads the report, which is what a report is for."""
+
+    def test_an_unexpected_sample_rate_appears_in_the_reports_warnings(
+        self, tmp_path: Path
+    ) -> None:
+        build_session(
+            FixtureSession(
+                session_id="2026-08-15",
+                title="Session 01",
+                tracks=(
+                    FixtureTrack(
+                        track_id="tx-a",
+                        speaker_id="alice",
+                        speaker_name="Alice",
+                        receiver_id="rx-a",
+                        receiver_channel=1,
+                        tx_label="TX01",
+                        chunks=(FixtureChunk(0, 4410, sequence=1, sample_rate=44100),),
+                    ),
+                ),
+            ),
+            tmp_path,
+        )
+        result = run_inspect(tmp_path, now=EARLY)
+        stage = next(s for s in result.report.stages if s.stage.value == "inspect")
+        warnings = {w.code: w for w in stage.warnings}
+
+        assert "unexpected_sample_rate" in warnings
+        assert warnings["unexpected_sample_rate"].path == (
+            "raw/tx-a/TX01_MIC001_20260815_190000_orig.wav"
+        )
+
+    def test_the_reports_warnings_are_sorted(self, tmp_path: Path) -> None:
+        """Two runs must not differ by warning order (INV-02 for the decision sections)."""
+        session = override_session(tmp_path)
+        (session / "raw/tx-a/notes.txt").write_text("field log", encoding="utf-8")
+        result = run_inspect(session, now=EARLY)
+        stage = next(s for s in result.report.stages if s.stage.value == "inspect")
+        keys = [(w.code, w.path or "", w.message) for w in stage.warnings]
+        assert keys == sorted(keys)

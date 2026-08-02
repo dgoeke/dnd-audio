@@ -15,6 +15,7 @@ import os
 import shutil
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from dnd_audio.artifacts.manifest import (
@@ -31,6 +32,7 @@ from dnd_audio.fixtures import (
     FixtureTruth,
     build_session,
 )
+from dnd_audio.fixtures.wav import BroadcastMetadata, write_wav
 from dnd_audio.inspection.probe import ProbeResult
 from dnd_audio.inspection.riff import read_inventory
 from dnd_audio.inspection.runner import PROBE_DIRNAME, run_inspect
@@ -352,9 +354,13 @@ class TestUnassignedSources:
     ) -> None:
         stranger = canonical_fixture.session_dir / "raw" / "tx-z"
         stranger.mkdir()
-        shutil.copy(
-            canonical_fixture.session_dir / canonical_fixture.chunks[0].relative_path,
+        # Distinct bytes, so this exercises unassigned-ness rather than duplicate
+        # detection — the stray-copy case has its own test below.
+        write_wav(
             stranger / "TX01_MIC001_20260815_190000_orig.wav",
+            np.full(4800, 0.25, dtype=np.float32),
+            sample_rate=48000,
+            broadcast=BroadcastMetadata(time_reference=3283200000),
         )
 
         result = run_inspect(canonical_fixture.session_dir, now=EARLY)
@@ -366,6 +372,112 @@ class TestUnassignedSources:
 
         attributed = {s.relative_path for t in result.manifest.tracks for s in t.sources}
         assert "raw/tx-z/TX01_MIC001_20260815_190000_orig.wav" not in attributed
+
+    def test_an_unassigned_file_is_captured_as_fully_as_a_selected_one(
+        self, canonical_fixture: FixtureTruth
+    ) -> None:
+        """The spec: "for every candidate audio file, run ffprobe and retain…".
+
+        An earlier version skipped probing anything that no stage would consume, which
+        left ignored edits, duplicates, and strays with no container facts, no sidecar,
+        and no RIFF inventory — and the operator asking "why was this ignored" is asking
+        about exactly those files.
+        """
+        stranger = canonical_fixture.session_dir / "raw" / "tx-z"
+        stranger.mkdir()
+        write_wav(
+            stranger / "loose.wav",
+            np.full(4800, 0.25, dtype=np.float32),
+            sample_rate=48000,
+            broadcast=BroadcastMetadata(time_reference=3283200000),
+        )
+
+        result = run_inspect(canonical_fixture.session_dir, now=EARLY)
+        loose = next(s for s in result.manifest.unassigned if s.relative_path.endswith("loose.wav"))
+
+        assert loose.container is not None
+        assert loose.container.sample_rate == 48000
+        assert loose.container.sample_count == 4800
+        assert loose.probe is not None
+        assert (canonical_fixture.session_dir / loose.probe.sidecar_path).is_file()
+        assert loose.riff is not None
+        assert {c.chunk_id for c in loose.riff.chunks} >= {"fmt ", "data"}
+        assert loose.start_time is not None
+
+    def test_an_ignored_edit_is_captured_too(self, tmp_path: Path) -> None:
+        build_session(
+            FixtureSession(
+                session_id="2026-08-15",
+                title="Session 01",
+                tracks=(
+                    FixtureTrack(
+                        track_id="tx-a",
+                        speaker_id="alice",
+                        speaker_name="Alice",
+                        receiver_id="rx-a",
+                        receiver_channel=1,
+                        tx_label="TX01",
+                        chunks=(
+                            FixtureChunk(0, 4800, sequence=1),
+                            FixtureChunk(0, 4800, sequence=1, variant="edit"),
+                        ),
+                    ),
+                ),
+            ),
+            tmp_path,
+        )
+        result = run_inspect(tmp_path, now=EARLY)
+        edit = next(
+            s for t in result.manifest.tracks for s in t.sources if s.role == "associated_edit"
+        )
+        assert edit.container is not None, "an ignored edit is still a candidate"
+        assert edit.probe is not None
+        assert edit.riff is not None
+
+    def test_a_stray_without_timing_is_recorded_rather_than_fatal(
+        self, canonical_fixture: FixtureTruth
+    ) -> None:
+        """INV-12 is about the sources the pipeline uses.
+
+        A WAV in a directory nobody configured has no obligation to carry a timecode,
+        and letting one fail the whole session would be an own goal.
+        """
+        stranger = canonical_fixture.session_dir / "raw" / "tx-z"
+        stranger.mkdir()
+        write_wav(stranger / "no-timing.wav", np.zeros(4800, dtype=np.float32), sample_rate=48000)
+
+        result = run_inspect(canonical_fixture.session_dir, now=EARLY)
+        assert result.exit_code is ExitCode.OK
+        loose = next(s for s in result.manifest.unassigned)
+        assert loose.start_time is None
+        assert "no_timing_evidence" in {note.code for note in loose.warnings}
+
+    def test_a_stray_copy_never_displaces_a_configured_tracks_recording(
+        self, canonical_fixture: FixtureTruth
+    ) -> None:
+        """A regression, and the reason duplicate ranking knows about attribution.
+
+        Duplicate resolution ranked copies by path alone. A stray at `raw/aaa-stray.wav`
+        sorts before `raw/tx-a/TX01_…`, so it won — marking Alice's real original a
+        duplicate of a file attributed to nobody, and silently costing the track its
+        source. INV-11 violated from the direction nothing else guards.
+        """
+        target = canonical_fixture.for_track("tx-a")[0]
+        stray = canonical_fixture.session_dir / "raw" / "aaa-stray.wav"
+        shutil.copy(canonical_fixture.session_dir / target.relative_path, stray)
+        assert target.relative_path > "raw/aaa-stray.wav", "the stray must sort first to bite"
+
+        result = run_inspect(canonical_fixture.session_dir, now=EARLY)
+        assert result.exit_code is ExitCode.OK
+
+        alice = next(t for t in result.manifest.tracks if t.track_id == "tx-a")
+        kept = next(s for s in alice.sources if s.relative_path == target.relative_path)
+        assert kept.role == "selected", "the track's own recording must win"
+        assert alice.active
+
+        loser = next(s for s in result.manifest.unassigned if "aaa-stray" in s.relative_path)
+        assert loser.role == "duplicate"
+        assert loser.associated_with == target.relative_path
 
 
 class TestOverridesReachBothArtifacts:
@@ -400,6 +512,13 @@ class TestOverridesReachBothArtifacts:
         assert source.start_time.evidence.samples == -1200
         assert source.start_time.override_reason is not None
         assert "clap-measured" in source.start_time.override_reason
+
+        # And the report — the half this test's name always claimed and never checked.
+        applied = [d for d in result.report.decisions if d.code == "recovery_override_applied"]
+        assert [d.subject for d in applied] == [target.relative_path]
+        assert "clap-measured" in applied[0].detail
+        assert applied[0].details["strategy"] == "recovery_override_offset"
+        assert applied[0].details["evidence"] == "session_offset_samples"
 
     def test_the_override_wins_over_a_perfectly_good_bext_reference(
         self, canonical_fixture: FixtureTruth
@@ -439,3 +558,218 @@ def _snapshot(directory: Path) -> dict[str, tuple[str, int]]:
         for path in sorted(directory.rglob("*"))
         if path.is_file()
     }
+
+
+class TestInvOneCannotBeBypassed:
+    """Regressions for two ways the INV-01 machinery was defeatable.
+
+    Both were found by independent review, and both share a shape: the *check* was
+    present and looked right, while the thing it checked was not what INV-01 protects.
+    """
+
+    def test_a_symlinked_output_directory_is_refused(self, tmp_path: Path) -> None:
+        """`output -> raw/tx-a` used to write the report into a track's source directory.
+
+        The check compared lexical paths, so `output/ingest-report.json` did not *look*
+        like it was inside `raw/`. The snapshot could not catch it either: the report is
+        written after the snapshot is verified. One symlink, invariant gone.
+        """
+        session = _one_track_session(tmp_path)
+        (session / "output").symlink_to(session / "raw" / "tx-a", target_is_directory=True)
+
+        result = run_inspect(session, now=EARLY)
+        assert result.exit_code is ExitCode.FATAL
+        codes = [e.code for s in result.report.stages for e in s.errors]
+        assert codes == ["output_inside_raw"]
+        assert not (session / "raw" / "tx-a" / "ingest-report.json").exists()
+
+    def test_a_symlinked_work_directory_is_refused(self, tmp_path: Path) -> None:
+        session = _one_track_session(tmp_path)
+        (session / "work").symlink_to(session / "raw" / "tx-a", target_is_directory=True)
+
+        result = run_inspect(session, now=EARLY)
+        assert result.exit_code is ExitCode.FATAL
+        assert [e.code for s in result.report.stages for e in s.errors] == ["output_inside_raw"]
+
+    def test_a_track_at_the_session_root_is_still_protected(self, tmp_path: Path) -> None:
+        """`input: "tx-a"` is valid configuration, and used to disable the check entirely.
+
+        The scan root is then `"."`, which was filtered out — so the snapshot was empty,
+        `_verify_unchanged` compared two empty dicts, and INV-01's proof passed no matter
+        what happened to the sources. The bug was in the verification, so only a test
+        that *modifies a source* can detect it.
+        """
+        session = _one_track_session(tmp_path, at_root=True)
+        real = run_inspect.__globals__["run_ffprobe"]
+        source = "tx-a/TX01_MIC001_20260815_190000_orig.wav"
+        assert (session / source).is_file()
+
+        def meddle(session_dir: Path, relative_path: str) -> ProbeResult:
+            result: ProbeResult = real(session_dir, relative_path)
+            target = session_dir / source
+            target.write_bytes(target.read_bytes() + b"tampered")
+            return result
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr("dnd_audio.inspection.runner.run_ffprobe", meddle)
+            result = run_inspect(session, now=EARLY)
+
+        assert result.exit_code is ExitCode.FATAL
+        assert [e.code for s in result.report.stages for e in s.errors] == ["raw_sources_modified"]
+
+    def test_a_track_at_the_session_root_does_not_ingest_its_own_output(
+        self, tmp_path: Path
+    ) -> None:
+        """With the root at `"."`, `work/` and `output/` are siblings of the track."""
+        session = _one_track_session(tmp_path, at_root=True)
+        first = run_inspect(session, now=EARLY)
+        assert first.exit_code is ExitCode.OK
+
+        second = run_inspect(session, now=LATE)
+        assert second.exit_code is ExitCode.OK
+        assert second.manifest.roster.extra_directories == []
+        assert second.manifest.unassigned == []
+
+
+class TestEveryFailureStillWritesAReport:
+    """INV-13 does not have an exemption for failures nobody anticipated."""
+
+    def test_a_track_holding_only_duplicates_fails_cleanly(self, tmp_path: Path) -> None:
+        """Was an uncaught pydantic ValidationError and no report at all.
+
+        Root cause: the inactive reason keyed off whether *any* file was found rather
+        than whether any was *selected*, and those differ exactly here.
+        """
+        session = _two_track_session(tmp_path)
+        for path in (session / "raw/tx-b").iterdir():
+            path.unlink()
+        shutil.copy(
+            session / "raw/tx-a/TX01_MIC001_20260815_190000_orig.wav",
+            session / "raw/tx-b/TX02_MIC001_20260815_190000_orig.wav",
+        )
+
+        result = run_inspect(session, now=EARLY)
+        assert result.exit_code is ExitCode.OK, "a duplicate is a warning, not a failure"
+        assert (session / "output" / "ingest-report.json").is_file()
+
+        bob = next(t for t in result.manifest.tracks if t.track_id == "tx-b")
+        assert not bob.active
+        assert bob.inactive_reason is not None
+        assert "byte-identical" in bob.inactive_reason
+
+    def test_an_unreadable_source_fails_with_a_report_not_a_traceback(self, tmp_path: Path) -> None:
+        session = _one_track_session(tmp_path)
+        target = session / "raw/tx-a/TX01_MIC001_20260815_190000_orig.wav"
+        target.chmod(0o000)
+        try:
+            result = run_inspect(session, now=EARLY)
+        finally:
+            target.chmod(0o644)
+
+        assert result.exit_code is ExitCode.FATAL
+        assert (session / "output" / "ingest-report.json").is_file()
+        errors = [e for s in result.report.stages for e in s.errors]
+        assert errors[0].code == "internal_error"
+        for stage in result.report.stages:
+            if stage.stage.value != "inspect":
+                assert stage.skip_reason
+
+    def test_a_failed_rerun_removes_the_manifest_the_last_success_left(
+        self, tmp_path: Path
+    ) -> None:
+        """The case the previous test could not see, because it started from nothing.
+
+        A stale manifest is worse than none: it looks current, describes a session that
+        no longer inspects, and nothing inside it says so.
+        """
+        session = _one_track_session(tmp_path)
+        assert run_inspect(session, now=EARLY).exit_code is ExitCode.OK
+        assert (session / "work" / "manifest.json").is_file()
+
+        (session / "session.yaml").write_text("not: a valid session\n", encoding="utf-8")
+        second = run_inspect(session, now=LATE)
+
+        assert second.exit_code is ExitCode.FATAL
+        assert not (session / "work" / "manifest.json").exists()
+        assert (session / "output" / "ingest-report.json").is_file()
+
+    def test_a_run_that_never_read_a_config_reports_no_config_hash(self, tmp_path: Path) -> None:
+        """Rather than a string of sixty-four zeroes, which is a valid-looking lie."""
+        (tmp_path / "raw").mkdir()
+        result = run_inspect(tmp_path, now=EARLY)
+        assert result.report.provenance.config_hash is None
+
+
+class TestCacheReuseKeepsTheSidecar:
+    def test_a_cache_hit_whose_sidecar_is_gone_re_probes(
+        self, canonical_fixture: FixtureTruth
+    ) -> None:
+        """Deleting `work/ffprobe/` while keeping `work/cache/` is an ordinary thing.
+
+        It used to produce a manifest referencing files that do not exist, exit 0, and
+        say nothing — so the "raw FFprobe JSON is retained" gate held on a first run and
+        quietly stopped holding on every one after.
+        """
+        run_inspect(canonical_fixture.session_dir, now=EARLY)
+        sidecars = canonical_fixture.session_dir / PROBE_DIRNAME
+        for path in sidecars.iterdir():
+            path.unlink()
+
+        result = run_inspect(canonical_fixture.session_dir, now=LATE)
+        assert result.exit_code is ExitCode.OK
+        for track in result.manifest.tracks:
+            for source in track.sources:
+                assert source.probe is not None
+                assert (canonical_fixture.session_dir / source.probe.sidecar_path).is_file()
+
+
+def _one_track_session(tmp_path: Path, *, at_root: bool = False) -> Path:
+    build_session(
+        FixtureSession(
+            session_id="2026-08-15",
+            title="Session 01",
+            tracks=(
+                FixtureTrack(
+                    track_id="tx-a",
+                    speaker_id="alice",
+                    speaker_name="Alice",
+                    receiver_id="rx-a",
+                    receiver_channel=1,
+                    tx_label="TX01",
+                    chunks=(FixtureChunk(0, 4800, sequence=1),),
+                ),
+            ),
+        ),
+        tmp_path,
+    )
+    if at_root:
+        shutil.move(str(tmp_path / "raw" / "tx-a"), str(tmp_path / "tx-a"))
+        (tmp_path / "raw").rmdir()
+        document = (tmp_path / "session.yaml").read_text(encoding="utf-8")
+        (tmp_path / "session.yaml").write_text(
+            document.replace("input: raw/tx-a", "input: tx-a"), encoding="utf-8"
+        )
+    return tmp_path
+
+
+def _two_track_session(tmp_path: Path) -> Path:
+    build_session(
+        FixtureSession(
+            session_id="2026-08-15",
+            title="Session 01",
+            tracks=tuple(
+                FixtureTrack(
+                    track_id=f"tx-{letter}",
+                    speaker_id=name.lower(),
+                    speaker_name=name,
+                    receiver_id=f"rx-{letter}",
+                    receiver_channel=1,
+                    tx_label=f"TX0{index + 1}",
+                    chunks=(FixtureChunk(0, 4800, sequence=1),),
+                )
+                for index, (letter, name) in enumerate([("a", "Alice"), ("b", "Bob")])
+            ),
+        ),
+        tmp_path,
+    )
+    return tmp_path
