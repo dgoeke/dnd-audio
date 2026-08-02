@@ -41,5 +41,10 @@ result-*
 # public repository. Committed docs refer to it but never quote it.
 LOCAL.md
 
+# Raw reviewer transcripts. scripts/codex-review.sh saves the reviewer's whole
+# session, which quotes every file it read — LOCAL.md included. The distilled
+# review beside it (without the .raw) is what gets committed.
+docs/plan/reviews/*.raw.md
+
 # Scratch
 .scratch/

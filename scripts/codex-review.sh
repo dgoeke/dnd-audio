@@ -7,7 +7,11 @@
 #   scripts/codex-review.sh plan M1          # critique the charter + working plan
 #   scripts/codex-review.sh code M1 [base]   # review the milestone branch diff
 #
-# Output is echoed and saved under docs/plan/reviews/.
+# The raw session is echoed and saved as docs/plan/reviews/<ms>-<mode>-<stamp>.raw.md,
+# which .gitignore excludes: a reviewer transcript quotes every file it read, and
+# LOCAL.md is one of them. This repository is public. Distil the reviewer's actual
+# findings into <ms>-<mode>-<stamp>.md — no hostname, username, or absolute home path —
+# and commit that.
 
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
@@ -40,7 +44,8 @@ MS=$(basename "$CHARTER" | cut -d- -f1)
 
 mkdir -p docs/plan/reviews
 STAMP=$(date +%Y%m%d-%H%M)
-OUT="docs/plan/reviews/${MS}-${MODE}-${STAMP}.md"
+OUT="docs/plan/reviews/${MS}-${MODE}-${STAMP}.raw.md"
+KEEP="docs/plan/reviews/${MS}-${MODE}-${STAMP}.md"
 
 COMMON="Read these before forming an opinion, even if some are already in context:
 
@@ -118,4 +123,5 @@ Ignore formatting and naming preferences; ruff and the type checker already ran.
 esac
 
 echo
-echo "saved: ${OUT}"
+echo "raw transcript (not committed): ${OUT}"
+echo "distil the findings into ${KEEP} and commit that one — see the header comment."

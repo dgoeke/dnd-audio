@@ -49,7 +49,9 @@ weights, and no network.
 `./scripts/codex-review.sh` gets an independent second opinion from the Codex CLI —
 `plan <N>` before implementing, `code <N>` before closing. Run it at least once per
 milestone. It reasons differently on purpose; treat disagreement as signal, and
-record which findings were rejected and why.
+record which findings were rejected and why. It saves the raw session as `*.raw.md`,
+which is gitignored because a reviewer transcript quotes every file it read,
+`LOCAL.md` among them. Commit the distilled findings beside it, sanitized.
 
 ## Hard rules
 
