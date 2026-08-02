@@ -15,6 +15,7 @@ from dnd_audio.errors import TimecodeError
 from dnd_audio.timecode import (
     FRAME_RATE_LABELS,
     FRAME_RATES,
+    frame_index,
     parse_frame_rate,
     parse_timecode,
 )
@@ -143,3 +144,78 @@ class TestTimecodeSyntax:
     def test_round_trips_through_str(self) -> None:
         rate = parse_frame_rate("29.97DF")
         assert str(parse_timecode("19:10:00;05", rate)) == "19:10:00;05"
+
+
+class TestFrameIndex:
+    """The evidence half of spec acceptance criterion 2 (ADR-0006).
+
+    A frame index is exact at every rate, which is the whole reason the manifest stores
+    one instead of a sample position. Every expectation below is arithmetic done by hand.
+    """
+
+    @pytest.mark.parametrize(
+        ("label", "text", "expected"),
+        [
+            ("30F", "00:00:00:00", 0),
+            ("30F", "00:00:01:00", 30),
+            ("30F", "19:00:00:00", 19 * 3600 * 30),
+            ("30F", "19:00:03:15", 19 * 3600 * 30 + 3 * 30 + 15),
+            ("25F", "01:00:00:00", 3600 * 25),
+            ("24F", "23:59:59:23", 24 * 3600 * 24 - 1),
+            # Fractional rates count frames at their nominal rate: 23.98F labels 24
+            # frames per timecode second even though 24000/1001 of them elapse.
+            ("23.98F", "00:00:10:00", 240),
+            ("29.97F", "00:10:00:00", 600 * 30),
+        ],
+    )
+    def test_non_drop_rates_count_straight_through(
+        self, label: str, text: str, expected: int
+    ) -> None:
+        rate = parse_frame_rate(label)
+        assert frame_index(parse_timecode(text, rate)) == expected
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("00:00:00:00", 0),
+            # The first drop happens at 00:01:00; the label 00:01:00;00 does not exist,
+            # so the first real frame of minute one is ;02 and it is index 1800.
+            ("00:01:00:02", 30 * 60),
+            ("00:09:59:29", 30 * 600 - 2 * 9 - 1),
+            # Every tenth minute drops nothing, which is what keeps the count in step
+            # with the wall clock.
+            ("00:10:00:00", 30 * 600 - 2 * 9),
+            ("01:00:00:00", 30 * 3600 - 2 * (60 - 6)),
+        ],
+    )
+    def test_drop_frame_subtracts_the_labels_it_never_assigns(
+        self, text: str, expected: int
+    ) -> None:
+        rate = parse_frame_rate("29.97DF")
+        assert frame_index(parse_timecode(text, rate)) == expected
+
+    def test_drop_frame_tracks_the_wall_clock_and_non_drop_does_not(self) -> None:
+        """The reason drop-frame exists, asserted rather than described.
+
+        After one hour of 29.97 fps, non-drop timecode has fallen 3.6 s behind real
+        time and drop-frame is within a frame of it. A bug in the drop arithmetic shows
+        up here as seconds, not as an off-by-one.
+        """
+        elapsed_seconds = Fraction(3600)
+        drop = parse_frame_rate("29.97DF")
+        non_drop = parse_frame_rate("29.97F")
+
+        drop_elapsed = frame_index(parse_timecode("01:00:00:00", drop)) / drop.rate
+        plain_elapsed = frame_index(parse_timecode("01:00:00:00", non_drop)) / non_drop.rate
+
+        assert abs(drop_elapsed - elapsed_seconds) < Fraction(1, 20)
+        assert abs(plain_elapsed - elapsed_seconds) > Fraction(3)
+
+    def test_the_index_is_an_integer_at_every_rate(self) -> None:
+        """INV-04: no rate makes a frame count fractional, which is the point."""
+        for label in FRAME_RATE_LABELS:
+            rate = parse_frame_rate(label)
+            text = "10:20:30;02" if rate.drop_frame else "10:20:30:02"
+            index = frame_index(parse_timecode(text, rate))
+            assert isinstance(index, int)
+            assert index > 0
