@@ -183,6 +183,11 @@ class Provenance(_Artifact):
     #: External tools whose version changes the output — FFmpeg, FFprobe, SoX.
     tool_versions: dict[str, str] = Field(default_factory=dict)
     package_versions: dict[str, str] = Field(default_factory=dict)
+    #: The exact external commands whose parameters affect an output, as the spec's
+    #: observability section requires. Recorded as the invariant part of the invocation
+    #: with the varying operand written as a placeholder: twelve near-identical FFprobe
+    #: lines are noise, and the parameters are the thing that changes a capture.
+    commands: list[str] = Field(default_factory=list)
     #: Resolved model and aligner revisions, not mutable branch names.
     model_identity: dict[str, str] = Field(default_factory=dict)
     #: Every deliverable this run produced, except the report itself (ADR-0003).
@@ -329,6 +334,7 @@ class ReportBuilder:
         self._deliverables: dict[str, Deliverable] = {}
         self._tool_versions: dict[str, str] = {}
         self._package_versions: dict[str, str] = {}
+        self._commands: list[str] = []
         self._model_identity: dict[str, str] = {}
         self._stage_seconds: dict[StageName, float] = {}
         self._decisions: list[Decision] = []
@@ -390,6 +396,11 @@ class ReportBuilder:
     def record_package_version(self, name: str, version: str) -> None:
         self._package_versions[name] = version
 
+    def record_command(self, command: str) -> None:
+        """Record an external command's exact parameters. Recorded once, not per file."""
+        if command not in self._commands:
+            self._commands.append(command)
+
     def record_model_identity(self, name: str, revision: str) -> None:
         self._model_identity[name] = revision
 
@@ -439,6 +450,7 @@ class ReportBuilder:
                 config_hash=self._config_hash,
                 tool_versions=dict(self._tool_versions),
                 package_versions=dict(self._package_versions),
+                commands=list(self._commands),
                 model_identity=dict(self._model_identity),
                 deliverables=list(self._deliverables.values()),
             ),

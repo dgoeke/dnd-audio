@@ -65,6 +65,7 @@ from dnd_audio.inspection.cache import CACHE_DIRNAME, InspectionCache, cache_key
 from dnd_audio.inspection.discovery import DiscoveredSource, Discovery, discover
 from dnd_audio.inspection.probe import (
     FFPROBE_ARGS,
+    AudioProperties,
     ToolVersions,
     exact_sample_count,
     format_tags,
@@ -145,7 +146,7 @@ def run_inspect(
 
     manifest_path = session_dir / MANIFEST_RELATIVE_PATH
     report_path = session_dir / OUTPUT_DIRNAME / REPORT_FILENAME
-    cache = InspectionCache(directory=session_dir / CACHE_DIRNAME, enabled=use_cache)
+    cache = InspectionCache(directory=session_dir / CACHE_DIRNAME, read_enabled=use_cache)
 
     try:
         config = load_session_config(session_dir / "session.yaml")
@@ -209,6 +210,7 @@ def inspect_session(
     tools = tool_versions()
     builder.record_tool_version("ffmpeg", tools.ffmpeg)
     builder.record_tool_version("ffprobe", tools.ffprobe)
+    builder.record_command("ffprobe " + " ".join(FFPROBE_ARGS) + " -i <source>")
 
     found = discover(session_dir, config)
 
@@ -309,14 +311,37 @@ def _capture(
     if cached is not None:
         return ManifestSource(**base, **cached)  # type: ignore[arg-type]
 
-    payload = _inspect_one(session_dir, config, source)
-    cache.stage(key, {name: value.model_dump(mode="json") for name, value in payload.items()})
-    return ManifestSource(**base, **payload)  # type: ignore[arg-type]
+    capture = _inspect_one(session_dir, config, source)
+    cache.stage(key, capture.as_payload())
+    return ManifestSource(**base, **capture.as_payload())  # type: ignore[arg-type]
 
 
-def _inspect_one(
-    session_dir: Path, config: SessionConfig, source: DiscoveredSource
-) -> dict[str, ContainerRecord | ProbeRecord | RiffRecord | StartTimeRecord]:
+@dataclass(frozen=True, slots=True)
+class _Capture:
+    """Everything reading one source produced, and the only thing the cache stores.
+
+    Serialized through one method rather than by iterating a dict of models: the fields
+    have different shapes, and a generic ``model_dump`` loop over them silently stopped
+    working the moment one of them became a list.
+    """
+
+    container: ContainerRecord
+    probe: ProbeRecord
+    riff: RiffRecord
+    start_time: StartTimeRecord
+    warnings: list[ManifestNote]
+
+    def as_payload(self) -> dict[str, object]:
+        return {
+            "container": self.container.model_dump(mode="json"),
+            "probe": self.probe.model_dump(mode="json"),
+            "riff": self.riff.model_dump(mode="json"),
+            "start_time": self.start_time.model_dump(mode="json"),
+            "warnings": [note.model_dump(mode="json") for note in self.warnings],
+        }
+
+
+def _inspect_one(session_dir: Path, config: SessionConfig, source: DiscoveredSource) -> _Capture:
     """The expensive part: FFprobe, the chunk walk, and the strategy chain."""
     item = source.file
     probe = run_ffprobe(session_dir, item.relative_path)
@@ -346,8 +371,9 @@ def _inspect_one(
         )
     )
 
-    return {
-        "container": ContainerRecord(
+    return _Capture(
+        warnings=_format_warnings(properties, count.agrees),
+        container=ContainerRecord(
             codec_name=properties.codec_name,
             sample_format=properties.sample_format,
             bits_per_sample=properties.bits_per_sample,
@@ -360,14 +386,66 @@ def _inspect_one(
             sample_count_source=count.source,
             sample_count_agrees=count.agrees,
         ),
-        "probe": ProbeRecord(
+        probe=ProbeRecord(
             sidecar_path=f"{PROBE_DIRNAME}/{probe.sidecar_name}",
             sha256=probe.sha256,
             command=["ffprobe", *FFPROBE_ARGS, "-i", item.relative_path],
         ),
-        "riff": _riff_record(inventory),
-        "start_time": _start_time_record(start),
-    }
+        riff=_riff_record(inventory),
+        start_time=_start_time_record(start),
+    )
+
+
+#: What a DJI transmitter recording is expected to be. Anything else is a warning here
+#: and a fatal error in M2: the spec lists a non-48 kHz selected source among the fatal
+#: errors, but placing it there is timeline construction's job, and refusing to *record*
+#: a file we can describe would lose the diagnostic that explains the later failure.
+_EXPECTED_SAMPLE_RATE: Final = 48000
+_EXPECTED_CODEC: Final = "pcm_f32le"
+_EXPECTED_CHANNELS: Final = 1
+
+
+def _format_warnings(
+    properties: AudioProperties, sample_count_agrees: bool | None
+) -> list[ManifestNote]:
+    """Flag a source that is not the shape the rest of the pipeline assumes."""
+    notes: list[ManifestNote] = []
+    if properties.sample_rate != _EXPECTED_SAMPLE_RATE:
+        notes.append(
+            ManifestNote(
+                code="unexpected_sample_rate",
+                message=f"{properties.sample_rate} Hz, not the {_EXPECTED_SAMPLE_RATE} Hz this "
+                f"pipeline mixes at. Resampling a lossless timeline silently is not on offer, "
+                f"so building the timeline will reject this source (M2).",
+            )
+        )
+    if properties.codec_name != _EXPECTED_CODEC:
+        notes.append(
+            ManifestNote(
+                code="unexpected_codec",
+                message=f"{properties.codec_name}, not {_EXPECTED_CODEC}. Dual-file mode's "
+                f"`orig` is 32-bit float; anything else suggests a processed or "
+                f"reconverted file (OQ-007).",
+            )
+        )
+    if properties.channels != _EXPECTED_CHANNELS:
+        notes.append(
+            ManifestNote(
+                code="unexpected_channel_count",
+                message=f"{properties.channels} channels; a transmitter records one. Two "
+                f"suggests a receiver mixdown rather than a transmitter recording.",
+            )
+        )
+    if sample_count_agrees is False:
+        notes.append(
+            ManifestNote(
+                code="sample_count_disagreement",
+                message="the RIFF data chunk and FFprobe's duration_ts imply different "
+                "sample counts. The data chunk is used; the disagreement is evidence for "
+                "OQ-011 and is worth looking at before trusting either.",
+            )
+        )
+    return notes
 
 
 def _riff_record(inventory: RiffInventory) -> RiffRecord:

@@ -78,11 +78,14 @@ class InspectionCache:
     Args:
         directory: Where entries live. Created on commit, not on construction, so a
             read-only run leaves no trace.
-        enabled: Set false to force a full re-inspection without deleting anything.
+        read_enabled: Set false to force a full re-inspection. **Writes still happen**:
+            `--no-cache` is for distrusting what is stored, and making it also refuse
+            to store would turn "one slow run" into "every run slow", which is not what
+            anyone reaches for it to do.
     """
 
     directory: Path
-    enabled: bool = True
+    read_enabled: bool = True
     hits: int = 0
     misses: int = 0
     _staged: dict[str, dict[str, Any]] = field(default_factory=dict, repr=False)
@@ -93,7 +96,7 @@ class InspectionCache:
         A record that will not parse is a miss rather than an error: a corrupted cache
         should cost time, not a session.
         """
-        if not self.enabled:
+        if not self.read_enabled:
             self.misses += 1
             return None
         path = self._path(key)
@@ -121,13 +124,11 @@ class InspectionCache:
         after it has proved the sources are unchanged (INV-01): a file altered during a
         run must not leave behind an entry describing bytes that are gone.
         """
-        if self.enabled:
-            self._staged[key] = payload
+        self._staged[key] = payload
 
     def commit(self) -> int:
         """Write every staged record atomically. Returns how many were written."""
-        if not self.enabled or not self._staged:
-            self._staged.clear()
+        if not self._staged:
             return 0
         written = 0
         for key, payload in sorted(self._staged.items()):

@@ -75,6 +75,13 @@
       "additionalProperties": false,
       "description": "Deterministic facts about the inputs and the software.\n\nINV-03: nothing in here may vary between two identical runs. No timestamps, no\ndurations, no cache counters, no hostname. Those live in :class:`Telemetry`, and\n``tests/test_report.py`` asserts that no field here is time-typed.",
       "properties": {
+        "commands": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Commands",
+          "type": "array"
+        },
         "config_hash": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Config Hash",
