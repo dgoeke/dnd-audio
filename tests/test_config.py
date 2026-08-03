@@ -194,11 +194,44 @@ class TestRejections:
 
     def test_model_and_aligner_revisions_are_accepted(self, raw: dict[str, Any]) -> None:
         """The spec allows pinning revisions in configuration rather than in the lock."""
-        raw["asr"]["model_revision"] = "0f1e2d3c"
-        raw["asr"]["aligner_revision"] = "4b5a6978"
+        raw["asr"]["model_revision"] = "0" * 40
+        raw["asr"]["aligner_revision"] = "4b5a6978" + "0" * 32
         config = SessionConfig.model_validate(raw)
-        assert config.asr.model_revision == "0f1e2d3c"
-        assert config.asr.aligner_revision == "4b5a6978"
+        assert config.asr.model_revision == "0" * 40
+        assert config.asr.aligner_revision == "4b5a6978" + "0" * 32
+
+    @pytest.mark.parametrize(
+        "revision",
+        [
+            "main",
+            "v1.0",
+            "refs/pr/3",
+            "0f1e2d3c",  # an abbreviated commit: unambiguous today, ambiguous later
+            "7278E1E70FE206F11671096FFDD38061171DD6E5",  # uppercase
+            "7278e1e70fe206f11671096ffdd38061171dd6e5 ",  # trailing space
+        ],
+    )
+    def test_a_revision_that_is_not_a_full_commit_is_rejected(
+        self, raw: dict[str, Any], revision: str
+    ) -> None:
+        """The structural half of "`process` never re-resolves a moving branch".
+
+        A branch name here would have to be resolved at run time to mean anything, and
+        `process` runs offline against a verified snapshot — so it would either reach the
+        network or guess. Refusing the shape means neither is reachable (ADR-0027).
+
+        An abbreviated commit is refused for a different reason: it is a prefix, and the
+        snapshot directory is keyed by revision, so two abbreviations of one commit would
+        be two installations of the same weights and a full sha would match neither.
+        """
+        raw["asr"]["model_revision"] = revision
+        _reject(raw, "commit")
+
+    def test_the_default_is_no_configured_revision(self, raw: dict[str, Any]) -> None:
+        """Which means "use the revision pinned in this build" — the ordinary case."""
+        config = SessionConfig.model_validate(raw)
+        assert config.asr.model_revision is None
+        assert config.asr.aligner_revision is None
 
     def test_unknown_device_is_rejected(self, raw: dict[str, Any]) -> None:
         raw["asr"]["device"] = "rocm"
@@ -491,7 +524,8 @@ class TestResolvedConfigHash:
             ("asr", "max_new_tokens", 512),
             ("asr", "max_segment_s", 90),
             ("asr", "model", "Qwen/Qwen3-ASR-Flash"),
-            ("asr", "model_revision", "deadbeef"),
+            ("asr", "model_revision", "d" * 40),
+            ("asr", "truncation_margin_tokens", 32),
             ("asr", "dtype", "float32"),
             ("activity", "correlation_max_lag_ms", 45),
             ("mix", "integrated_lufs", -18.0),

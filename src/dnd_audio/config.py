@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import datetime as dt
 import math
+import re
 from collections import Counter
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Final, Literal
@@ -29,6 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from dnd_audio.determinism import canonical_json, sha256_bytes
 from dnd_audio.errors import ConfigError, TimecodeError
+from dnd_audio.models import REVISION_PATTERN
 from dnd_audio.timecode import parse_frame_rate, parse_timecode
 from dnd_audio.timeline import CANONICAL_SAMPLE_RATE as _CANONICAL_SAMPLE_RATE
 
@@ -202,8 +204,10 @@ class AsrConfig(_Strict):
     model_config = ConfigDict(extra="forbid", frozen=True, protected_namespaces=())
 
     model: str = Field(default="Qwen/Qwen3-ASR-1.7B", min_length=1)
-    #: Pinning a revision here overrides the lock `models fetch` writes. Both exist
-    #: because a mutable Hugging Face branch must never be resolved during `process`.
+    #: An exact commit, overriding the one pinned in this build. `None` means "use the
+    #: pin". Both exist because a mutable Hugging Face branch must never be resolved
+    #: during `process` — and the validator below is what makes that structural rather
+    #: than a rule to remember: a branch or tag cannot be written here at all (ADR-0027).
     model_revision: str | None = None
     aligner: str = Field(default="Qwen/Qwen3-ForcedAligner-0.6B", min_length=1)
     aligner_revision: str | None = None
@@ -219,11 +223,44 @@ class AsrConfig(_Strict):
     #: Explicit rather than inheriting the upstream wrapper's 512. Part of the ASR
     #: cache key, so changing it must re-run the work.
     max_new_tokens: int = Field(default=1024, gt=0)
+    #: How close to `max_new_tokens` a retokenized response must land before it is treated
+    #: as cut off at the generation ceiling. `qwen-asr` 0.0.6 exposes no finish reason —
+    #: its high-level path decodes to strings and discards everything else — so this
+    #: heuristic is the whole of truncation detection rather than a fallback (ADR-0028).
+    #: Too small and a genuinely truncated response is transcribed as complete; too large
+    #: and a merely long one is split and retried for nothing. Both directions are guesses
+    #: about *this* model until the smoke test measures them (**OQ-018**). In the ASR cache
+    #: key, because it decides whether a retry happened and therefore what the text is.
+    truncation_margin_tokens: int = Field(default=16, ge=0, le=512)
 
     @field_validator("context_file")
     @classmethod
     def _check_context_file(cls, value: str | None) -> str | None:
         return None if value is None else _validate_relative_path(value)
+
+    @field_validator("model_revision", "aligner_revision")
+    @classmethod
+    def _check_revision(cls, value: str | None) -> str | None:
+        """A revision is a commit, or it is refused here.
+
+        The spec requires `process` to use the model lock "rather than re-resolving a
+        moving branch". Validating the *shape* is what makes that structural: with no
+        branch name accepted anywhere in configuration, there is nothing left in the
+        system for a run to re-resolve, and an offline `process` cannot be asked to do
+        something it cannot do (ADR-0027).
+        """
+        if value is None:
+            return None
+        if not re.match(REVISION_PATTERN, value):
+            message = (
+                f"asr revision {value!r} is not a commit. Give the full 40-character "
+                f"lowercase hexadecimal commit sha — a branch or tag moves, and this "
+                f"pipeline resolves nothing at run time, so it would have no way to know "
+                f"which weights produced a transcript. Leaving it unset uses the revision "
+                f"pinned in this build."
+            )
+            raise ValueError(message)
+        return value
 
 
 class VadConfig(_Strict):

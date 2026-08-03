@@ -24,7 +24,13 @@ from dnd_audio.cli import app
 from dnd_audio.determinism import sha256_bytes
 from dnd_audio.errors import ExitCode
 from dnd_audio.fixtures import FixtureTruth
-from dnd_audio.models import ModelDescriptor
+from dnd_audio.models import (
+    QWEN3_ALIGNER,
+    QWEN3_ASR,
+    QWEN_SNAPSHOTS,
+    ModelDescriptor,
+    snapshot_dir,
+)
 from dnd_audio.runtime import RuntimeProbe
 from tests.test_runtime import shadow
 
@@ -78,11 +84,51 @@ class TestCommandSurface:
         assert isinstance(result.exception, NotImplementedError)
         assert "M6b" in str(result.exception)
 
-    def test_models_fetch_says_the_asr_half_is_still_to_come(self) -> None:
-        """It is implemented, so the stub message is gone — but the boundary is not."""
+    def test_models_fetch_offers_the_qwen_half(self) -> None:
+        """M4's version of this asserted that `fetch` said the ASR half was still to come.
+
+        It is here now, so what replaces that assertion is the flag that installs it —
+        and the fact that it is a *flag*, because the two snapshots are about six
+        gigabytes and most reasons to run `models fetch` are not about them.
+        """
         result = runner.invoke(app, ["models", "fetch", "--help"])
         assert result.exit_code == 0
-        assert "M6b" in result.output
+        assert "--qwen" in result.output
+
+    def test_models_plan_names_the_pinned_commits_and_touches_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The single statement of the pin, in the form the setup script reads.
+
+        Run against an empty models directory: it must report rather than install, which
+        is what makes it safe for a wrapper script to call before deciding anything.
+        """
+        monkeypatch.setenv("DND_AUDIO_MODELS_DIR", str(tmp_path))
+        result = runner.invoke(app, ["models", "plan", "--json"])
+
+        assert result.exit_code == 0
+        plan = json.loads(result.output)
+        rows = {row["key"]: row for row in plan["models"]}
+        assert rows["qwen3-asr"]["revision"] == QWEN3_ASR.revision
+        assert rows["qwen3-forced-aligner"]["revision"] == QWEN3_ALIGNER.revision
+        assert all(row["present"] is False for row in plan["models"])
+        assert list(tmp_path.iterdir()) == []
+
+    def test_models_plan_agrees_with_the_descriptors_it_is_supposed_to_restate(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`scripts/fetch-models.sh` consumes this instead of naming a repository or a
+        commit of its own. If the two could disagree, the wrapper would be a second place
+        for the pin to live — and the one that drifts is the one nobody is looking at."""
+        monkeypatch.setenv("DND_AUDIO_MODELS_DIR", str(tmp_path))
+        plan = json.loads(runner.invoke(app, ["models", "plan", "--json"]).output)
+        rows = {row["key"]: row for row in plan["models"]}
+
+        for descriptor in QWEN_SNAPSHOTS:
+            row = rows[descriptor.key]
+            assert row["repository"] == descriptor.repository
+            assert row["revision"] == descriptor.revision
+            assert row["target"] == str(snapshot_dir(descriptor))
 
     def test_a_missing_session_directory_is_a_usage_error(self, tmp_path: Path) -> None:
         """Click's exit code 2, which is why ExitCode does not use 2."""

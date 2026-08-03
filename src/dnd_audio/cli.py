@@ -35,7 +35,18 @@ from dnd_audio.doctor import CheckStatus, overall_status, run_checks
 from dnd_audio.errors import DndAudioError, ExitCode
 from dnd_audio.inspection.runner import InspectionResult, run_inspect
 from dnd_audio.mix.runner import MixResult, run_mix
-from dnd_audio.models import SILERO_VAD, fetch, find_model, lock_path
+from dnd_audio.models import (
+    QWEN_SNAPSHOTS,
+    SILERO_VAD,
+    SNAPSHOT_FETCH_COMMAND,
+    fetch,
+    find_model,
+    install_snapshot,
+    lock_path,
+    model_path,
+    snapshot_dir,
+    snapshot_present,
+)
 from dnd_audio.orchestrate import ProcessResult, run_process
 from dnd_audio.timeline.runner import IngestResult, run_ingest
 from dnd_audio.transcript.runner import (
@@ -285,16 +296,32 @@ def render(session_dir: SessionDir) -> None:
 
 
 @models_app.command("fetch")
-def models_fetch() -> None:
-    """Download the pinned voice-activity model and record what it resolved to.
+def models_fetch(
+    qwen: Annotated[
+        bool,
+        typer.Option(
+            "--qwen",
+            help="Also install the ASR and alignment snapshots — about 6 GB, and it needs "
+            "the `hf` CLI, which lives in the ROCm environment. `./scripts/fetch-models.sh` "
+            "runs this for you from there.",
+        ),
+    ] = False,
+) -> None:
+    """Install the pinned models and record what they resolved to.
 
-    The only command permitted to touch the network (INV-06), and it fetches exactly
-    one artifact: Silero VAD, pinned by commit and sha256, verified before it is written
-    (ADR-0013). The ASR and alignment models land in M6b, and the lock format is
-    provisional until they do.
+    The only command permitted to touch the network (INV-06). Without `--qwen` it fetches
+    exactly one artifact: Silero VAD, pinned by commit and sha256, verified in memory
+    before it is written (ADR-0013). With it, the Qwen ASR model and forced aligner are
+    installed too, each pinned to a commit with a per-file digest manifest and downloaded
+    by the `hf` CLI (ADR-0027).
 
-    Already present and verifying means no download. A file that does not match the pin
-    is not a model, so this exits nonzero rather than leaving one behind.
+    Not on by default because the two snapshots are about six gigabytes and most reasons
+    to run this are not about them. The Qwen half is reported either way, so a run that
+    does not install them still says where they stand.
+
+    Already present and verifying means no download, so this is safe — and cheap — to
+    re-run as an "am I set up?" check. Anything that does not match its pin is not a
+    model, so this exits nonzero rather than leaving one behind.
     """
     descriptor = SILERO_VAD
     already_present = find_model(descriptor) is not None
@@ -308,8 +335,75 @@ def models_fetch() -> None:
     typer.echo(f"  model     {path}")
     typer.echo(f"  release   {descriptor.release}")
     typer.echo(f"  commit    {descriptor.commit}")
+
+    for snapshot in QWEN_SNAPSHOTS:
+        if not qwen:
+            state = "present" if snapshot_present(snapshot) else "absent"
+            typer.echo(f"  {state:<15} {snapshot.key} ({snapshot.repository})")
+            continue
+        try:
+            target, downloaded = install_snapshot(snapshot)
+        except DndAudioError as exc:
+            typer.secho(f"  error  {exc.code}: {exc}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=ExitCode.FATAL) from exc
+        typer.echo(f"  {'installed' if downloaded else 'already present'}  {snapshot.key}")
+        typer.echo(f"  model     {target}")
+        typer.echo(f"  commit    {snapshot.revision}")
+
     typer.echo(f"  lock      {lock_path()}")
-    typer.echo("  ASR and alignment models land in M6b; this fetches the VAD model only.")
+    if not qwen:
+        typer.echo(
+            "  The ASR and alignment snapshots are about 6 GB and are not installed by "
+            f"this command unless asked: run `{SNAPSHOT_FETCH_COMMAND}`."
+        )
+
+
+@models_app.command("plan")
+def models_plan(
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Emit the plan as canonical JSON instead of a table."),
+    ] = False,
+) -> None:
+    """Print what `models fetch` would install, and where. Touches nothing.
+
+    The single statement of the pin, in a form another program can read. This exists so
+    `scripts/fetch-models.sh` does not have to repeat a repository, a commit, or a target
+    directory — a wrapper that restated any of them would be a second place for the pin to
+    live, and the one that drifts is always the one nobody is looking at.
+    """
+    rows = [
+        {
+            "key": snapshot.key,
+            "kind": "snapshot",
+            "present": snapshot_present(snapshot),
+            "repository": snapshot.repository,
+            "revision": snapshot.revision,
+            "target": str(snapshot_dir(snapshot)),
+        }
+        for snapshot in QWEN_SNAPSHOTS
+    ]
+    rows.append(
+        {
+            "key": SILERO_VAD.key,
+            "kind": "file",
+            "present": find_model(SILERO_VAD) is not None,
+            "repository": SILERO_VAD.repository,
+            "revision": SILERO_VAD.commit,
+            "target": str(model_path(SILERO_VAD)),
+        }
+    )
+
+    if as_json:
+        typer.echo(canonical_json({"lock": str(lock_path()), "models": rows}))
+        return
+
+    for row in rows:
+        typer.echo(f"  {'present' if row['present'] else 'absent':<8} {row['key']}")
+        typer.echo(f"    repository  {row['repository']}")
+        typer.echo(f"    revision    {row['revision']}")
+        typer.echo(f"    target      {row['target']}")
+    typer.echo(f"  lock          {lock_path()}")
 
 
 @app.command()

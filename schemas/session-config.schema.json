@@ -108,6 +108,13 @@
           ],
           "default": null,
           "title": "Model Revision"
+        },
+        "truncation_margin_tokens": {
+          "default": 16,
+          "maximum": 512,
+          "minimum": 0,
+          "title": "Truncation Margin Tokens",
+          "type": "integer"
         }
       },
       "title": "AsrConfig",
