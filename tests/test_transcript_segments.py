@@ -323,3 +323,143 @@ class TestOrdering:
         one = an_outcome(first, "a", (a_word(RATE + 1, "a"),))
         two = an_outcome(second, "b", (a_word(RATE * 5 + 1, "b"),))
         assert draft(one, two)[0] == draft(two, one)[0]
+
+
+class TestAdjacentPiecesDoNotDuplicateAWord:
+    """ADR-0020's rule 3, on the boundary the ADR originally said did not exist.
+
+    A candidate longer than `max_segment_s` is cut by `requests._divide` into pieces that tile
+    it exactly, each submitted as its own independently padded request. Each request's padding
+    reaches across the boundary into the other's core, so the model can return the boundary
+    word on both sides — and a rule that only looks at where a word *starts* then keeps one
+    copy in each piece. ADR-0020 called a truncation stitch "the only place two ownership
+    intervals are genuinely adjacent"; that was wrong, and this is the case it missed
+    (M4's verify phase).
+    """
+
+    @staticmethod
+    def _cut_in_two(
+        left_words: tuple[TranscribedWord, ...], right_words: tuple[TranscribedWord, ...]
+    ) -> Any:
+        """One candidate across two adjacent, separately padded requests."""
+        return (
+            an_outcome(
+                a_plan("req_tx-a_000000000000", (an_ownership("cand-a", 0, RATE),)),
+                "left",
+                left_words,
+            ),
+            an_outcome(
+                a_plan("req_tx-a_000000048000", (an_ownership("cand-a", RATE, RATE * 2),)),
+                "right",
+                right_words,
+            ),
+        )
+
+    def test_the_same_word_returned_either_side_appears_once(self) -> None:
+        """The two copies are at *different* times, which is what a start rule cannot see."""
+        outcomes = self._cut_in_two(
+            (a_word(500, "hello"), a_word(RATE - 100, "Zephyrine")),
+            (a_word(RATE + 20, "Zephyrine"), a_word(RATE + 900, "again")),
+        )
+        (draft,) = draft_segments(outcomes, decimation=DECIMATION)[0]
+
+        assert [word.text for word in draft.words] == ["hello", "Zephyrine", "again"]
+        assert draft.text == "hello Zephyrine again"
+
+    def test_a_genuinely_repeated_word_survives(self) -> None:
+        """ "No, no." is two words. Only a repeat that also *overlaps in time* is one."""
+        outcomes = self._cut_in_two(
+            (a_word(RATE - 400, "no", length=200),),
+            (a_word(RATE + 400, "no", length=200),),
+        )
+        (draft,) = draft_segments(outcomes, decimation=DECIMATION)[0]
+
+        assert [word.text for word in draft.words] == ["no", "no"]
+
+    def test_a_different_word_at_the_boundary_is_kept(self) -> None:
+        outcomes = self._cut_in_two(
+            (a_word(RATE - 100, "Zephyrine"),),
+            (a_word(RATE + 20, "Zephyrus"),),
+        )
+        (draft,) = draft_segments(outcomes, decimation=DECIMATION)[0]
+
+        assert [word.text for word in draft.words] == ["Zephyrine", "Zephyrus"]
+
+    def test_two_pieces_of_one_candidate_separated_by_a_gap_keep_both(self) -> None:
+        """The rule applies only where the two pieces actually touch.
+
+        Padding is what makes the same word reachable from both sides, and padding only spans
+        a boundary the pieces *share*. Two pieces with silence between them are two moments,
+        and a word repeated across them is a word somebody said twice — deleting it would be
+        inventing a correction, which is the one thing this milestone may not do.
+
+        The planner as built never produces this shape: within one group the pieces of a
+        candidate tile exactly. The guard is what keeps that an assumption of the *planner*
+        rather than a silent assumption of this function, so it is driven directly.
+
+        Ordinary spacing is caught by the time-overlap half of the rule on its own; see
+        :meth:`test_a_word_whose_end_reaches_across_a_gap_still_keeps_both` for the input that
+        needs the adjacency half.
+        """
+        outcomes = (
+            an_outcome(
+                a_plan("req_tx-a_000000000000", (an_ownership("cand-a", 0, RATE),)),
+                "left",
+                (a_word(RATE - 100, "yes"),),
+            ),
+            an_outcome(
+                a_plan("req_tx-a_000000144000", (an_ownership("cand-a", RATE * 3, RATE * 4),)),
+                "right",
+                (a_word(RATE * 3 + 10, "yes"),),
+            ),
+        )
+        (draft,) = draft_segments(outcomes, decimation=DECIMATION)[0]
+
+        assert [word.text for word in draft.words] == ["yes", "yes"]
+
+
+class TestAWordBelongsToTheIntervalContainingItsStart:
+    """The half-open start rule itself, on the input that distinguishes it from an overlap
+    rule: a word that *straddles* the boundary between two adjacent ownership intervals.
+
+    An overlap rule assigns such a word to both intervals, so it reaches the transcript twice.
+    The whole suite passed with that rule substituted, which is why this test exists
+    (M4's verify phase).
+    """
+
+    def test_a_word_straddling_two_candidates_belongs_only_to_the_first(self) -> None:
+        merged = a_plan(
+            "req_tx-a_000000000000",
+            (an_ownership("cand-a", 0, RATE), an_ownership("cand-b", RATE, RATE * 2)),
+        )
+        # Starts 100 samples before the boundary and ends 100 after it.
+        outcomes = (an_outcome(merged, "one two", (a_word(RATE - 100, "straddling"),)),)
+        drafts, _ = draft_segments(outcomes, decimation=DECIMATION)
+
+        assert [(draft.candidate_ids, [w.text for w in draft.words]) for draft in drafts] == [
+            (("cand-a",), ["straddling"])
+        ]
+
+    def test_a_word_whose_end_reaches_across_a_gap_still_keeps_both(self) -> None:
+        """The case the time-overlap check alone gets wrong.
+
+        A model that returns an absurdly long end time for one word makes it overlap a word
+        two seconds later. Same text, overlapping intervals — the repeat rule would fire and
+        delete real speech. Adjacency is what stops it: these two pieces do not share a
+        boundary, so no padding could have carried one word into both.
+        """
+        outcomes = (
+            an_outcome(
+                a_plan("req_tx-a_000000000000", (an_ownership("cand-a", 0, RATE),)),
+                "left",
+                (a_word(RATE - 100, "yes", length=RATE * 3),),
+            ),
+            an_outcome(
+                a_plan("req_tx-a_000000144000", (an_ownership("cand-a", RATE * 3, RATE * 4),)),
+                "right",
+                (a_word(RATE * 3 + 10, "yes"),),
+            ),
+        )
+        (draft,) = draft_segments(outcomes, decimation=DECIMATION)[0]
+
+        assert [word.text for word in draft.words] == ["yes", "yes"]

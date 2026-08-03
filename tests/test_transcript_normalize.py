@@ -8,8 +8,12 @@ with its spacing fixed and nothing else.
 
 from __future__ import annotations
 
+import difflib
+
 import pytest
 
+from dnd_audio.activity import to_permille
+from dnd_audio.config import DuplicateConfig
 from dnd_audio.transcript.normalize import (
     comparison_key,
     normalize_text,
@@ -104,7 +108,7 @@ class TestSimilarity:
         )
         assert 800 <= score < 1000
 
-    def test_it_is_symmetric_enough_to_be_used_either_way_round(self) -> None:
+    def test_it_is_symmetric_on_an_ordinary_pair(self) -> None:
         first = similarity_permille("we should go back now", "we should go back")
         second = similarity_permille("we should go back", "we should go back now")
         assert first == second
@@ -117,3 +121,46 @@ class TestSimilarity:
         """It is compared against a threshold and written into an artifact; a float would
         make both depend on binary rounding (INV-02)."""
         assert isinstance(similarity_permille("a b c", "a b d"), int)
+
+
+class TestSimilarityIsSymmetric:
+    """Not "symmetric enough" — symmetric, because a deletion hangs off it.
+
+    `difflib.SequenceMatcher.ratio` depends on which sequence is `a` and which is `b`, and the
+    gap can be large enough to straddle `duplicate.min_text_similarity`. Nothing about which
+    of two lavs happened to start a millisecond earlier should decide whether a line is
+    deleted from the transcript (M4's verify phase, found by independent review).
+    """
+
+    #: The pair independent review produced: 857 one way, 571 the other, against a default
+    #: threshold of 850. Kept verbatim rather than reduced to a prettier example, because a
+    #: prettier one would not have caught it.
+    ASYMMETRIC = (
+        "alpha alpha alpha alpha alpha beta alpha",
+        "alpha alpha beta alpha alpha alpha beta",
+    )
+
+    def test_the_pathological_pair_scores_the_same_both_ways(self) -> None:
+        first, second = self.ASYMMETRIC
+        assert similarity_permille(first, second) == similarity_permille(second, first)
+
+    def test_it_takes_the_lower_of_the_two_directions(self) -> None:
+        """The conservative direction: erring toward keeping both, as this module does
+        everywhere. Asserted against `difflib` itself rather than a remembered constant."""
+        first, second = (text.split() for text in self.ASYMMETRIC)
+        forward = difflib.SequenceMatcher(a=first, b=second, autojunk=False).ratio()
+        backward = difflib.SequenceMatcher(a=second, b=first, autojunk=False).ratio()
+        assert forward != backward, "the example stopped being asymmetric; find another"
+        assert similarity_permille(*self.ASYMMETRIC) == to_permille(min(forward, backward) * 1000)
+
+    def test_the_asymmetry_straddled_the_default_threshold(self) -> None:
+        """Why this is a correctness bug and not a rounding curiosity."""
+        first, second = (text.split() for text in self.ASYMMETRIC)
+        forward = difflib.SequenceMatcher(a=first, b=second, autojunk=False).ratio()
+        threshold = DuplicateConfig().min_text_similarity
+        assert (
+            forward
+            > threshold
+            > min(forward, difflib.SequenceMatcher(a=second, b=first, autojunk=False).ratio())
+        )
+        assert similarity_permille(*self.ASYMMETRIC) < round(threshold * 1000)

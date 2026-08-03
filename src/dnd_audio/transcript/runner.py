@@ -603,15 +603,16 @@ def _failed_transcribe(
     """Every failure, not only the ones raised on purpose (INV-13).
 
     An operator whose run died on an OSError needs a report more than anyone. Every artifact
-    this run may have written is removed: a stale transcript beside a report that calls the
-    stage failed is worse than none, because the file looks current and nothing in it says
-    otherwise.
+    of a stage that did **not** complete is removed: a stale transcript beside a report that
+    calls the stage failed is worse than none, because the file looks current and nothing in
+    it says otherwise. The artifacts of a stage the report calls *complete* are kept, because
+    this run commits at two points and their hashes are already in the report — deleting them
+    would leave it advertising the hash of a file that is gone (M4's verify phase).
     """
-    remove_activity_artifacts(session_dir)
-    for path in (paths.records, paths.transcript, paths.markdown):
-        path.unlink(missing_ok=True)
-
     error = StructuredError(code=_code_of(exc), message=str(exc) or type(exc).__name__)
+    completed = [
+        stage for stage in (StageName.RECONSTRUCT, StageName.ACTIVITY) if builder.completed(stage)
+    ]
     for stage in (
         StageName.INSPECT,
         StageName.RECONSTRUCT,
@@ -627,6 +628,10 @@ def _failed_transcribe(
         # INV-01 outranks INV-13 here: writing the failure report would commit the very
         # violation being reported. A report is regenerable; a source directory written into
         # is not.
+        #
+        # Returned **before** any cleanup, and that ordering is the invariant rather than a
+        # detail: `work -> raw/tx-a` makes every artifact path resolve inside a source
+        # directory, so unlinking the stale ones is itself a write into `raw/`.
         return TranscribeResult(
             records=None,
             records_path=paths.records,
@@ -638,6 +643,10 @@ def _failed_transcribe(
             report_written=False,
             exit_code=ExitCode.FATAL,
         )
+
+    remove_activity_artifacts(session_dir, completed=completed)
+    for path in (paths.records, paths.transcript, paths.markdown):
+        path.unlink(missing_ok=True)
 
     report = builder.write(paths.report, finished)
     return TranscribeResult(

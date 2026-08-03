@@ -31,7 +31,7 @@ from dnd_audio.artifacts.records import TranscriptNote, WordRecord
 from dnd_audio.artifacts.transcript import AlignmentStatus
 from dnd_audio.interfaces import TranscribedWord
 from dnd_audio.timeline.resample import to_source_sample
-from dnd_audio.transcript.asr import RequestOutcome
+from dnd_audio.transcript.asr import RequestOutcome, without_boundary_repeat
 from dnd_audio.transcript.normalize import normalize_text
 from dnd_audio.transcript.requests import Ownership
 
@@ -181,18 +181,41 @@ def _owned_words(
     A word belongs to the ownership interval containing its **start** (ADR-0020); a word
     inside padding but inside no ownership interval belongs to nobody and is dropped, which
     is what stops padding from becoming content.
+
+    The start rule alone is not enough where two pieces are genuinely **adjacent** — a
+    candidate longer than the cap, cut by `requests._divide` into separately padded requests.
+    Each request's padded window reaches past the boundary into the other's core, so the model
+    can return the boundary word on both sides at slightly different times, and a start rule
+    then puts one copy in each piece: `"Zephyrine Zephyrine"`. ADR-0020's rule 3 is applied
+    across that boundary too, through the same function the truncation stitch uses.
     """
     wanted = set(candidates)
-    found: list[WordRecord] = []
-    for outcome in outcomes:
-        for piece in outcome.plan.ownership:
-            if piece.candidate_id not in wanted:
-                continue
-            found.extend(
-                _record(word, piece, decimation=decimation)
-                for word in outcome.words
-                if piece.start_sample <= word.start_sample < piece.end_sample
+    owned = sorted(
+        (
+            (
+                piece,
+                tuple(
+                    word
+                    for word in outcome.words
+                    if piece.start_sample <= word.start_sample < piece.end_sample
+                ),
             )
+            for outcome in outcomes
+            for piece in outcome.plan.ownership
+            if piece.candidate_id in wanted
+        ),
+        key=lambda item: (item[0].start_sample, item[0].end_sample),
+    )
+
+    found: list[WordRecord] = []
+    previous: tuple[Ownership, tuple[TranscribedWord, ...]] | None = None
+    for piece, words in owned:
+        # Only across a boundary the two pieces actually share. Two pieces separated by
+        # silence are two utterances, and a word repeated across a gap is a word said twice.
+        if previous is not None and previous[0].end_sample == piece.start_sample:
+            words = without_boundary_repeat(previous[1], words)
+        found.extend(_record(word, piece, decimation=decimation) for word in words)
+        previous = (piece, words)
     return sorted(found, key=lambda word: (word.start_sample, word.end_sample))
 
 

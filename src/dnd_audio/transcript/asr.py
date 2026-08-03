@@ -60,12 +60,18 @@ __all__ = [
     "RequestOutcome",
     "split_point",
     "transcribe_plans",
+    "without_boundary_repeat",
 ]
 
 #: Frames the energy search for a split point works in: 512 derivative samples is 32 ms, long
 #: enough that one glottal pulse does not look like silence and short enough to land a split
 #: inside a pause. It is the same number the detector's frame happens to be, and deliberately
 #: not imported from there — this is a search granularity, not a model's protocol.
+#:
+#: Both halves of that claim are guesses about real speech at a real table rather than measured
+#: facts, so the number is registered with the rest of M4's request-shaping constants
+#: (**OQ-018**): too long and the search cannot see a short pause at all, too short and a
+#: single glottal pulse reads as silence and the split lands mid-word.
 SPLIT_FRAME_SAMPLES: Final = 512
 
 #: ``(track_id, start, n_samples)`` of the 16 kHz derivative, in that track's own samples.
@@ -346,7 +352,7 @@ def _stitch(
     return RequestOutcome(
         plan=plan,
         text=text,
-        words=(*left.words, *_without_boundary_repeat(left.words, right.words)),
+        words=(*left.words, *without_boundary_repeat(left.words, right.words)),
         alignment_status="aligned",
         request_ids=request_ids,
         truncation_submissions=spent,
@@ -354,15 +360,21 @@ def _stitch(
     )
 
 
-def _without_boundary_repeat(
+def without_boundary_repeat(
     left: tuple[TranscribedWord, ...], right: tuple[TranscribedWord, ...]
 ) -> tuple[TranscribedWord, ...]:
     """``right`` with a word that repeats ``left``'s last one across the split removed.
 
-    ADR-0020's rule 3, and the only place it applies: two children's cores are the one case
-    where ownership intervals are genuinely adjacent, so it is the only boundary at which the
-    same physical word can be returned on both sides at slightly different times. Comparison
-    is on the comparison key, so capitalization or a trailing comma cannot hide the repeat.
+    ADR-0020's rule 3. Comparison is on the comparison key, so capitalization or a trailing
+    comma cannot hide the repeat, and the two must also overlap in time — a genuinely repeated
+    word ("no, no") is two words at two positions and must survive.
+
+    ADR-0020 originally called a truncation stitch "the only place two ownership intervals are
+    genuinely adjacent", and that was wrong. A candidate longer than `max_segment_s` is cut by
+    `requests._divide` into pieces that tile it exactly, each submitted as its own
+    independently padded request — adjacent in precisely the same way, and reassembled in
+    `segments._owned_words` rather than here. So this rule lives in one function called from
+    both places (M4's verify phase, found by independent review).
     """
     if not left or not right:
         return right

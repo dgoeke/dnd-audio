@@ -28,7 +28,7 @@ The ordering is load-bearing and is stated rather than left to be inferred:
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Container, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Protocol
@@ -260,9 +260,12 @@ def run_activity(
     except Exception as exc:
         # Every failure, not only the ones raised on purpose: an operator whose run died on
         # an OSError needs a report more than anyone.
-        #
-        remove_activity_artifacts(session_dir)
         error = StructuredError(code=_code_of(exc), message=str(exc) or type(exc).__name__)
+        completed = [
+            stage
+            for stage in (StageName.RECONSTRUCT, StageName.ACTIVITY)
+            if builder.completed(stage)
+        ]
         for stage in (StageName.INSPECT, StageName.RECONSTRUCT, StageName.ACTIVITY):
             if not builder.recorded(stage):
                 builder.stage_failed(stage, [error])
@@ -271,6 +274,11 @@ def run_activity(
             # INV-01 outranks INV-13 here: writing the failure report would commit the very
             # violation being reported. A report is regenerable; a source directory written
             # into is not.
+            #
+            # This returns **before** the cleanup below, and that ordering is the invariant,
+            # not a detail. `work -> raw/tx-a` makes every artifact path resolve inside a
+            # source directory, so unlinking the stale ones would delete from `raw/` — the run
+            # that correctly detected the violation committing it on the way out.
             return ActivityResult(
                 graph=None,
                 graph_path=graph_path,
@@ -280,6 +288,7 @@ def run_activity(
                 report_written=False,
                 exit_code=ExitCode.FATAL,
             )
+        remove_activity_artifacts(session_dir, completed=completed)
         report = builder.write(report_path, finished)
         return ActivityResult(
             graph=None,
@@ -365,7 +374,7 @@ def perform_activity(
     )
 
 
-def remove_activity_artifacts(session_dir: Path) -> None:
+def remove_activity_artifacts(session_dir: Path, *, completed: Container[StageName] = ()) -> None:
     """Delete the graph and the timeline a failed run may have left behind.
 
     Both, not only the graph. `timeline.json` is written *before* attribution, so a run that
@@ -374,9 +383,24 @@ def remove_activity_artifacts(session_dir: Path) -> None:
     deliverable, which M4 and M5 both read (INV-13). A stale artifact that looks current is
     worse than none: the file describes attributions that no longer hold and nothing in it
     says so.
+
+    **Except the artifacts of a stage that genuinely completed.** M4's composed run commits
+    activity and ASR at two separate points, so a failure during ASR leaves reconstruction and
+    attribution finished, verified, and already hashed as deliverables. Deleting those would
+    make the report advertise the hash of a file that is gone — the same "a stale artifact
+    looks current" failure, pointing the other way. Callers pass the stages the report calls
+    complete; the default deletes both, which is what every single-stage caller wants
+    (M4's verify phase).
+
+    **Never called before the `output_inside_raw` carve-out.** When an output path resolves
+    inside a source directory, these unlinks *are* the INV-01 violation — a `work -> raw/tx-a`
+    symlink turns the cleanup for a correctly-detected violation into a deletion under `raw/`.
+    Every caller checks for that code and returns before reaching here (M4's verify phase).
     """
-    (session_dir / ACTIVITY_RELATIVE_PATH).unlink(missing_ok=True)
-    (session_dir / TIMELINE_RELATIVE_PATH).unlink(missing_ok=True)
+    if StageName.ACTIVITY not in completed:
+        (session_dir / ACTIVITY_RELATIVE_PATH).unlink(missing_ok=True)
+    if StageName.RECONSTRUCT not in completed:
+        (session_dir / TIMELINE_RELATIVE_PATH).unlink(missing_ok=True)
 
 
 @dataclass(frozen=True, slots=True)

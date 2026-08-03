@@ -83,6 +83,14 @@ def similarity_permille(first: str, second: str) -> int:
     collapse threshold for two utterances that mean opposite things. Words are the unit a
     transcript is wrong in.
 
+    **Symmetric by construction, because `SequenceMatcher` is not.** Its `ratio` depends on
+    which sequence is `a` and which is `b`: `"alpha alpha alpha alpha alpha beta alpha"`
+    against `"alpha alpha beta alpha alpha alpha beta"` scores 857 one way and 571 the other,
+    straddling the 850 default threshold. Nothing about which of two lavs happened to start a
+    millisecond earlier should decide whether a line is deleted, so the score is the **lower**
+    of the two directions: symmetric, and erring toward keeping both, which is the bias this
+    module applies everywhere (M4's verify phase, found by independent review).
+
     ``autojunk`` is off. It is a heuristic that starts ignoring elements appearing in more
     than one percent of a long sequence, which would make the score depend on how long the
     two utterances happen to be — a determinism hazard rather than a correctness one, and
@@ -94,5 +102,8 @@ def similarity_permille(first: str, second: str) -> int:
         return PERMILLE
     if not left or not right:
         return 0
-    ratio = difflib.SequenceMatcher(a=left, b=right, autojunk=False).ratio()
+    ratio = min(
+        difflib.SequenceMatcher(a=left, b=right, autojunk=False).ratio(),
+        difflib.SequenceMatcher(a=right, b=left, autojunk=False).ratio(),
+    )
     return to_permille(ratio * PERMILLE)

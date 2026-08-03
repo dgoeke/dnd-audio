@@ -249,18 +249,18 @@ the union of both stages', verify → commit activity → write graph → ASR �
 | --- | --- |
 | Requests from retained candidates; short adjacent regions merge; padding plus an unpadded core | `test_transcript_requests.py::TestFromTheGraph` — a graph with retained, suppressed and ambiguous candidates; suppressed never appear, ambiguous always do, cores tile the merged region and stay inside their padded windows |
 | The padded waveform never exceeds `max_segment_s` | `test_transcript_requests.py::TestTheCap` — a core longer than the cap splits; **a core well inside the cap whose padding would push it over has its padding shrunk**; padding shrinks at session edges; **every child request a retry creates is capped too** — plus end to end over `ScriptedTranscriber.requests` in `test_transcript_run.py` |
-| Words assigned to ownership intervals, boundaries stitched | `test_transcript_asr.py::TestWordsBelongToCores` — a word inside the padding two requests share appears exactly once; **the same word returned at two *different* timestamps either side of a truncation stitch appears once**; a wordless result's text is kept whole with `segment_only`; a merged request splits its words back onto each candidate's ownership subinterval |
+| Words assigned to ownership intervals, boundaries stitched | `test_transcript_segments.py::TestPaddingIsContextAndNotContent`, `::TestAWordBelongsToTheIntervalContainingItsStart` and `::TestAdjacentPiecesDoNotDuplicateAWord`, plus `test_transcript_asr.py::TestTruncation` — a word inside the padding two requests share appears exactly once; a word *straddling* an ownership boundary belongs only to the first; **the same word returned at two *different* timestamps either side of a stitch appears once, at a truncation stitch and at a cap split alike**; a wordless result's text is kept whole with `segment_only`; a merged request splits its words back onto each candidate's ownership subinterval |
 | Truncation: split at a low-energy boundary, retry both halves, stitch, bound, warn | `test_transcript_asr.py::TestTruncation` — resolved split; the boundary chosen at the quiet point rather than the midpoint; **the submission budget counted globally rather than per depth**; a child core below `min_split_core_ms` not split again; the **atomic** fallback keeping the original plus `asr_truncation_unresolved` when any descendant is still truncated; no dependence on a private finish-reason API |
 | Collapse needs overlap **and** similar text **and** acoustic evidence | `test_transcript_collapse.py` — collapses with all three; keeps both on materially different text; keeps both when the graph's correlation is weak; `"Yes."`/`"Yes."` on two tracks never collapses; rejected alternatives recorded with the numbers that rejected them |
-| Alignment failure retains the segment and warns | `test_transcript_asr.py::TestAlignment` plus the end-to-end run: `alignment_status: segment_only`, a warning, exit 0 |
-| The unmodified public result is losslessly serialized, versioned, unpickled | `test_transcript_cache.py::TestRawArtifact` — JSON, every public field, round-trips; plus an assertion that nothing under `transcript/` imports `pickle` |
+| Alignment failure retains the segment and warns | `test_transcript_segments.py::TestAlignmentFailureWarns` plus `test_transcript_run.py::TestAlignmentFailureNeverFailsTheSession`: `alignment_status: segment_only`, a warning, exit 0 |
+| The unmodified public result is losslessly serialized, versioned, unpickled | `test_transcript_cache.py::TestTheRawArtifact` — JSON, every public field, round-trips; plus an assertion that nothing under `transcript/` imports `pickle` |
 | `transcript.json` validates against the **checked-in** schema | `test_transcript_render.py` against `schemas/transcript.schema.json`, and `tests/data/transcript-spec-example.json` still validating |
-| Millisecond precision, stable tie-breakers, ids from sorted identity and time | `test_transcript_render.py::TestDeterministicIds` — a sample position that is **not** millisecond aligned, asserted against what `public_seconds` produces rather than by counting decimals; two segments starting on one sample ordered by id; ids unchanged when the input order is shuffled |
-| Language defaults to English and a configured language reaches the transcriber | `test_transcript_asr.py::TestLanguageAndContext` |
-| An existing `glossary.txt` is passed exactly; its absence does not block a run | `test_transcript_asr.py::TestLanguageAndContext` — both directions |
-| The report carries transcriber identity, the context hash, and `max_new_tokens` | `test_transcript_run.py::TestReportProvenance` |
+| Millisecond precision, stable tie-breakers, ids from sorted identity and time | `test_transcript_render.py::TestPublicTimes`, `::TestOrderingAndIds` and `::TestTheMarkdownTimestampIsExactToo` — a sample position that is **not** millisecond aligned, asserted against what `public_seconds` produces rather than by counting decimals; two segments starting on one sample ordered by id; ids unchanged when the input order is shuffled |
+| Language defaults to English and a configured language reaches the transcriber | `test_transcript_asr.py::TestAnOrdinaryRequest` |
+| An existing `glossary.txt` is passed exactly; its absence does not block a run | `test_transcript_asr.py::TestAnOrdinaryRequest` — both directions |
+| The report carries transcriber identity, the context hash, and `max_new_tokens` | `test_transcript_run.py::TestTheReport` |
 | The records declare which graph and configuration they describe | `test_transcript_records.py` — `config_hash`, `timeline_sha256` and the graph's `attribution_cache_key` are present and are the ones the run used |
-| The ASR cache is complete and is actually consulted | `test_transcript_cache.py::TestIdentity` — audio, request identity, transcriber identity, context, language and `max_new_tokens` each varied independently; a second run proved to hit; a truncated entry and an orphaned sidecar both refused |
+| The ASR cache is complete and is actually consulted | `test_transcript_cache.py::TestIdentity`, `::TestTheCacheIsConsulted` and `::TestAnIncompleteEntryIsNeverAHit` — audio, request identity, transcriber identity, context, language and `max_new_tokens` each varied independently; a second run proved to hit; a truncated entry and an orphaned sidecar both refused |
 | `overlap` means overlapping a retained, non-duplicate *other speaker* by at least the threshold | `test_transcript_collapse.py::TestOverlapFlag`, including the case where the only overlap is with a collapsed duplicate, which must not set it |
 | Markdown format, order, escaping | `test_transcript_render.py::TestMarkdown` — the spec's exact line shape, overlapping turns as separate entries, `*` `_` `[` backtick and newlines escaped |
 | `render` regenerates both outputs from records with no model and no mixer, and fails clearly when they are absent | `test_transcript_run.py::TestRender` — run after deleting the graph and the caches; a spy proves no transcriber is constructed; missing records exits nonzero with `transcript_records_missing` and still writes a report (INV-13) |
@@ -288,3 +288,44 @@ the union of both stages', verify → commit activity → write graph → ASR �
   report's own location resolves inside `raw/`. A failed run leaves **no** sidecar anywhere
   under `work/cache`, asserted by glob rather than by naming the caches this milestone knows
   about.
+
+### Amended after the code review
+
+`../reviews/M4-code-20260802-1942.md` holds the independent critique, with what was
+reproduced, fixed, deferred, and rejected. Codex's verdict was *"I would not close M4"*: eight
+findings, every one reproducible as described. A second fresh-context reviewer found one of the
+same defects independently, and the verifier's own mutation sweep found three coverage holes,
+two of which were the same defects seen from the other side.
+
+Seven were fixed here and are covered by tests that fail when the fix is reverted — proved by
+mutating each fix back and watching the new test fail. **ADR-0021** records the two that
+changed behaviour owned by closed milestones, and INV-01 and INV-08 are amended accordingly.
+
+Two things are worth carrying forward rather than filing away:
+
+- **The INV-01 cleanup bug was in all three composed runners at once** — M2's, M3's and M4's.
+  Each milestone tested the report carve-out beside it and none tested the cleanup, because
+  each wrote a regression test naming the runner *that milestone had added*. This is exactly
+  what INV-08's closeout already says about caches. The new test parametrizes every composed
+  command from one place; a runner M5 adds is one missing parameter, which is visible.
+- **Mutation testing in this repository needs `PYTHONDONTWRITEBYTECODE=1`.** A same-length
+  source edit restored within one second leaves `.pyc` bytecode that `(mtime, size)`
+  invalidation cannot see, so the interpreter keeps running the mutant. The verifier's first
+  sweep produced two false results this way before it was caught.
+
+### Deferred, with the reproducing case
+
+**A three-way duplicate group can keep a survivor that is not the best source.** With three
+mutually-duplicate segments scoring A=800, B=700, C=900 in canonical order, A absorbs B first
+and is then forbidden from being absorbed by C — `collapse.py` refuses to let a segment that
+has absorbed another be absorbed itself, because a chain of duplicates has no surviving text at
+the end of it. A and C both reach the transcript. `collapse.py`'s own docstring says the
+survivor is the one with the best source score, and in this shape it is not.
+
+Not fixed, deliberately. The failure is in the safe direction: it keeps both and marks them
+overlapping, which is the bias this milestone states outright and which the gate criterion
+permits in as many words ("ambiguous evidence retains both, marked as overlap"). The cost is a
+duplicated line; the fix is a chain-resolution pass inside the most dangerous function in the
+milestone, to make a safe outcome tidier. **M6b should revisit it** once real ASR output shows
+whether three lavs ever agree closely enough for the shape to occur at all — if they do not,
+the right change is to delete the docstring's claim rather than to write the pass.

@@ -321,11 +321,18 @@ class TestFailureBehaviour:
         ):
             assert not (session_dir / path).exists()
 
-    def test_a_failed_run_leaves_no_sidecar_anywhere_under_the_cache(
+    def test_a_failure_after_a_commit_point_leaves_the_later_cache_uncommitted(
         self, canonical_fixture: FixtureTruth
     ) -> None:
-        """Globbed rather than by naming the caches this milestone knows about — M3's
-        closeout is explicit that naming them is how this test misses one."""
+        """INV-08, scoped to what the composed run actually promises (ADR-0021).
+
+        The invariant's original wording — "a failed run leaves no sidecar anywhere under
+        `work/cache`" — describes a single-commit run and is not what this one does. Two
+        commit points mean a failure during ASR keeps the activity caches, which were built
+        from bytes *this run verified* before publishing them; what must not survive is a
+        sidecar for a cache whose verification never happened. The name says that now,
+        because the previous one said the opposite of what the body asserts (M4's verify
+        phase, found by independent review)."""
         session_dir = canonical_fixture.session_dir
         source = next((session_dir / "raw" / "tx-a").glob("*.wav"))
         original = source.read_bytes()
@@ -348,9 +355,13 @@ class TestFailureBehaviour:
             ),
         )
         # `partial`, not `failed`: inspection, the timeline and the graph all genuinely
-        # completed and their deliverables are real. INV-13 only requires that a partial run
-        # never exits zero, and ADR-0005 spends exit 4 on saying which it was.
+        # completed, and their deliverables are still on disk to be hashed — asserted rather
+        # than claimed, because the claim was false until M4's verify phase. INV-13 only
+        # requires that a partial run never exits zero, and ADR-0005 spends exit 4 on saying
+        # which it was.
         assert result.exit_code is ExitCode.PARTIAL
+        assert (session_dir / "work" / "timeline.json").exists()
+        assert (session_dir / "work" / "activity.json").exists()
         assert int(result.exit_code) != 0
         # Every raw response the run wrote is present and **inert**: the sidecar that would
         # make it findable was never committed, so nothing can ever be served from it. The
@@ -554,3 +565,78 @@ def test_the_records_declare_the_graph_and_configuration_they_describe(
     assert records.activity_cache_key == graph["attribution_cache_key"]
     assert records.timeline_sha256 == sha256_file(session_dir / "work" / "timeline.json")
     assert records.config_hash == result.report.provenance.config_hash
+
+
+class TestAPartialRunReportsOnlyWhatSurvived:
+    """INV-13: "hashes of every deliverable actually produced".
+
+    The composed run commits at two points, so an ASR failure leaves reconstruction and
+    attribution genuinely complete — and already hashed as deliverables. Cleanup used to
+    delete both anyway, so the report advertised the hash of a file that was gone. Either
+    behaviour is defensible on its own; the two together are not, and a report naming a
+    deliverable that is not there is the exact failure INV-13 exists to prevent.
+    """
+
+    @staticmethod
+    def _failed_during_asr(session_dir: Path) -> Any:
+        class Exploding:
+            def transcribe(self, request: Any) -> TranscriptionResult:
+                message = "the disk went away mid-ASR"
+                raise OSError(message)
+
+        from dnd_audio.transcript.fakemodels import load_fake_models
+
+        fake = load_fake_models(session_dir)
+        return run_transcribe(
+            session_dir,
+            detector=fake.detector,
+            transcriber=TranscriberBundle(
+                transcriber=Exploding(), name="boom", variant_digest="9" * 64
+            ),
+        )
+
+    def test_every_hashed_deliverable_is_still_on_disk(
+        self, canonical_fixture: FixtureTruth
+    ) -> None:
+        session_dir = canonical_fixture.session_dir
+        result = self._failed_during_asr(session_dir)
+
+        assert result.exit_code is ExitCode.PARTIAL
+        produced = [item.relative_path for item in result.report.provenance.deliverables]
+        assert produced
+        for relative in produced:
+            assert (session_dir / relative).exists(), (
+                f"the report hashes {relative}, which is not on disk. A deliverable a run "
+                f"advertises must be one it actually produced (INV-13)."
+            )
+
+    def test_the_artifacts_of_a_completed_stage_survive(
+        self, canonical_fixture: FixtureTruth
+    ) -> None:
+        """The other half: `activity: complete` means the graph is really there."""
+        session_dir = canonical_fixture.session_dir
+        result = self._failed_during_asr(session_dir)
+
+        statuses = {stage.stage: stage.status for stage in result.report.stages}
+        assert statuses[StageName.RECONSTRUCT] is StageStatus.COMPLETE
+        assert statuses[StageName.ACTIVITY] is StageStatus.COMPLETE
+        assert (session_dir / "work" / "timeline.json").exists()
+        assert (session_dir / "work" / "activity.json").exists()
+
+    def test_the_stages_that_failed_leave_nothing_behind(
+        self, canonical_fixture: FixtureTruth
+    ) -> None:
+        """Keeping a completed stage's artifacts must not keep a failed stage's."""
+        session_dir = canonical_fixture.session_dir
+        run_transcribe(session_dir, fake_models=True)
+        assert (session_dir / TRANSCRIPT_JSON_RELATIVE_PATH).exists()
+
+        result = self._failed_during_asr(session_dir)
+
+        assert result.exit_code is ExitCode.PARTIAL
+        for relative in (
+            RECORDS_RELATIVE_PATH,
+            TRANSCRIPT_JSON_RELATIVE_PATH,
+            TRANSCRIPT_MARKDOWN_RELATIVE_PATH,
+        ):
+            assert not (session_dir / relative).exists(), relative

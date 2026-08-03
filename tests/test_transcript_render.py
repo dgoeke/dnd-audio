@@ -368,3 +368,40 @@ class TestByteStability:
         document = records()
         assert render_markdown(document) == render_markdown(document)
         assert build_transcript(document) == build_transcript(document)
+
+
+class TestTheMarkdownTimestampIsExactToo:
+    """INV-04 at the *other* public boundary.
+
+    `transcript.json` goes through `public_seconds` and is tested on a position that is not
+    millisecond aligned. `timestamp()` had no such test, so the whole suite passed with its
+    exact rational arithmetic replaced by `int(sample / rate * 1000)` — and the two documents
+    would then disagree about a rounding, which the renderer's own docstring says cannot
+    happen (M4's verify phase).
+    """
+
+    def test_a_half_millisecond_rounds_the_way_the_json_does(self) -> None:
+        """24 samples at 48 kHz is exactly half a millisecond. Truncation says `.000`;
+        `to_milliseconds` rounds half away from zero and says `.001`, as the JSON does."""
+        assert timestamp(24, RATE) == "00:00:00.001"
+        assert (
+            build_transcript(records(segments=[a_segment(0, 24, RATE)])).segments[0].start_s
+            == 0.001
+        )
+
+    def test_an_unaligned_position_agrees_with_the_json_to_the_millisecond(self) -> None:
+        """Driven over positions that are deliberately not multiples of 48."""
+        for sample in (1, 23, 24, 25, 49, 71, 72, 1_000_001):
+            document = records(
+                segments=[a_segment(0, sample, sample + RATE)], duration_samples=RATE * 20_000
+            )
+            (rendered,) = build_transcript(document).segments
+            stamp = timestamp(sample, RATE)
+            milliseconds = round(rendered.start_s * 1000)
+            expected = (
+                f"{milliseconds // 3_600_000:02d}:"
+                f"{milliseconds // 60_000 % 60:02d}:"
+                f"{milliseconds // 1000 % 60:02d}."
+                f"{milliseconds % 1000:03d}"
+            )
+            assert stamp == expected, f"sample {sample}: markdown {stamp}, json {rendered.start_s}"

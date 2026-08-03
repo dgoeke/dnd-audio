@@ -8,6 +8,7 @@ once, and the pair the activity graph never found any acoustic relationship betw
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from dnd_audio.artifacts.activity import (
@@ -386,3 +387,82 @@ class TestDeterminism:
     def test_the_same_input_gives_the_same_verdicts(self) -> None:
         drafts, graph = two_tracks()
         assert run(drafts, graph) == run(drafts, graph)
+
+
+class TestASegmentCoveringSeveralCandidates:
+    """The wordless case ADR-0017 names, and the one every other test here avoids.
+
+    When alignment fails on a merged request its text cannot be divided, so the candidates
+    that shared it share one segment. Collapse then has to reason about a segment backed by
+    *several* candidates, and both halves of that reasoning were untested: the suite passed
+    with the weakest correlation replaced by the strongest, and it passed while a segment was
+    collapsed on evidence covering only part of it (M4's verify phase).
+    """
+
+    @staticmethod
+    def _merged(
+        *,
+        first_correlation: int,
+        second_correlation: int | None,
+        # Close enough that the spec's "or compelling source-dominance" escape hatch
+        # cannot fire, so correlation is what decides and this tests what it says it does.
+        merged_score: int = 850,
+        other_score: int = 900,
+    ) -> tuple[list[SegmentDraft], ActivityGraph]:
+        """`tx-a`'s two candidates share one wordless segment; `tx-b` has one of its own."""
+        a1, a2 = candidate_id("tx-a", RATE * 10), candidate_id("tx-a", RATE * 11)
+        b1 = candidate_id("tx-b", RATE * 11)
+        other_evidence = [an_evidence(a2, "tx-a", first_correlation)]
+        first_evidence = []
+        if second_correlation is not None:
+            other_evidence.append(an_evidence(a1, "tx-a", second_correlation))
+            first_evidence.append(an_evidence(b1, "tx-b", second_correlation))
+
+        graph = a_graph(
+            [
+                a_candidate(
+                    "tx-a", RATE * 10, RATE * 11, score=merged_score, evidence=first_evidence
+                ),
+                a_candidate(
+                    "tx-a",
+                    RATE * 11,
+                    RATE * 13,
+                    score=merged_score,
+                    evidence=[an_evidence(b1, "tx-b", first_correlation)],
+                ),
+                a_candidate(
+                    "tx-b", RATE * 11, RATE * 13, score=other_score, evidence=other_evidence
+                ),
+            ],
+            ["tx-a", "tx-b"],
+        )
+        merged = replace(
+            a_draft("tx-a", RATE * 10, RATE * 13, "Yeah " + LONG), candidate_ids=(a1, a2)
+        )
+        return [merged, a_draft("tx-b", RATE * 11, RATE * 13, LONG)], graph
+
+    def test_every_pair_must_clear_the_threshold_not_the_best_one(self) -> None:
+        """One candidate correlating strongly cannot vouch for the other."""
+        drafts, graph = self._merged(first_correlation=950, second_correlation=100)
+        verdicts = collapse(
+            drafts, graph, settings=DuplicateConfig(), overlap_min_samples=1000
+        ).verdicts
+        assert [verdict.decision for verdict in verdicts] == ["retained", "retained"]
+
+    def test_all_pairs_clearing_it_does_collapse(self) -> None:
+        """The control: the same shape with both pairs measured and both strong."""
+        drafts, graph = self._merged(first_correlation=950, second_correlation=950)
+        verdicts = collapse(
+            drafts, graph, settings=DuplicateConfig(), overlap_min_samples=1000
+        ).verdicts
+        assert [verdict.decision for verdict in verdicts] == ["duplicate", "retained"]
+
+    def test_a_candidate_the_graph_never_compared_keeps_both(self) -> None:
+        """The hole: `A1` was never measured against anything on `tx-b`, so `A2`'s strong
+        evidence was silently taken to cover it — and collapsing the merged record deleted
+        `A1`'s words with nothing in the transcript to show it happened."""
+        drafts, graph = self._merged(first_correlation=950, second_correlation=None)
+        result = collapse(drafts, graph, settings=DuplicateConfig(), overlap_min_samples=1000)
+        assert [verdict.decision for verdict in result.verdicts] == ["retained", "retained"]
+        assert "Yeah" in drafts[0].text
+        assert result.decisions == ()
