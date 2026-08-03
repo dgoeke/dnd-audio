@@ -73,6 +73,7 @@ __all__ = [
     "encode_deliverable",
     "mix_outputs",
     "perform_mix",
+    "record_mix_stage",
     "remove_mix_artifacts",
     "run_mix",
 ]
@@ -198,6 +199,7 @@ def run_mix(
         mixed.cache.commit()
 
         encoded = encode_deliverable(session_dir, config, mixed, builder=builder)
+        record_mix_stage(builder, session_dir, mixed, encoded)
     except Exception as exc:
         return _failed(exc, session_dir, mp3_path, report_path, builder, graph, now)
 
@@ -311,9 +313,22 @@ def encode_deliverable(
         builder.record_command(command)
     _record_decisions(builder, work, source, encoded)
 
-    builder.stage_complete(StageName.MIX, warnings=_notes([*work.warnings, *encoded.warnings]))
-    builder.add_deliverable(mp3_path, relative_to=session_dir)
     return encoded
+
+
+def record_mix_stage(
+    builder: ReportBuilder, session_dir: Path, work: MixWork, encoded: EncodeResult
+) -> None:
+    """Mark the mix complete and hash its deliverable.
+
+    Separate from :func:`encode_deliverable` so a caller can perform its **final** INV-01
+    verification between the work and the record. `process` does exactly that: with several
+    commit points, a branch that fails before its own commit leaves the window after the mix's
+    read unchecked, and a stage recorded as complete before that check would have to be
+    un-recorded afterwards. Deferring the record is cheaper than making one retractable.
+    """
+    builder.stage_complete(StageName.MIX, warnings=_notes([*work.warnings, *encoded.warnings]))
+    builder.add_deliverable(session_dir / MP3_RELATIVE_PATH, relative_to=session_dir)
 
 
 def remove_mix_artifacts(session_dir: Path, *, completed: Container[StageName] = ()) -> None:

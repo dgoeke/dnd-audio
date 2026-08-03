@@ -21,16 +21,10 @@ from dnd_audio import cli, models
 from dnd_audio.cli import app
 from dnd_audio.determinism import sha256_bytes
 from dnd_audio.errors import ExitCode
+from dnd_audio.fixtures import FixtureTruth
 from dnd_audio.models import ModelDescriptor
 
 runner = CliRunner()
-
-#: Command, and the milestone its stub names. Everything else is implemented: `doctor` in
-#: M0, `inspect` in M1, `ingest` in M2, `activity` in M3, `transcribe` and `render` in M4,
-#: `mix` in M5.
-STUBS = [
-    ("process", "M5"),
-]
 
 CONSOLE_SCRIPT = Path(sys.executable).parent / "dnd-audio"
 
@@ -54,13 +48,31 @@ class TestCommandSurface:
         assert result.exit_code == 0
         assert "fetch" in result.output
 
-    @pytest.mark.parametrize(("command", "milestone"), STUBS)
-    def test_stub_names_its_milestone(
-        self, session_dir: Path, command: str, milestone: str
+    def test_no_command_is_a_stub_any_more(self, session_dir: Path) -> None:
+        """Every command the spec names is implemented from M5 on.
+
+        A session with no `session.yaml` is a *fatal* failure for all of them now, never a
+        `NotImplementedError` — which is the distinction ADR-0005 spends a whole exit code on:
+        exit 3 means "this pipeline has not built that yet" and exit 1 means "your session is
+        broken". The remaining exit-3 path is a missing ASR adapter (M6b), below.
+        """
+        for command in ("process", "inspect", "ingest", "activity", "transcribe", "mix", "render"):
+            result = runner.invoke(app, [command, str(session_dir)])
+            assert not isinstance(result.exception, NotImplementedError), command
+
+    @pytest.mark.parametrize("command", ["transcribe", "process"])
+    def test_a_command_that_needs_the_absent_asr_adapter_says_which_milestone(
+        self, canonical_fixture: FixtureTruth, command: str
     ) -> None:
-        result = runner.invoke(app, [command, str(session_dir)])
+        """The one place the `DEFERRED` shape still lives, and the reason it still lives.
+
+        Both commands run against a *valid* session, so this is not "your session is broken"
+        by any reading — it is a pipeline that has not built the adapter yet, and an operator
+        who wants the audio branch runs `mix` (ADR-0005, ADR-0024).
+        """
+        result = runner.invoke(app, [command, str(canonical_fixture.session_dir)])
         assert isinstance(result.exception, NotImplementedError)
-        assert milestone in str(result.exception)
+        assert "M6b" in str(result.exception)
 
     def test_models_fetch_says_the_asr_half_is_still_to_come(self) -> None:
         """It is implemented, so the stub message is gone — but the boundary is not."""
@@ -212,20 +224,24 @@ class TestInstalledConsoleScript:
         assert completed.returncode == 0
         assert json.loads(completed.stdout)["checks"]
 
-    def test_a_stub_exits_with_the_not_implemented_code(self, session_dir: Path) -> None:
+    def test_an_unbuilt_adapter_exits_with_the_not_implemented_code(
+        self, canonical_fixture: FixtureTruth
+    ) -> None:
         """A traceback would be a bad message; a distinct exit code is a usable one."""
-        completed = self._run("process", str(session_dir))
+        completed = self._run("process", str(canonical_fixture.session_dir))
         assert completed.returncode == ExitCode.NOT_IMPLEMENTED
         assert "not implemented yet" in completed.stderr
-        assert "M5" in completed.stderr
+        assert "M6b" in completed.stderr
         assert "Traceback" not in completed.stderr
 
-    def test_stub_exit_code_is_distinct_from_usage_error(self, tmp_path: Path) -> None:
+    def test_the_not_implemented_code_is_distinct_from_a_usage_error(
+        self, canonical_fixture: FixtureTruth, tmp_path: Path
+    ) -> None:
         usage = self._run("process", str(tmp_path / "absent"))
-        stub = self._run("process", str(tmp_path))
+        deferred = self._run("process", str(canonical_fixture.session_dir))
         assert usage.returncode == 2
-        assert stub.returncode == ExitCode.NOT_IMPLEMENTED
-        assert usage.returncode != stub.returncode
+        assert deferred.returncode == ExitCode.NOT_IMPLEMENTED
+        assert usage.returncode != deferred.returncode
 
     def test_ingest_fails_like_an_implemented_command(self, session_dir: Path) -> None:
         """`ingest` is implemented now, so a session with no config is a fatal exit.

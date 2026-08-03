@@ -28,6 +28,7 @@ from dnd_audio.errors import DiscoveryError, ExitCode
 from dnd_audio.fixtures import FixtureTruth
 from dnd_audio.inspection.runner import inspect_outputs
 from dnd_audio.mix.runner import run_mix
+from dnd_audio.orchestrate import run_process
 from dnd_audio.raw_guard import (
     raw_roots,
     reject_outputs_inside_raw,
@@ -57,6 +58,7 @@ COMPOSED: Any = [
     pytest.param(lambda d: run_activity(d, detector=_scripted(d)), id="activity"),
     pytest.param(lambda d: run_transcribe(d, fake_models=True), id="transcribe"),
     pytest.param(lambda d: run_mix(d, detector=_scripted(d)), id="mix"),
+    pytest.param(lambda d: run_process(d, fake_models=True), id="process"),
 ]
 
 

@@ -80,13 +80,18 @@ from dnd_audio.transcript.requests import plan_context, plan_requests
 from dnd_audio.transcript.segments import draft_segments
 
 __all__ = [
+    "Models",
     "RenderResult",
     "TranscribeResult",
     "TranscriberBundle",
+    "perform_transcript",
+    "record_render_stage",
     "render_outputs",
+    "resolve_models",
     "run_render",
     "run_transcribe",
     "transcribe_outputs",
+    "write_transcript_deliverables",
 ]
 
 #: The one stage `transcribe` does not run, and why (INV-13).
@@ -225,7 +230,7 @@ def run_transcribe(
         before = snapshot(session_dir, roots)
         reject_outputs_inside_raw(session_dir, config, roots, transcribe_outputs(session_dir))
 
-        models = _models(session_dir, transcriber, detector, fake_models=fake_models)
+        models = resolve_models(session_dir, transcriber, detector, fake_models=fake_models)
         work = perform_activity(
             session_dir,
             config,
@@ -250,7 +255,7 @@ def run_transcribe(
         builder.stage_complete(StageName.ACTIVITY, warnings=_notes(work.graph.warnings))
         builder.add_deliverable(paths.graph, relative_to=session_dir)
 
-        records, cache = _transcribe(
+        records, cache = perform_transcript(
             session_dir,
             config,
             work.graph,
@@ -278,7 +283,8 @@ def run_transcribe(
         builder.stage_complete(StageName.TRANSCRIBE, warnings=_notes(records.warnings))
         builder.add_deliverable(paths.records, relative_to=session_dir)
 
-        _write_deliverables(records, paths, builder, session_dir)
+        write_transcript_deliverables(records, session_dir)
+        record_render_stage(builder, session_dir)
     except NotImplementedError:
         # Deliberately not turned into a failed report. "This pipeline has not built that
         # yet" and "your session is broken" are different answers to different questions, and
@@ -321,7 +327,8 @@ def run_render(session_dir: Path, *, now: dt.datetime | None = None) -> RenderRe
 
         records = _read_records(paths.records)
         warnings = _stale_records(records, config)
-        _write_deliverables(records, paths, builder, session_dir, warnings=warnings)
+        write_transcript_deliverables(records, session_dir)
+        record_render_stage(builder, session_dir, warnings=warnings)
     except Exception as exc:
         error = StructuredError(code=_code_of(exc), message=str(exc) or type(exc).__name__)
         if not builder.recorded(StageName.RENDER):
@@ -392,7 +399,7 @@ class _Paths:
 
 
 @dataclass(frozen=True, slots=True)
-class _Models:
+class Models:
     """The two seams, resolved together with whatever an operator must be told about them."""
 
     transcriber: TranscriberBundle
@@ -400,23 +407,23 @@ class _Models:
     warnings: tuple[TranscriptNote, ...] = ()
 
 
-def _models(
+def resolve_models(
     session_dir: Path,
     transcriber: TranscriberBundle | None,
     detector: DetectorBundle | None,
     *,
     fake_models: bool,
-) -> _Models:
+) -> Models:
     """Resolve both model seams, explicitly and visibly (ADR-0018)."""
     if transcriber is not None:
-        return _Models(transcriber=transcriber, detector=detector)
+        return Models(transcriber=transcriber, detector=detector)
     if not fake_models:
-        return _Models(transcriber=_default_transcriber(session_dir), detector=detector)
+        return Models(transcriber=_default_transcriber(session_dir), detector=detector)
 
     from dnd_audio.transcript.fakemodels import load_fake_models
 
     fake = load_fake_models(session_dir)
-    return _Models(
+    return Models(
         transcriber=TranscriberBundle(
             transcriber=fake.transcriber, name=fake.name, variant_digest=fake.digest
         ),
@@ -449,12 +456,12 @@ def _default_transcriber(session_dir: Path) -> TranscriberBundle:
     )
 
 
-def _transcribe(
+def perform_transcript(
     session_dir: Path,
     config: SessionConfig,
     graph: ActivityGraph,
     *,
-    models: _Models,
+    models: Models,
     builder: ReportBuilder,
     timeline_sha256: str,
     use_cache: bool,
@@ -536,17 +543,26 @@ def _glossary(session_dir: Path, config: SessionConfig) -> str | None:
         return None
 
 
-def _write_deliverables(
-    records: TranscriptRecords,
-    paths: _Paths,
+def write_transcript_deliverables(records: TranscriptRecords, session_dir: Path) -> None:
+    """Write `transcript.json` and `transcript.md`. Records nothing.
+
+    Split from the recording so a caller can perform its **final** INV-01 verification between
+    the write and the record — which is what `process` needs, since a stage marked complete
+    before that check would have to be un-marked afterwards (ADR-0024).
+    """
+    paths = _Paths(session_dir)
+    write_json_atomic(paths.transcript, build_transcript(records).model_dump(mode="json"))
+    write_atomic(paths.markdown, render_markdown(records))
+
+
+def record_render_stage(
     builder: ReportBuilder,
     session_dir: Path,
     *,
     warnings: Sequence[TranscriptNote] = (),
 ) -> None:
-    """Write `transcript.json` and `transcript.md`, and record them as deliverables."""
-    write_json_atomic(paths.transcript, build_transcript(records).model_dump(mode="json"))
-    write_atomic(paths.markdown, render_markdown(records))
+    """Mark the render complete and hash both deliverables."""
+    paths = _Paths(session_dir)
     builder.stage_complete(StageName.RENDER, warnings=_notes(warnings))
     builder.add_deliverable(paths.transcript, relative_to=session_dir)
     builder.add_deliverable(paths.markdown, relative_to=session_dir)
