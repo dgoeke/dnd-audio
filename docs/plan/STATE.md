@@ -41,13 +41,19 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | M1  | Inspection                 | closed      | `fd16931` |
 | M2  | Timeline                   | closed      | `f33ad6d` |
 | M3  | Activity                   | closed      | `38bc989` |
-| M4  | Fake transcript            | closed      | `e8ff55d` |
+| M4  | Fake transcript            | closed      | `8556f43` |
 | M5  | Automix                    | not started | —         |
 | M6a | ROCm environment           | not started | —         |
 | M6b | Qwen adapter               | not started | —         |
 | H1  | Hardware fixture (2 min)   | not started | —         |
 | H2  | Drift soak / first session | not started | —         |
 | M7  | Archival (sketch)          | sketch      | —         |
+
+**Closed at** is the milestone's close commit, and it is recorded by a small follow-up
+commit — a commit cannot contain its own hash (the same limit ADR-0003 names for the report).
+M0–M3 each wrote theirs by amending instead, so those four SHAs are the pre-amend close commit
+and do not resolve in a fresh clone. Left as they are rather than rewritten history; from M4
+on the column is reachable.
 
 Status values: `not started` → `in progress` → `verified` → `closed`.
 `blocked` is also valid; say what on. `sketch` means a charter exists to hold the
