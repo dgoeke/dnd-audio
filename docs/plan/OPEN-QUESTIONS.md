@@ -218,7 +218,57 @@ appear as assumed — is untouched: the sample has no `edit` files at all.
 given the FHS compiler toolchain and setuptools ≥ 70.2.
 **Why it matters:** All of M6a. Failure means finding another tested gfx1151 build.
 **Evidence:** A successful locked install plus a BF16 op on the real device.
-**Needs:** M6a · **Blocks:** M6a, M6b · **Status:** open
+**Needs:** M6a · **Blocks:** M6a, M6b · **Status:** **answered — yes, and the sdist needed
+nothing the FHS shell did not already have** (M6a, 2026-08-03)
+
+**Answer — it works, and the assumption was right about the build and wrong about the
+routing.** `torch 2.9.1+rocm7.13.0` resolves, installs, and computes correctly:
+
+| | |
+| --- | --- |
+| torch | `2.9.1+rocm7.13.0`, from `https://repo.amd.com/rocm/whl/gfx1151/` |
+| HIP runtime | `7.13.99004-3309c6114a` |
+| device | `Radeon 8060S Graphics`, `gcnArchName` **`gfx1151`** |
+| GPU bfloat16 | exact |
+| GPU float32 | exact |
+| CPU bfloat16 | exact |
+
+The `rocm==7.13.0` sdist **built first time** inside `nix develop`'s FHS sibling with the
+`targetPkgs` list M0 guessed at from the host's ComfyUI module — no additions, no compiler
+errors. setuptools was left unconstrained as the spec instructs. So the half of this
+question about the *build* was right, and the FHS package list is now a tested set rather
+than a starting point.
+
+**What was wrong is the half nobody asked about: the routing.** The spec's configuration
+sketch routes `torch` alone, and that does not resolve. `[tool.uv.sources]` only applies to
+packages that are also **direct members of a dependency list**; a requirement discovered
+inside another package's metadata is looked up on PyPI regardless — silently, with the
+wrong registry simply recorded in the lock. Torch needs `rocm[libraries]==7.13.0` and
+`triton==3.5.1+rocm7.13.0`, and `rocm[libraries]` in turn needs `rocm-sdk-core` and
+`rocm-sdk-libraries-gfx1151`; all four are now listed in the `asr-qwen` group so the
+routing can reach them. Five packages resolve from the AMD index, no `nvidia-*` wheel
+appears, and `accelerate 1.12.0` sits in the same lock wanting `torch>=2.0.0` and not
+getting a CUDA build. See [ADR-0025](decisions/0025-provisioning-amd-gfx1151-torch.md).
+
+**Not answered here, because M6a does not run a model:** whether this stack is *fast*
+enough, and whether the AOTriton flag measurably changes SDPA. Both are M6b's smoke test.
+
+## OQ-021 — Which render node backs the ROCm compute device on a multi-GPU host?
+**Assumption:** It does not matter yet, because there is one. `runtime.render_nodes()`
+globs `/dev/dri/renderD*`, opens every match, and treats one that opens as sufficient; the
+spec names `/dev/dri/renderD128` and qualifies it with the word *currently*, which is a
+numbering that shifts with how many DRM devices the kernel enumerated first.
+**Why it matters:** Only for the accuracy of a `doctor` check, and only on a host with more
+than one GPU. Two failure directions, both mild: a second, unrelated GPU whose node is
+restricted would be reported as a refused node beside a working one (noise, not a false
+failure — one openable node is a pass), and a host where the *compute* node is the
+restricted one would be reported as healthy while Torch found no device. The second is the
+one worth closing, and on that host `torch.cuda.is_available()` is already false, so the
+`gpu` check catches it and only the *explanation* is wrong.
+**Evidence:** A host with two DRM render nodes, and a way to tie one to Torch's device 0 —
+`amdgpu`'s sysfs topology under `/sys/class/kfd/kfd/topology/nodes/` carries the DRM render
+minor per agent, which is the obvious source if this ever needs answering.
+**Needs:** a second GPU on a target host · **Blocks:** nothing · **Status:** open
 
 ## OQ-009 — Where does `qwen-asr`'s timestamp path actually chunk?
 **Assumption:** 180 s in 0.0.6, which is why `max_segment_s` defaults to 120 and

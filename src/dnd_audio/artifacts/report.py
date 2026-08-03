@@ -20,6 +20,7 @@ bytes it describes, and there is no fixed point.
 from __future__ import annotations
 
 import datetime as dt
+import sys
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Final, Literal, Self
@@ -42,6 +43,7 @@ __all__ = [
     "ReportBuilder",
     "ReportWarning",
     "RosterSummary",
+    "RuntimeProvenance",
     "StageName",
     "StageOrigin",
     "StageReport",
@@ -195,6 +197,37 @@ class StageReport(_Artifact):
         return self
 
 
+class RuntimeProvenance(_Artifact):
+    """The compute runtime a stage resolved: which device, which precision, which build.
+
+    Present only on a run that actually resolved one. That is deliberate rather than
+    defensive: ``inspect``, ``ingest``, ``activity`` and ``mix`` never load Torch, so
+    filling this in for them would mean probing a GPU those stages have no use for, and
+    recording an answer no stage acted on. An absent section says "nothing here chose a
+    device", which is true and is not the same as "there is no GPU".
+
+    Every field reaches an ASR cache key (INV-08): the same audio transcribed in BF16 on
+    gfx1151 and in float32 on a CPU are not the same result, and a Torch or HIP upgrade
+    can change a kernel's rounding. Defining them here once means M6b adds them to
+    ``TranscriberIdentity`` without a second vocabulary to drift from this one.
+    """
+
+    #: Always known — it is the interpreter running this code.
+    python: str
+    #: ``None`` when the resolution ran without Torch installed, which is the CPU-fallback
+    #: case a machine with no ``asr-qwen`` group is in.
+    torch: str | None = None
+    #: ``torch.version.hip``. ``None`` on a CPU-only or CUDA build, and that distinction
+    #: is load-bearing: a CUDA build here would mean the AMD index routing failed.
+    hip: str | None = None
+    #: The resolved device, not the requested one. ``cpu`` or ``cuda:0``.
+    device: str
+    #: What the driver calls the GPU. ``None`` on CPU.
+    device_name: str | None = None
+    #: The resolved dtype, not the requested one.
+    dtype: str
+
+
 class Provenance(_Artifact):
     """Deterministic facts about the inputs and the software.
 
@@ -217,6 +250,9 @@ class Provenance(_Artifact):
     commands: list[str] = Field(default_factory=list)
     #: Resolved model and aligner revisions, not mutable branch names.
     model_identity: dict[str, str] = Field(default_factory=dict)
+    #: The compute runtime, when a stage resolved one. ``None`` on every run that loaded
+    #: no model — see :class:`RuntimeProvenance`.
+    runtime: RuntimeProvenance | None = None
     #: Every deliverable this run produced, except the report itself (ADR-0003).
     deliverables: list[Deliverable] = Field(default_factory=list)
 
@@ -362,9 +398,17 @@ class ReportBuilder:
         self._stages: dict[StageName, StageReport] = {}
         self._deliverables: dict[str, Deliverable] = {}
         self._tool_versions: dict[str, str] = {}
-        self._package_versions: dict[str, str] = {}
+        # The interpreter, recorded for every run rather than by whichever stage
+        # remembers. The spec's observability list asks for the Python version and it is
+        # true of the whole process, not of a stage — a run that failed in `inspect`
+        # should still say which Python produced that failure. Deterministic on one
+        # machine, so INV-03 is satisfied: this is provenance, not telemetry.
+        self._package_versions: dict[str, str] = {
+            "python": ".".join(str(part) for part in sys.version_info[:3])
+        }
         self._commands: list[str] = []
         self._model_identity: dict[str, str] = {}
+        self._runtime: RuntimeProvenance | None = None
         self._stage_seconds: dict[StageName, float] = {}
         self._decisions: list[Decision] = []
         self._roster: RosterSummary | None = None
@@ -463,6 +507,16 @@ class ReportBuilder:
         if command not in self._commands:
             self._commands.append(command)
 
+    def record_runtime(self, runtime: RuntimeProvenance) -> None:
+        """Record the compute runtime a stage resolved.
+
+        Replaces rather than merges. One run resolves one device and one dtype — two
+        stages disagreeing about which would be a bug worth failing on, not a pair of
+        facts worth averaging, and a partial merge would describe a machine that does not
+        exist.
+        """
+        self._runtime = runtime
+
     def record_model_identity(self, name: str, revision: str) -> None:
         self._model_identity[name] = revision
 
@@ -514,6 +568,7 @@ class ReportBuilder:
                 package_versions=dict(self._package_versions),
                 commands=list(self._commands),
                 model_identity=dict(self._model_identity),
+                runtime=self._runtime,
                 deliverables=list(self._deliverables.values()),
             ),
             telemetry=Telemetry(

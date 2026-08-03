@@ -24,7 +24,7 @@ Stage boundaries, from the spec:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import typer
 
@@ -57,6 +57,16 @@ SessionDir = Annotated[
         help="Session directory: the one holding session.yaml and raw/.",
     ),
 ]
+
+DeviceChoice = Literal["auto", "cpu", "cuda"]
+DtypeChoice = Literal["auto", "float32", "bfloat16"]
+
+#: Validated by hand rather than through a `StrEnum` parameter type, because these are the
+#: `asr.device`/`asr.dtype` vocabularies from `session.yaml` and they are spelled there as
+#: plain strings. An enum here would be a second place for that vocabulary to live, and a
+#: second place is how two spellings of `bfloat16` end up in one project (ADR-0005).
+_DEVICE_CHOICES: tuple[DeviceChoice, ...] = ("auto", "cpu", "cuda")
+_DTYPE_CHOICES: tuple[DtypeChoice, ...] = ("auto", "float32", "bfloat16")
 
 app = typer.Typer(
     name="dnd-audio",
@@ -315,14 +325,42 @@ def doctor(
         bool,
         typer.Option("--json", help="Emit the results as canonical JSON instead of a table."),
     ] = False,
+    device: Annotated[
+        str,
+        typer.Option(
+            "--device",
+            help="Which device to check, as `asr.device` would request it: auto, cpu, or "
+            "cuda. `cuda` fails when this machine cannot deliver it, which is the point.",
+        ),
+    ] = "auto",
+    dtype: Annotated[
+        str,
+        typer.Option(
+            "--dtype",
+            help="Which precision to check, as `asr.dtype` would request it: auto, "
+            "float32, or bfloat16. Checked on whatever device the run resolves to.",
+        ),
+    ] = "auto",
 ) -> None:
     """Check this host without touching session audio.
 
     Reports the pinned VAD model as a warning when it is absent — that is a machine
-    that can do everything but activity detection. GPU checks arrive with M6a, the ASR
-    models with M6b.
+    that can do everything but activity detection. The ASR models arrive with M6b.
+
+    `--device` and `--dtype` answer "will *my* configuration work here" before a session
+    starts rather than during it. An explicitly requested combination this machine cannot
+    deliver is a failure with a diagnostic naming what is wrong, never a quiet downgrade
+    to something that would have produced different numbers (ADR-0026).
     """
-    results = run_checks(path)
+    if device not in _DEVICE_CHOICES:
+        message = f"--device must be one of {', '.join(_DEVICE_CHOICES)}, not {device!r}"
+        raise typer.BadParameter(message)
+    if dtype not in _DTYPE_CHOICES:
+        message = f"--dtype must be one of {', '.join(_DTYPE_CHOICES)}, not {dtype!r}"
+        raise typer.BadParameter(message)
+
+    # No cast: the membership tests above narrow both to their Literal types.
+    results = run_checks(path, device=device, dtype=dtype)
     status = overall_status(results)
 
     if as_json:

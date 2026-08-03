@@ -32,17 +32,83 @@ dev = [
     "types-pyyaml>=6.0",
 ]
 
-# Declared, deliberately empty. The Qwen stack pins Transformers and drags in
-# Accelerate, Gradio, Flask, and Python SoX; AMD's gfx1151 Torch pulls a
-# `rocm[libraries]` sdist that builds at install time. None of that belongs in the
-# environment the default test suite runs in (INV-05). M6a fills this in, together
-# with the AMD wheel index and per-package sourcing. Until then its emptiness is
-# asserted by tests/test_packaging.py.
-asr-qwen = []
+# The heavyweight runtime, isolated. None of this belongs in the environment the default
+# test suite runs in (INV-05), so the group is opt-in: it is absent from
+# `[tool.uv] default-groups`, a plain `uv sync` installs none of it, and it is installed
+# into a *separate* environment — `nix run .#fhs -- -c 'UV_PROJECT_ENVIRONMENT=.venv-rocm
+# uv sync --group asr-qwen'` — so the everyday gate keeps running the group-absent case
+# rather than proving it once (ADR-0025).
+#
+# Everything here is pinned exactly, and every pin is a decision rather than a floor:
+#
+# * **torch 2.9.1+rocm7.13.0.** Not the newest build on the index — 2.10.0 and 2.11.0
+#   are also published for cp312 — and deliberately so. ROCm 7.13 is the generation
+#   this host already runs a GPU workload on, which is evidence about the *runtime*;
+#   there is no host evidence about any torch version, so the tie-break is a patch
+#   release over two x.y.0 releases. "Tested" beats "newest" here (ADR-0025).
+# * **rocm[libraries] and triton.** Torch's own requirements, and they are listed here
+#   rather than left transitive because `[tool.uv.sources]` only routes packages that
+#   are *direct* members of a dependency list. A transitive-only requirement silently
+#   resolves from PyPI no matter what the sources table says — where `rocm` is an
+#   unrelated placeholder at 0.1.0. Measured, not assumed; see ADR-0025.
+# * **transformers and accelerate**, at the exact versions `qwen-asr` 0.0.6 pins. They
+#   are here rather than in M6b because the charter's lock assertion is about *them*:
+#   accelerate requires `torch>=2.0.0`, and the failure this milestone exists to
+#   prevent is that requirement quietly resolving a CUDA build from ordinary PyPI.
+#   With torch alone in the lock nothing competes for it and the assertion proves
+#   nothing. Pinning them to what M6b will actually need means M6b does not relock and
+#   redownload a multi-gigabyte environment this milestone just settled.
+#
+# `qwen-asr` itself is still M6b's.
+asr-qwen = [
+    "torch==2.9.1+rocm7.13.0",
+    "rocm[libraries]==7.13.0",
+    "rocm-sdk-core==7.13.0",
+    "rocm-sdk-libraries-gfx1151==7.13.0",
+    "triton==3.5.1+rocm7.13.0",
+    "transformers==4.57.6",
+    "accelerate==1.12.0",
+]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# --- uv: the AMD gfx1151 wheel index ------------------------------------------
+
+# `explicit = true` is the whole point. Without it this index becomes a candidate
+# source for *every* package, and it carries its own numpy, setuptools, jinja2 and
+# typing-extensions — so an unrelated dependency would start resolving from AMD's
+# mirror for no reason and with no record of why. Explicit means nothing comes from
+# here unless `[tool.uv.sources]` below names it.
+#
+# Declared in configuration rather than passed as `--index-url` on a command line,
+# because a command-line index choice is one forgotten flag away from a CUDA build,
+# and nothing in the lock would say that had happened (ADR-0025).
+[[tool.uv.index]]
+name = "amd-gfx1151"
+url = "https://repo.amd.com/rocm/whl/gfx1151/"
+explicit = true
+
+# Per-package routing. Everything named here is either absent from PyPI or exists
+# there as a *different build* under the same name, which is the dangerous case:
+# `torch` on PyPI is a CUDA build that satisfies accelerate's `torch>=2.0.0` just as
+# well as the gfx1151 one does, and only this table decides which wins. `rocm` on PyPI
+# is an unrelated placeholder at 0.1.0.
+#
+# **An entry here does nothing unless the package is also a direct member of a
+# dependency list.** uv applies this table when it resolves a name it was asked for by
+# name, not when it discovers one inside another package's metadata — so routing a
+# transitive-only requirement is silently ignored and it resolves from PyPI. That is
+# why `rocm` and `triton` appear in the `asr-qwen` group above even though nothing in
+# this project imports them: they are torch's requirements, and listing them is the
+# only way this table reaches them (ADR-0025).
+[tool.uv.sources]
+torch = { index = "amd-gfx1151" }
+rocm = { index = "amd-gfx1151" }
+rocm-sdk-core = { index = "amd-gfx1151" }
+rocm-sdk-libraries-gfx1151 = { index = "amd-gfx1151" }
+triton = { index = "amd-gfx1151" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/dnd_audio"]
@@ -100,6 +166,16 @@ enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 # untyped object (ADR-0013).
 [[tool.mypy.overrides]]
 module = ["onnxruntime"]
+ignore_missing_imports = true
+
+# `torch` is not installed in the environment the gate type-checks in, and deliberately so
+# (INV-05): it lives in the opt-in `asr-qwen` group. The same treatment `onnxruntime`
+# gets, and for a stronger reason — requiring torch to type-check would make the offline
+# gate depend on a multi-gigabyte GPU stack. It is imported lazily inside the functions of
+# `dnd_audio.runtime` and nowhere else, so nothing outside that module sees an untyped
+# object (ADR-0026).
+[[tool.mypy.overrides]]
+module = ["torch"]
 ignore_missing_imports = true
 
 [tool.pydantic-mypy]
