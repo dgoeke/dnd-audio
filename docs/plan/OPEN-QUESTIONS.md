@@ -270,6 +270,37 @@ one worth closing, and on that host `torch.cuda.is_available()` is already false
 minor per agent, which is the obvious source if this ever needs answering.
 **Needs:** a second GPU on a target host · **Blocks:** nothing · **Status:** open
 
+## OQ-022 — Is Qwen inference on ROCm reproducible across cold runs?
+**Assumption:** Yes. `transcript.json`, `transcript.md` and `work/transcript-records.json`
+are declared byte-stable on unchanged inputs and unchanged configuration (INV-02), and from
+M6b onward the text and word times in them come out of a GPU kernel. The adapter disables
+sampling explicitly rather than inheriting whatever generation configuration the snapshot
+ships, so the remaining question is whether *greedy* decoding through ROCm SDPA on gfx1151
+returns bit-identical logits — and therefore identical token choices and identical aligner
+argmaxes — on two separate cold executions of the same request.
+**Why it matters:** The ASR cache hides this completely. A warm run replays stored text and
+stored word times, so every byte-stability test the project has ever run would pass on a
+model that answers differently every time. It only surfaces when a cache is cleared, a cache
+key legitimately changes, or the work is re-run on another machine — and it surfaces as two
+transcripts of one session that disagree, with nothing in either saying which is right.
+Reduction-order nondeterminism in an attention kernel is the ordinary cause; it is not
+exotic, and it costs nothing until the moment it costs a byte-stability claim two milestones
+old.
+**Evidence:** The same request submitted twice with the cache bypassed, text and word times
+compared **exactly** rather than within a tolerance — a tolerance would pass on precisely the
+wobble this asks about. `tests/test_qwen_smoke.py` does that on the target host, and the
+cheap extension if it ever fails is to compare across a process restart as well, since a
+warm HIP context can be reproducible where a cold one is not.
+**Needs:** M6b · **Blocks:** nothing — INV-02 is a claim about artifacts, and if the answer
+is no the fix is to say so in the invariant rather than to change the pipeline ·
+**Status:** open
+
+**Raised by M6b's plan review**, which noticed that a rule two milestones old had quietly
+acquired a new dependency nobody had written down. If the answer turns out to be no, the
+honest consequence is that INV-02's byte-stability guarantee holds for everything the
+pipeline *computes* and not for what the model *says*, and the invariant gets amended to
+name the boundary. See [ADR-0028](decisions/0028-the-qwen-adapter-seam.md).
+
 ## OQ-009 — Where does `qwen-asr`'s timestamp path actually chunk?
 **Assumption:** 180 s in 0.0.6, which is why `max_segment_s` defaults to 120 and
 the advertised five-minute model limit is not trusted.
