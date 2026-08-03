@@ -77,10 +77,45 @@ streamed mix, two-pass loudness normalization, and MP3 encode/decode verificatio
   of chunks each is fine; if M5 ever opens many sessions' worth at once, that is where the
   limit is.
 
+## What M3 already provides (read before starting)
+
+- **`work/activity.json` is the only thing the mix may consult about who was speaking**
+  (INV-09, whose *enforcement* this milestone owns). It is frozen at schema version 1
+  (ADR-0012) and carries no floats.
+- **One track's active intervals, with a confidence, are a direct read.** Filter
+  `candidates` to `decision == "retained"` and that `track_id`; each carries
+  `probability_permille`, `peak_probability_permille`, `band_level_mbfs`, and
+  `relative_level_mb`. `test_activity_artifact.py::TestTheConsumerReads::test_m5_takes_one_tracks_active_intervals_with_a_confidence`
+  is that access pattern, written before this milestone existed.
+- **`ActivityTrack.speech_reference_mbfs` is the per-track voice level the first gate
+  criterion asks you to estimate** — the 75th percentile of that track's own candidate
+  levels, band-limited to 300–3400 Hz. It is `None` where the track had too little speech to
+  establish one; treat that as "unknown", never as zero. Clamping is still M5's job, and the
+  number itself is unsettled until OQ-017 has a real session.
+- **`ambiguous` is where obvious correlated bleed nearly won.** It marks a candidate the
+  numbers condemned — margin *and* correlation both satisfied — that the track-level veto
+  kept (ADR-0014). The "obvious correlated bleed is not promoted on two channels
+  simultaneously" criterion is about exactly these; `evidence` names the competitor, the peak
+  correlation, and the lag it occurred at.
+- **The graph does not contain gain.** It says who was speaking and how sure the pipeline is;
+  envelopes are entirely this milestone's (ADR-0012 deliberately kept them out).
+
 ## Known risks and open questions
 
 - Decoded loudness alone is *not* evidence of correct channel selection. If the
   only tests are loudness tests, a mix that picks the wrong speaker will pass.
   The envelope assertions are the real gate.
+- **The INV-09 field allowlist freezes property names, not prose.**
+  `ActivityDecision.detail` and `ActivityNote.message` are unrestricted strings. **The mixer
+  must not read either** — they are human-facing audit text, and deriving a single sample
+  from them would make the mix depend on content no test constrains. The structural
+  "imports nothing from the ASR layer" check does not catch this. Raised by independent
+  review in M3's verify phase; see `../reviews/M3-code-20260802-1708.md`.
+- **`activity.bleed.compare_pairs` is quadratic in the session's candidate count.** It
+  enumerates every pair via `itertools.combinations` and only then rejects non-overlaps.
+  Candidates are already sorted by start sample, so a sweep would be `O(n log n)` plus the
+  pairs that genuinely overlap. Deferred in M3 with no measured evidence either way — the
+  per-pair work rejected is one integer comparison, and a real session's candidate count is
+  unknown until H2. If M5 walks the candidate set at scale and it hurts, that is the fix.
 - The true-peak ceiling applies to the decoded MP3, not the pre-encode
   intermediate. Lossy encoding introduces overshoot.

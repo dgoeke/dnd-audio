@@ -125,7 +125,27 @@ the advertised five-minute model limit is not trusted.
 a recorded revision, running on CPU or ONNX.
 **Why it matters:** INV-05 (offline default suite) and cache-key identity (INV-08).
 **Evidence:** A working offline load path in M3.
-**Needs:** M3 · **Blocks:** M3 · **Status:** open
+**Needs:** M3 · **Blocks:** M3 · **Status:** **answered** (M3)
+
+**Answer — the artifact, not the package.** The `silero-vad` distribution hard-depends on
+`torch` and `torchaudio`, which is unacceptable in the environment the default suite runs in
+(INV-05) and would pre-empt M6a's AMD wheel index and per-package sourcing. Its **ONNX**
+protocol needs neither: inputs are `input` (1, 64 context + 512 samples), `state` (2, 1, 128),
+and `sr` (int64); outputs are a probability and the next state. So the pin is a commit-pinned
+model *file* driven by `onnxruntime` on CPU from a plain NumPy loop, never the package.
+
+Pinned by upstream release `v6.2.1`, commit `7e30209a3e901f9842f81b225f3e93d8199902b1`,
+and sha256 `1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3` — verified
+against **two independent sources of the same file**, the repository at that commit and the
+published 6.2.1 wheel's copy, which are byte-identical. That equality is what makes "we did
+not install the package" a packaging decision rather than a change of artifact.
+
+The runtime and the *calling interface* are pinned too (frame size, context size, state
+shape, input names, rate) and all of it enters the detection cache key: a runtime upgrade
+that changed a kernel's rounding must re-run the work. `models fetch` verifies the digest
+before moving the file into place and is the only command permitted to touch the network
+(INV-06). Answering this required amending the spec as well as M3's charter — see
+[ADR-0013](decisions/0013-silero-through-onnx-runtime.md).
 
 ## OQ-011 — Does `ffprobe` expose an exact PCM sample count for these files?
 **Assumption:** `duration_ts` plus time base is exact for PCM; a decode pass is the
