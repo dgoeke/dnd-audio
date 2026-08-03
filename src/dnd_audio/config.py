@@ -35,6 +35,7 @@ __all__ = [
     "ActivityConfig",
     "AsrConfig",
     "BleedConfig",
+    "DuplicateConfig",
     "MixConfig",
     "RecoveryConfig",
     "ScoringConfig",
@@ -44,6 +45,7 @@ __all__ = [
     "SyncQaConfig",
     "TimecodeConfig",
     "TrackConfig",
+    "TranscriptConfig",
     "VadConfig",
     "config_hash",
     "load_session_config",
@@ -336,6 +338,72 @@ class ActivityConfig(_Strict):
     scoring: ScoringConfig = Field(default_factory=ScoringConfig)
 
 
+class DuplicateConfig(_Strict):
+    """When two tracks' segments are the same utterance heard twice (spec, Milestone 3).
+
+    Collapse needs **all three** of substantial temporal overlap, strongly similar normalized
+    text, and supporting acoustic evidence — and the acoustic half comes from the activity
+    graph's own per-pair measurements rather than from a second correlator (ADR-0017).
+
+    The thresholds split by what settles them. The text ones are calibrated against *Qwen's*
+    error distribution — how differently one model transcribes the same utterance heard on two
+    lavs (OQ-018). The acoustic ones are about a real room, which is OQ-017's question.
+    """
+
+    #: How much of the shorter segment the two must share before overlap counts at all.
+    #: Compared by integer cross-multiplication against the sample counts, never as a float
+    #: ratio at a boundary (OQ-018).
+    min_overlap_ratio: float = Field(default=0.5, gt=0.0, le=1.0)
+    #: Normalized-text similarity, quantized to per-mille before it is compared or recorded.
+    #: High by design: a duplicate is the *same words*, and two people saying similar things
+    #: is ordinary conversation (OQ-018).
+    min_text_similarity: float = Field(default=0.85, gt=0.0, le=1.0)
+    #: Below this many words, text similarity is ignored entirely and nothing collapses. The
+    #: spec names the case: "yes" and "no" match perfectly and mean two people agreeing
+    #: (OQ-018).
+    min_text_words: int = Field(default=4, ge=1, le=100)
+    #: The same floor in characters, because four short words are still not evidence (OQ-018).
+    min_text_chars: int = Field(default=12, ge=1, le=1000)
+    #: The graph's peak normalized correlation between the two candidates. Every pair that
+    #: exists must reach it, not merely the best one — the conservative direction (OQ-017).
+    min_correlation: float = Field(default=0.5, gt=0.0, le=1.0)
+    #: Or compelling source dominance: how much better the winner's source score must be
+    #: when the correlation alone is not decisive (OQ-017).
+    min_score_margin: float = Field(default=0.1, gt=0.0, le=1.0)
+
+
+class TranscriptConfig(_Strict):
+    """How activity candidates become ASR requests, and what happens to the answers.
+
+    Every default here is a guess about a model this milestone deliberately does not have.
+    **OQ-018** is the record of that, and it is cited from each one so `rg 'OQ-018'` finds
+    them together when M6b can finally measure them.
+    """
+
+    #: Audio added to each side of an ownership interval so the model hears the context around
+    #: an utterance and does not clip its first or last word. Padding is context, never
+    #: content: a word inside it and inside no ownership interval is dropped (ADR-0020,
+    #: OQ-018).
+    pad_ms: int = Field(default=500, ge=0, le=10_000)
+    #: Adjacent candidates on one track closer together than this are merged into one request.
+    #: The audio merges; ownership does not (ADR-0017). Wider than `activity.vad.merge_gap_ms`,
+    #: which is about not fragmenting a sentence; this one is about not paying a model's
+    #: fixed cost per fragment (OQ-018).
+    merge_gap_ms: int = Field(default=1500, ge=0, le=60_000)
+    #: How much two retained segments of *different* speakers must share before either is
+    #: marked `overlap`. The spec defines the flag in terms of "at least the configured
+    #: overlap threshold" and leaves the number to us (OQ-018).
+    overlap_min_ms: int = Field(default=250, ge=0, le=60_000)
+    #: A **global budget of additional submissions** spent resolving one truncated request,
+    #: not a recursion depth — depth doubles, and a depth of 3 would be fifteen calls
+    #: (ADR-0020, OQ-018).
+    max_truncation_retries: int = Field(default=4, ge=0, le=32)
+    #: A child of a truncation split shorter than this is not split again. Without it the
+    #: recursion produces sub-word requests whose transcription means nothing (OQ-018).
+    min_split_core_ms: int = Field(default=2000, gt=0, le=120_000)
+    duplicate: DuplicateConfig = Field(default_factory=DuplicateConfig)
+
+
 class SyncQaConfig(_Strict):
     """Optional clap cross-correlation, as synchronization QA only.
 
@@ -469,6 +537,7 @@ class SessionConfig(_Strict):
     tracks: list[TrackConfig] = Field(min_length=1)
     asr: AsrConfig = Field(default_factory=AsrConfig)
     activity: ActivityConfig = Field(default_factory=ActivityConfig)
+    transcript: TranscriptConfig = Field(default_factory=TranscriptConfig)
     sync_qa: SyncQaConfig = Field(default_factory=SyncQaConfig)
     mix: MixConfig = Field(default_factory=MixConfig)
     recovery: RecoveryConfig = Field(default_factory=RecoveryConfig)
@@ -623,12 +692,19 @@ _FIELD_SCOPES: Final[dict[str, frozenset[StageScope]]] = {
     "activity.bleed": frozenset(("attribution",)),
     "activity.scoring": frozenset(("attribution",)),
     "activity.correlation_max_lag_ms": frozenset(("attribution",)),
-    # Reaches no cached stage. `title` and `language` are carried into outputs M3 does not
-    # produce; `asr` belongs to M6b's own cache identity; `mix` to M5's; and `sync_qa`
-    # produces warnings and report decisions but never a sample.
+    # Reaches none of the four stages *this table covers*. `title` and `language` are carried
+    # into outputs M3 does not produce; `mix` belongs to M5. `sync_qa` produces warnings and
+    # report decisions but never a sample.
+    #
+    # `asr` and `transcript` are the subtle entries: they genuinely change what the ASR stage
+    # submits and returns, and that stage caches. Its identity is built where it is used
+    # rather than from a projection here, because the key is content-addressed on the audio
+    # actually submitted plus the inference parameters actually used (ADR-0019) — a
+    # projection would restate the same facts in a second place that could disagree.
     "title": frozenset(),
     "language": frozenset(),
     "asr": frozenset(),
+    "transcript": frozenset(),
     "sync_qa": frozenset(),
     "mix": frozenset(),
 }

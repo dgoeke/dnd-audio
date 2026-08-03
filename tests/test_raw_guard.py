@@ -16,12 +16,16 @@ the exact input that makes the thing it verifies actually change.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from dnd_audio.activity.runner import run_activity
 from dnd_audio.config import SessionConfig
-from dnd_audio.errors import DiscoveryError
+from dnd_audio.errors import DiscoveryError, ExitCode
+from dnd_audio.fixtures import FixtureTruth
 from dnd_audio.inspection.runner import inspect_outputs
 from dnd_audio.raw_guard import (
     raw_roots,
@@ -29,7 +33,8 @@ from dnd_audio.raw_guard import (
     snapshot,
     verify_unchanged,
 )
-from dnd_audio.timeline.runner import ingest_outputs
+from dnd_audio.timeline.runner import ingest_outputs, run_ingest
+from dnd_audio.transcript.runner import run_transcribe
 from tests.manifests import config_for
 
 
@@ -223,3 +228,50 @@ class TestOutputsInsideRaw:
                 raw_roots(config),
                 ingest_outputs(session),
             )
+
+
+class TestCleanupNeverWritesIntoRaw:
+    """INV-01 outranks the stale-artifact cleanup, not only the report.
+
+    Every runner deletes the artifacts a failed run may have left behind, so that a stale
+    file cannot sit beside a report calling its stage failed. When `work` resolves inside a
+    source directory, **those unlinks are the violation** — the run that correctly detected
+    it commits it on the way out, which is worse than not detecting it at all.
+
+    Driven through all three composed entry points from one place on purpose. M4's verify
+    phase found this in `transcribe`, and it was in `activity` and `ingest` too, inherited
+    unchanged from M2: a test naming only the runner that milestone happened to add would
+    have found one of three (the lesson INV-08 already records about caches).
+    """
+
+    @staticmethod
+    def _rig(session_dir: Path) -> Path:
+        """`work -> raw/tx-a`, with a source file the cleanup would delete."""
+        if (session_dir / "work").exists():
+            shutil.rmtree(session_dir / "work")
+        (session_dir / "work").symlink_to(session_dir / "raw" / "tx-a")
+        victim = session_dir / "raw" / "tx-a" / "timeline.json"
+        victim.write_text("a real file that lives in a source directory", encoding="utf-8")
+        return victim
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            pytest.param(lambda d: run_ingest(d), id="ingest"),
+            pytest.param(lambda d: run_activity(d), id="activity"),
+            pytest.param(lambda d: run_transcribe(d, fake_models=True), id="transcribe"),
+        ],
+    )
+    def test_a_failed_run_deletes_nothing_under_raw(
+        self, canonical_fixture: FixtureTruth, command: Any
+    ) -> None:
+        session_dir = canonical_fixture.session_dir
+        victim = self._rig(session_dir)
+        before = victim.read_bytes()
+
+        result = command(session_dir)
+
+        assert result.exit_code is ExitCode.FATAL
+        assert result.report_written is False
+        assert victim.exists(), "the failure cleanup deleted a file under raw/ (INV-01)"
+        assert victim.read_bytes() == before

@@ -50,9 +50,51 @@ complete cache identity — dropped in behind the interface M4 already exercises
   real model forces a change there, that is a finding worth an ADR.
 - Any LLM prose cleanup pass.
 
+## What M4 already provides (read before starting)
+
+- **The seam is finished and exercised; one implementation behind it is not.** A
+  `TranscriberBundle` carries a `Transcriber` plus everything about it that reaches a cache
+  key and the report — model, both revisions, aligner, `variant_digest`. Build one and
+  `run_transcribe` works unchanged. `transcript/runner.py::_default_transcriber` is the
+  `DEFERRED: M6b` raise site to replace, and `--fake-models` keeps working afterwards, which
+  makes it the regression harness for the adapter's first run (ADR-0018).
+- **ASR consumes the cached 16 kHz derivative, not the 48 kHz path** (ADR-0017). Do not
+  resample: a second resampler under a cache key is the failure INV-04 names for time. Word
+  times come back on that grid and are converted once, by M2's helper.
+- **`TranscriptionResult.alignment_status` is stated, never inferred.** `aligned` requires
+  words and words require `aligned` — the seam enforces both. Only the adapter can tell
+  "the aligner ran and failed" (`segment_only`, warned about) from "no aligner ran"
+  (`not_attempted`), and the transcript records whichever it says.
+- **`TranscriptionResult.public_document` is the spec's lossless raw artifact.** M4 froze the
+  envelope and proved the preservation contract; **this milestone owes the other half** —
+  filling it from every public field of Qwen's `ASRTranscription`, tested against the real
+  object. A `None` there means "this result already is its public form", which is true of a
+  fake and must not be true of the adapter.
+- **The ASR cache key already carries the request's identity** alongside the audio hash, the
+  transcriber identity, the context hash, the language and `max_new_tokens` (ADR-0019). Add
+  the backend, dtype, attention implementation and resolved revisions to `TranscriberIdentity`
+  and they reach the key without a second place to disagree.
+- **The truncation machinery is reused unchanged and is budget-bounded, not depth-bounded**
+  (ADR-0020). What this milestone supplies is `truncated` on the result, from public backend
+  metadata or a retokenized-length heuristic — never a private finish-reason API.
+- **`transcript.json` and `work/transcript-records.json` are frozen at M4's close**: additive
+  optional fields only (ADR-0005).
+- **OQ-018 is yours to answer.** Padding for word recovery, timestamp stability across
+  overlapping requests, whether a low-energy split beats the midpoint, the retry budget, and
+  the text-similarity thresholds are all guesses about *this* model. The smoke test can settle
+  the first four directly.
+
+- **One collapse case is deferred to you, with its reproducing scores.** Three mutually
+  duplicate segments scoring A=800, B=700, C=900 in canonical order leave A and C both
+  retained, because a segment that has absorbed another may not itself be absorbed. It fails
+  safe — both kept, both marked overlapping — so M4 left it. Decide it with real output: if
+  three lavs never agree closely enough for the shape to occur, delete `collapse.py`'s claim
+  that the survivor is the best source score rather than writing the resolution pass. See
+  M4's closeout.
+
 ## Known risks and open questions
 
-- Depends on **OQ-008, OQ-009**.
+- Depends on **OQ-008, OQ-009, OQ-018**.
 - `qwen-asr` pins Transformers and pulls Accelerate, Gradio, Flask, and Python SoX.
   All of it stays inside the `asr-qwen` group.
 - If real Qwen output differs structurally from the fake, the fake was wrong.

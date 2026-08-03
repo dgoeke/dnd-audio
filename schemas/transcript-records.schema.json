@@ -1,0 +1,566 @@
+{
+  "$defs": {
+    "RejectedAlternative": {
+      "additionalProperties": false,
+      "description": "A segment collapsed into this one, and the evidence that condemned it.\n\nThe spec requires rejected alternatives to be recorded; recording only the id would make\nthe decision unauditable, which is the same argument ADR-0012 made for keeping the bleed\ngate's evidence per pair rather than summarized.",
+      "properties": {
+        "correlation_permille": {
+          "anyOf": [
+            {
+              "maximum": 1000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Correlation Permille"
+        },
+        "overlap_permille": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Overlap Permille",
+          "type": "integer"
+        },
+        "score_margin_permille": {
+          "maximum": 1000,
+          "minimum": -1000,
+          "title": "Score Margin Permille",
+          "type": "integer"
+        },
+        "segment_id": {
+          "pattern": "^seg_\\d{6,}$",
+          "title": "Segment Id",
+          "type": "string"
+        },
+        "speaker_id": {
+          "minLength": 1,
+          "title": "Speaker Id",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "text_similarity_permille": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Text Similarity Permille",
+          "type": "integer"
+        },
+        "track_id": {
+          "minLength": 1,
+          "title": "Track Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "segment_id",
+        "track_id",
+        "speaker_id",
+        "text",
+        "overlap_permille",
+        "text_similarity_permille",
+        "score_margin_permille"
+      ],
+      "title": "RejectedAlternative",
+      "type": "object"
+    },
+    "SegmentRecord": {
+      "additionalProperties": false,
+      "description": "One attributed utterance, normalized, with what was decided about it.",
+      "properties": {
+        "alignment_status": {
+          "enum": [
+            "aligned",
+            "segment_only",
+            "not_attempted"
+          ],
+          "title": "Alignment Status",
+          "type": "string"
+        },
+        "decision": {
+          "enum": [
+            "retained",
+            "duplicate"
+          ],
+          "title": "Decision",
+          "type": "string"
+        },
+        "duplicate_of_segment_id": {
+          "anyOf": [
+            {
+              "pattern": "^seg_\\d{6,}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duplicate Of Segment Id"
+        },
+        "end_sample": {
+          "exclusiveMinimum": 0,
+          "title": "End Sample",
+          "type": "integer"
+        },
+        "overlap": {
+          "default": false,
+          "title": "Overlap",
+          "type": "boolean"
+        },
+        "ownership_end_sample": {
+          "exclusiveMinimum": 0,
+          "title": "Ownership End Sample",
+          "type": "integer"
+        },
+        "ownership_start_sample": {
+          "minimum": 0,
+          "title": "Ownership Start Sample",
+          "type": "integer"
+        },
+        "rejected_alternatives": {
+          "items": {
+            "$ref": "#/$defs/RejectedAlternative"
+          },
+          "title": "Rejected Alternatives",
+          "type": "array"
+        },
+        "request_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Request Ids",
+          "type": "array"
+        },
+        "segment_id": {
+          "pattern": "^seg_\\d{6,}$",
+          "title": "Segment Id",
+          "type": "string"
+        },
+        "source_candidate_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Source Candidate Ids",
+          "type": "array"
+        },
+        "speaker_id": {
+          "minLength": 1,
+          "title": "Speaker Id",
+          "type": "string"
+        },
+        "speaker_name": {
+          "minLength": 1,
+          "title": "Speaker Name",
+          "type": "string"
+        },
+        "start_sample": {
+          "minimum": 0,
+          "title": "Start Sample",
+          "type": "integer"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "track_id": {
+          "minLength": 1,
+          "title": "Track Id",
+          "type": "string"
+        },
+        "truncation_submissions": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Truncation Submissions",
+          "type": "integer"
+        },
+        "words": {
+          "items": {
+            "$ref": "#/$defs/WordRecord"
+          },
+          "title": "Words",
+          "type": "array"
+        }
+      },
+      "required": [
+        "segment_id",
+        "track_id",
+        "speaker_id",
+        "speaker_name",
+        "start_sample",
+        "end_sample",
+        "ownership_start_sample",
+        "ownership_end_sample",
+        "text",
+        "alignment_status",
+        "decision",
+        "source_candidate_ids",
+        "request_ids"
+      ],
+      "title": "SegmentRecord",
+      "type": "object"
+    },
+    "TranscriberIdentity": {
+      "additionalProperties": false,
+      "description": "Everything that decides what the transcriber would answer (INV-08).\n\nA fake carries a ``variant_digest`` over its whole script and no model, the same shape\n`DetectorIdentity` uses: two scripted transcribers with different scripts are different\ntranscribers, and a cache that could not tell them apart would serve one test's answers\nto another.",
+      "properties": {
+        "aligner": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Aligner"
+        },
+        "aligner_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Aligner Revision"
+        },
+        "context_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context Sha256"
+        },
+        "language": {
+          "minLength": 1,
+          "title": "Language",
+          "type": "string"
+        },
+        "max_new_tokens": {
+          "exclusiveMinimum": 0,
+          "title": "Max New Tokens",
+          "type": "integer"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        },
+        "model_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Revision"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "variant_digest": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Variant Digest"
+        }
+      },
+      "required": [
+        "name",
+        "max_new_tokens",
+        "language"
+      ],
+      "title": "TranscriberIdentity",
+      "type": "object"
+    },
+    "TranscriptDecision": {
+      "additionalProperties": false,
+      "description": "A transcript choice worth auditing. Deterministic: no counters, no timings.",
+      "properties": {
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "detail": {
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "subject": {
+          "minLength": 1,
+          "title": "Subject",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "subject",
+        "detail"
+      ],
+      "title": "TranscriptDecision",
+      "type": "object"
+    },
+    "TranscriptNote": {
+      "additionalProperties": false,
+      "description": "A warning: worth a human's attention, did not stop the run.",
+      "properties": {
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "TranscriptNote",
+      "type": "object"
+    },
+    "TranscriptRecordsProvenance": {
+      "additionalProperties": false,
+      "description": "What produced these records. Deterministic, and no wall clock (INV-03).",
+      "properties": {
+        "activity_semantics_version": {
+          "minimum": 1,
+          "title": "Activity Semantics Version",
+          "type": "integer"
+        },
+        "inspection_semantics_version": {
+          "minimum": 1,
+          "title": "Inspection Semantics Version",
+          "type": "integer"
+        },
+        "numpy_version": {
+          "minLength": 1,
+          "title": "Numpy Version",
+          "type": "string"
+        },
+        "timeline_semantics_version": {
+          "minimum": 1,
+          "title": "Timeline Semantics Version",
+          "type": "integer"
+        },
+        "transcriber": {
+          "$ref": "#/$defs/TranscriberIdentity"
+        },
+        "transcript_semantics_version": {
+          "minimum": 1,
+          "title": "Transcript Semantics Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "transcript_semantics_version",
+        "activity_semantics_version",
+        "timeline_semantics_version",
+        "inspection_semantics_version",
+        "numpy_version",
+        "transcriber"
+      ],
+      "title": "TranscriptRecordsProvenance",
+      "type": "object"
+    },
+    "TranscriptSpeaker": {
+      "additionalProperties": false,
+      "description": "A participant, and the transmitter that captured them.",
+      "properties": {
+        "speaker_id": {
+          "title": "Speaker Id",
+          "type": "string"
+        },
+        "speaker_name": {
+          "title": "Speaker Name",
+          "type": "string"
+        },
+        "track_id": {
+          "title": "Track Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "speaker_id",
+        "speaker_name",
+        "track_id"
+      ],
+      "title": "TranscriptSpeaker",
+      "type": "object"
+    },
+    "WordRecord": {
+      "additionalProperties": false,
+      "description": "One word, in canonical 48 kHz session samples, half-open.",
+      "properties": {
+        "end_sample": {
+          "exclusiveMinimum": 0,
+          "title": "End Sample",
+          "type": "integer"
+        },
+        "start_sample": {
+          "minimum": 0,
+          "title": "Start Sample",
+          "type": "integer"
+        },
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start_sample",
+        "end_sample",
+        "text"
+      ],
+      "title": "WordRecord",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Every normalized segment of one session, at `work/transcript-records.json`.",
+  "properties": {
+    "activity_cache_key": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Activity Cache Key",
+      "type": "string"
+    },
+    "config_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Config Hash",
+      "type": "string"
+    },
+    "decisions": {
+      "items": {
+        "$ref": "#/$defs/TranscriptDecision"
+      },
+      "title": "Decisions",
+      "type": "array"
+    },
+    "duration_samples": {
+      "minimum": 0,
+      "title": "Duration Samples",
+      "type": "integer"
+    },
+    "language": {
+      "minLength": 1,
+      "title": "Language",
+      "type": "string"
+    },
+    "provenance": {
+      "$ref": "#/$defs/TranscriptRecordsProvenance"
+    },
+    "sample_rate": {
+      "exclusiveMinimum": 0,
+      "title": "Sample Rate",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "segments": {
+      "items": {
+        "$ref": "#/$defs/SegmentRecord"
+      },
+      "title": "Segments",
+      "type": "array"
+    },
+    "session_id": {
+      "minLength": 1,
+      "title": "Session Id",
+      "type": "string"
+    },
+    "speakers": {
+      "items": {
+        "$ref": "#/$defs/TranscriptSpeaker"
+      },
+      "title": "Speakers",
+      "type": "array"
+    },
+    "timeline_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Timeline Sha256",
+      "type": "string"
+    },
+    "title": {
+      "minLength": 1,
+      "title": "Title",
+      "type": "string"
+    },
+    "warnings": {
+      "items": {
+        "$ref": "#/$defs/TranscriptNote"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "session_id",
+    "title",
+    "language",
+    "config_hash",
+    "timeline_sha256",
+    "activity_cache_key",
+    "sample_rate",
+    "duration_samples",
+    "provenance"
+  ],
+  "title": "TranscriptRecords",
+  "type": "object"
+}

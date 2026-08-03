@@ -207,7 +207,6 @@ def run_ingest(
         # Every failure, not only the ones raised on purpose: an operator whose run died
         # on an OSError needs a report more than anyone, and a traceback with no report is
         # the worst of both.
-        _remove_stale(timeline_path)
         error = StructuredError(code=_code_of(exc), message=str(exc) or type(exc).__name__)
         # A failure before or during inspection leaves that stage unrecorded, and
         # `build()` refuses a report with a gap in it — so without this, the earliest
@@ -220,6 +219,11 @@ def run_ingest(
             # INV-01 outranks INV-13 here: writing the failure report would commit the
             # very violation being reported. A report is regenerable; a source directory
             # written into is not.
+            #
+            # Returned **before** `_remove_stale` below, and that ordering is the invariant
+            # rather than a detail: `work -> raw/tx-a` makes `timeline.json` resolve inside a
+            # source directory, so unlinking it is itself a write into `raw/` (M4's verify
+            # phase found this here, in `activity`, and in `transcribe` at once).
             return IngestResult(
                 timeline=None,
                 timeline_path=timeline_path,
@@ -228,6 +232,7 @@ def run_ingest(
                 report_written=False,
                 exit_code=ExitCode.FATAL,
             )
+        _remove_stale(timeline_path)
         report = builder.write(report_path, finished)
         return IngestResult(
             timeline=None,

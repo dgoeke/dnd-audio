@@ -20,7 +20,7 @@ writes before its last read, which nothing that buffers a session can satisfy.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from types import TracebackType
 from typing import Final, Self
@@ -31,7 +31,7 @@ import numpy.typing as npt
 from dnd_audio.artifacts.timeline import TimelineSegment, TimelineTrack
 from dnd_audio.timeline.pcm import PcmReader, open_pcm
 
-__all__ = ["DEFAULT_WINDOW_SAMPLES", "TrackReader"]
+__all__ = ["DEFAULT_WINDOW_SAMPLES", "DerivativeReader", "TrackReader"]
 
 #: One second at 48 kHz. Small enough that six open tracks cost megabytes rather than
 #: gigabytes, large enough that per-window overhead is irrelevant against the read itself.
@@ -137,3 +137,59 @@ class TrackReader:
             reader.__enter__()
             self._open[path] = reader
         return reader
+
+
+class DerivativeReader:
+    """Bounded reads of every track's cached 16 kHz derivative, one open handle per track.
+
+    The grid the detector decided on (M3) and the grid ASR consumes (M4, ADR-0017), so both
+    stages read it the same way and neither has its own copy of "find this track's derivative
+    and open it". A context manager because both step over the same tracks repeatedly:
+    reopening per read would be a syscall per comparison for no benefit, and leaking handles
+    across six tracks and hundreds of candidates is its own failure.
+
+    A track with no derivative is simply absent, and asking for one raises — that a track has
+    16 kHz audio at all is a fact the caller established when it decided the track was usable.
+    """
+
+    def __init__(self, session_dir: Path, track_paths: Mapping[str, str]) -> None:
+        self._session_dir = session_dir
+        self._paths = dict(track_paths)
+        self._open: dict[str, PcmReader] = {}
+
+    @property
+    def track_ids(self) -> frozenset[str]:
+        return frozenset(self._paths)
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.close()
+
+    def close(self) -> None:
+        for reader in self._open.values():
+            reader.close()
+        self._open.clear()
+
+    def read(self, track_id: str, start: int, n_samples: int) -> npt.NDArray[np.float32]:
+        """``[start, start + n)`` of one track's derivative, clamped to what exists.
+
+        Clamped rather than trusted: the intervals handed here are already bounded by the
+        session duration, so a read past the end means an assumption broke, and returning
+        silence for the tail is a better failure than a traceback in the middle of a stage.
+        """
+        reader = self._open.get(track_id)
+        if reader is None:
+            reader = PcmReader(open_pcm(self._session_dir / self._paths[track_id]))
+            reader.__enter__()
+            self._open[track_id] = reader
+        available = max(0, min(n_samples, reader.source.n_samples - start))
+        if available <= 0:
+            return np.zeros(0, dtype=np.float32)
+        return reader.read(start, available)

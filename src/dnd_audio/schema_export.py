@@ -25,6 +25,7 @@ from pydantic import BaseModel
 
 from dnd_audio.artifacts.activity import ActivityGraph
 from dnd_audio.artifacts.manifest import Manifest
+from dnd_audio.artifacts.records import TranscriptRecords
 from dnd_audio.artifacts.report import IngestReport
 from dnd_audio.artifacts.timeline import Timeline
 from dnd_audio.artifacts.transcript import Transcript
@@ -49,6 +50,7 @@ def schema_documents() -> dict[str, str]:
         "timeline.schema.json": _document(Timeline, mode="serialization"),
         "activity.schema.json": _document(ActivityGraph, mode="serialization"),
         "transcript.schema.json": _document(Transcript, mode="serialization"),
+        "transcript-records.schema.json": _document(TranscriptRecords, mode="serialization"),
         "ingest-report.schema.json": _document(IngestReport, mode="serialization"),
     }
 

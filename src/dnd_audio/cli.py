@@ -36,6 +36,12 @@ from dnd_audio.errors import DndAudioError, ExitCode
 from dnd_audio.inspection.runner import InspectionResult, run_inspect
 from dnd_audio.models import SILERO_VAD, fetch, find_model, lock_path
 from dnd_audio.timeline.runner import IngestResult, run_ingest
+from dnd_audio.transcript.runner import (
+    RenderResult,
+    TranscribeResult,
+    run_render,
+    run_transcribe,
+)
 
 __all__ = ["app", "main"]
 
@@ -164,10 +170,38 @@ def activity(
 
 
 @app.command()
-def transcribe(session_dir: SessionDir) -> None:
-    """Run activity attribution and ASR; write normalized transcript records."""
-    # DEFERRED: M4
-    raise NotImplementedError(f"`transcribe` lands in M4 ({session_dir})")
+def transcribe(
+    session_dir: SessionDir,
+    no_cache: Annotated[
+        bool,
+        typer.Option(
+            "--no-cache",
+            help="Re-run everything, ignoring cached work. Every cache is still written, so "
+            "this costs one slow run rather than every run.",
+        ),
+    ] = False,
+    fake_models: Annotated[
+        bool,
+        typer.Option(
+            "--fake-models",
+            help="Drive speech detection and transcription from this session's declared "
+            "fake-models.json instead of from models. For synthetic fixtures: the real ASR "
+            "adapter lands in M6b. The transcript records and the report both say so.",
+        ),
+    ] = False,
+) -> None:
+    """Run activity attribution and ASR; write the records and both transcript files.
+
+    The whole transcript branch: inspection, the timeline, activity, ASR, and the render.
+    It reconstructs and re-attributes every time, for the reason `ingest` re-inspects every
+    time — an artifact on disk is not evidence that it still describes what is beside it.
+
+    Always writes `output/ingest-report.json`, including when it fails (INV-13).
+    """
+    result = run_transcribe(session_dir, use_cache=not no_cache, fake_models=fake_models)
+    _summarize_transcribe(result)
+    if result.exit_code is not ExitCode.OK:
+        raise typer.Exit(code=result.exit_code)
 
 
 @app.command()
@@ -179,9 +213,17 @@ def mix(session_dir: SessionDir) -> None:
 
 @app.command()
 def render(session_dir: SessionDir) -> None:
-    """Regenerate transcript.json and transcript.md from cached records."""
-    # DEFERRED: M4
-    raise NotImplementedError(f"`render` lands in M4 ({session_dir})")
+    """Regenerate transcript.json and transcript.md from cached records.
+
+    Reads `work/transcript-records.json` and nothing else: no model, no activity graph, no
+    timeline, no mixer. Absent records are a clear failure rather than an empty transcript.
+
+    Always writes `output/ingest-report.json`, including when it fails (INV-13).
+    """
+    result = run_render(session_dir)
+    _summarize_render(result)
+    if result.exit_code is not ExitCode.OK:
+        raise typer.Exit(code=result.exit_code)
 
 
 @models_app.command("fetch")
@@ -356,6 +398,61 @@ def _summarize_activity(result: ActivityResult) -> None:
         typer.secho(
             f"  no report written: {result.report_path} would land inside the session's "
             f"own sources, and nothing under them may be written to (INV-01)",
+            fg=typer.colors.RED,
+            err=True,
+        )
+
+
+def _summarize_transcribe(result: TranscribeResult) -> None:
+    """Human-readable progress for `transcribe`. The records and the report hold everything."""
+    records = result.records
+    if records is not None:
+        retained = records.retained()
+        collapsed = [s for s in records.segments if s.decision == "duplicate"]
+        overlapping = [s for s in retained if s.overlap]
+        speakers = {segment.speaker_id for segment in retained}
+        typer.echo(
+            f"  {len(retained)} segment(s) across {len(speakers)} speaker(s), "
+            f"{len(collapsed)} collapsed as duplicates, {len(overlapping)} marked as overlap"
+        )
+        for note in records.warnings:
+            typer.secho(f"  warn  {note.code}: {note.message}", fg=typer.colors.YELLOW, err=True)
+        typer.echo(f"  records    {result.records_path}")
+        typer.echo(f"  transcript {result.transcript_path}")
+        typer.echo(f"  markdown   {result.markdown_path}")
+    else:
+        for stage in result.report.stages:
+            for error in stage.errors:
+                typer.secho(
+                    f"  error  {error.code}: {error.message}", fg=typer.colors.RED, err=True
+                )
+    _report_line(result.report_written, result.report_path)
+
+
+def _summarize_render(result: RenderResult) -> None:
+    """Human-readable progress for `render`."""
+    records = result.records
+    if records is not None:
+        typer.echo(f"  rendered {len(records.retained())} segment(s) from cached records")
+        typer.echo(f"  transcript {result.transcript_path}")
+        typer.echo(f"  markdown   {result.markdown_path}")
+    else:
+        for stage in result.report.stages:
+            for error in stage.errors:
+                typer.secho(
+                    f"  error  {error.code}: {error.message}", fg=typer.colors.RED, err=True
+                )
+    _report_line(result.report_written, result.report_path)
+
+
+def _report_line(written: bool, path: Path) -> None:
+    """Where the report went, or why it deliberately did not (INV-01 outranks INV-13)."""
+    if written:
+        typer.echo(f"  report     {path}")
+    else:
+        typer.secho(
+            f"  no report written: {path} would land inside the session's own sources, and "
+            f"nothing under them may be written to (INV-01)",
             fg=typer.colors.RED,
             err=True,
         )

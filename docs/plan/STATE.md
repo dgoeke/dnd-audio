@@ -7,11 +7,11 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 
 ## Right now
 
-- **Current milestone:** M4 — Fake transcript (not started)
-- **Branch:** `main` (M3 merged)
-- **Last closed milestone:** M3 — Activity
-- **Gate status at HEAD:** passes, zero skips (8 checks, 1503 tests)
-- **Blocked on:** nothing for M4. **H1 is still the oldest outstanding item in the
+- **Current milestone:** M5 — Automix (not started)
+- **Branch:** `main` (M4 merged)
+- **Last closed milestone:** M4 — Fake transcript
+- **Gate status at HEAD:** passes, zero skips (8 checks, 1768 tests)
+- **Blocked on:** nothing for M5. **H1 is still the oldest outstanding item in the
   project** and now gates six open questions (OQ-001, OQ-002, OQ-003, OQ-004, OQ-007,
   OQ-015). It needs a physical recording session, not code. Every DJI layout assumption
   M1 and M2 made sits behind a named strategy or a cited constant tagged with its `OQ-`
@@ -25,6 +25,14 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
   reading one session's graph rather than running an experiment. Nothing is blocked on it:
   the thresholds work on synthetic audio and the gate is conservative by construction.
 
+  M4 added a third, and it is M6b's rather than a room's. **OQ-018** — what Qwen3-ASR and its
+  aligner need at a request boundary — covers padding, timestamp stability across two
+  overlapping requests, whether a low-energy split beats the midpoint, the retry budget, and
+  the text-similarity thresholds. M6b's smoke test settles the first three directly; the last
+  needs a real session, or one utterance genuinely heard on two transmitters. Nothing is
+  blocked: M4 is correct under whatever the configured values are, and only the *defaults*
+  are guesses. `rg 'OQ-018'` finds all twelve sites at once.
+
 ## Milestone status
 
 | ID  | Milestone                  | Status      | Closed at |
@@ -33,7 +41,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | M1  | Inspection                 | closed      | `fd16931` |
 | M2  | Timeline                   | closed      | `f33ad6d` |
 | M3  | Activity                   | closed      | `38bc989` |
-| M4  | Fake transcript            | not started | —         |
+| M4  | Fake transcript            | closed      | `8556f43` |
 | M5  | Automix                    | not started | —         |
 | M6a | ROCm environment           | not started | —         |
 | M6b | Qwen adapter               | not started | —         |
@@ -41,11 +49,43 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | H2  | Drift soak / first session | not started | —         |
 | M7  | Archival (sketch)          | sketch      | —         |
 
+**Closed at** is the milestone's close commit, and it is recorded by a small follow-up
+commit — a commit cannot contain its own hash (the same limit ADR-0003 names for the report).
+M0–M3 each wrote theirs by amending instead, so those four SHAs are the pre-amend close commit
+and do not resolve in a fresh clone. Left as they are rather than rewritten history; from M4
+on the column is reachable.
+
 Status values: `not started` → `in progress` → `verified` → `closed`.
 `blocked` is also valid; say what on. `sketch` means a charter exists to hold the
 idea but the work is deliberately unplanned.
 
 ## What works end to end
+
+`uv run dnd-audio transcribe /path/to/session --fake-models` — the whole left branch of the
+spec's stage DAG: inspection, the timeline, who was speaking, what they said, and both
+transcript deliverables.
+
+It does everything `activity` does, then plans ASR requests from the graph's **retained**
+candidates only — merging adjacent regions, padding each core, and capping the *padded*
+waveform at `max_segment_s` — submits one window at a time (INV-07), resolves a truncated
+response by splitting the unpadded core at its quietest interior frame within a global
+submission budget, assigns each word to the ownership interval containing its start, collapses
+duplicates on overlap **and** similar text **and** the graph's own acoustic evidence, verifies
+INV-01 a second time, commits the ASR cache, and writes `work/transcript-records.json`,
+`output/transcript.json`, `output/transcript.md` and one report covering five stages.
+
+On the canonical fixture: 4 segments across 4 speakers, 0 collapsed, 2 marked as overlap, all
+three deterministic artifacts byte-identical on rerun, 29 ASR cache hits and 0 misses warm.
+Alice's line bleeds into four tracks and the scripted ASR is told to transcribe it there;
+every copy is gone before a word is submitted, because M3's gate suppressed the candidate.
+
+`uv run dnd-audio render /path/to/session` regenerates both deliverables from the records
+alone — proved by deleting the graph, the timeline and the whole cache tree first, with a spy
+asserting no model is constructed. Absent records exit nonzero naming
+`transcript_records_missing`, and still write a report.
+
+Without `--fake-models`, `transcribe` raises the `DEFERRED: M6b` `NotImplementedError` naming
+the missing adapter rather than writing a report that says the session is broken (ADR-0005).
 
 `uv run dnd-audio activity /path/to/session` — inspection, the timeline, then who was
 speaking.
@@ -101,18 +141,21 @@ writer that cannot lose a stage, and a test suite that is provably offline.
 
 ## Next smallest step
 
-Begin M4 — the transcript branch end to end on fake ASR, with no Qwen, no GPU, and no
-weights. Start with segment-request construction from retained activity candidates, because
-it is the part the rest of the milestone hangs off and the part the frozen graph most
-directly constrains. (Claude Code: `/ms-start 4`.)
+Begin M5 — Automix. It depends on M3 only, never on M4: the mix must produce identical samples
+whether or not ASR ran, and the graph M4 consumed is unchanged by anything M4 decided. Start
+with the gain envelopes, because the envelope-level assertions are the real gate and the
+loudness work is meaningless without them — a mix that picks the wrong speaker passes every
+loudness test there is. (Claude Code: `/ms-start 5`.)
 
-Read M4's new "What M3 already provides" section first. Two things there will otherwise cost
-real time: `ambiguous` does **not** mean "uncertain detection" — it means the numbers said
-bleed and the veto overrode them, which makes those candidates the ones duplicate collapse
-should look hardest at — and `test_activity_artifact.py::TestTheConsumerReads` is a worked
-example of M4's own access pattern, written before M4 existed.
+Read M5's new "What M4 already provides" section first. It is not about data; it is three
+runner patterns and one obligation. The obligation:
+`tests/test_raw_guard.py::TestCleanupNeverWritesIntoRaw` needs a `mix` parameter the moment
+`run_mix` exists, and the reason it is parametrized over every composed command is that M2, M3
+and M4 each tested only the runner that milestone added, and all three carried the same INV-01
+bug for five milestones.
 
 **Real DJI metadata has still not been validated.** Acquiring the H1 fixture is the oldest
-outstanding item in the project; M2 added OQ-015 to what it must settle. M3 added **OQ-017**,
-which H1 cannot answer — a two-minute metadata fixture cannot tune a bleed threshold, so that
-one waits for H2 or a first real session.
+outstanding item in the project. M2 added OQ-015 to what it must settle; M3 added **OQ-017**
+and M4 added **OQ-018**, neither of which H1 can answer — a two-minute metadata fixture cannot
+tune a bleed threshold or a text-similarity threshold. OQ-017 waits for H2 or a first real
+session; OQ-018's first three parts are M6b's smoke test.

@@ -15,17 +15,19 @@ never be expected to trigger a particular learned Silero release.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 
 from dnd_audio.artifacts.activity import DetectorIdentity
 from dnd_audio.determinism import canonical_json, sha256_bytes
 from dnd_audio.interfaces import (
     AudioWindow,
     SpeechSpan,
+    TranscribedWord,
     TranscriptionRequest,
     TranscriptionResult,
 )
 
-__all__ = ["ScriptedActivityDetector", "ScriptedTranscriber"]
+__all__ = ["ScriptedActivityDetector", "ScriptedTranscriber", "SessionScriptTranscriber"]
 
 
 class ScriptedTranscriber:
@@ -53,6 +55,68 @@ class ScriptedTranscriber:
             known = ", ".join(sorted(self._responses)) or "(none)"
             message = f"no scripted response for request {request.request_id!r}; scripted: {known}"
             raise KeyError(message) from None
+
+
+@dataclass(frozen=True, slots=True)
+class ScriptedUtterance:
+    """One thing a session's declared script says a track can be heard saying.
+
+    Positions are on the canonical 48 kHz session grid, because that is what the fixture
+    declared; the transcriber converts them to whatever grid the request it is answering is on.
+    """
+
+    track_id: str
+    start_sample: int
+    end_sample: int
+    text: str
+    words: tuple[tuple[int, int, str], ...] = ()
+
+
+class SessionScriptTranscriber:
+    """A :class:`~dnd_audio.interfaces.Transcriber` driven by a session's declared script.
+
+    Still scripted, and still not derived from audio: it answers a request with the utterances
+    the *fixture* declared for that track over that window, not with anything it heard. What it
+    adds over :class:`ScriptedTranscriber` is that it can be asked about a request whose id
+    nobody knew in advance, which is what a whole-session run needs (ADR-0018).
+
+    It returns everything overlapping the **padded** window, exactly as a real model would —
+    the model has no idea which part of what it heard the pipeline owns. Dropping the words
+    outside the ownership interval is the pipeline's job, and handing this fake a
+    pre-trimmed answer would quietly stop testing that.
+    """
+
+    def __init__(self, utterances: Sequence[ScriptedUtterance], *, sample_rate: int) -> None:
+        self._utterances = tuple(utterances)
+        self._sample_rate = sample_rate
+        self.requests: list[TranscriptionRequest] = []
+
+    def transcribe(self, request: TranscriptionRequest) -> TranscriptionResult:
+        self.requests.append(request)
+        scale = self._sample_rate // request.audio.sample_rate
+        found = [
+            utterance
+            for utterance in self._utterances
+            if utterance.track_id == request.audio.track_id
+            and utterance.start_sample // scale < request.audio.end_sample
+            and -(-utterance.end_sample // scale) > request.audio.start_sample
+        ]
+        words = tuple(
+            TranscribedWord(
+                start_sample=start // scale,
+                end_sample=max(-(-end // scale), start // scale + 1),
+                text=text,
+            )
+            for utterance in found
+            for start, end, text in utterance.words
+        )
+        return TranscriptionResult(
+            request_id=request.request_id,
+            text=" ".join(utterance.text for utterance in found),
+            words=words,
+            language=request.language,
+            alignment_status="aligned" if words else "not_attempted",
+        )
 
 
 class ScriptedActivityDetector:

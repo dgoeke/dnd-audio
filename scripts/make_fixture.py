@@ -37,10 +37,14 @@ def main(argv: list[str]) -> int:
 
     print(f"wrote {len(tracks)} tracks, {len(truth.chunks)} chunks, {total / 1e6:.1f} MB")
     print(f"  session.yaml   {directory / 'session.yaml'}")
+    print(f"  fake models    {directory / 'fake-models.json'}")
     print(f"  session zero   {truth.session_zero_since_midnight} samples since midnight")
     for track_id, start, end in truth.gaps():
         print(f"  gap            {track_id}: samples {start}-{end}")
     print(f"\n  uv run dnd-audio inspect {directory}")
+    # The transcript branch needs something behind the ASR seam and the real adapter lands
+    # in M6b, so the fixture's own declared script stands in for it (ADR-0018).
+    print(f"  uv run dnd-audio transcribe --fake-models {directory}")
     return 0
 
 

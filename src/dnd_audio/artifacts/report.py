@@ -413,6 +413,18 @@ class ReportBuilder:
         """
         return stage in self._stages
 
+    def completed(self, stage: StageName) -> bool:
+        """Whether this stage finished successfully.
+
+        Stronger than :meth:`recorded`, and the distinction is load-bearing for a run that
+        fails partway through a composed pipeline: an artifact belonging to a stage that
+        genuinely completed has already been hashed as a deliverable, so deleting it during
+        failure cleanup would leave the report advertising the hash of a file that is gone
+        (INV-13, M4's verify phase).
+        """
+        recorded = self._stages.get(stage)
+        return recorded is not None and recorded.status is StageStatus.COMPLETE
+
     def stage_skipped(self, stage: StageName, reason: str) -> None:
         self._record(StageReport(stage=stage, status=StageStatus.SKIPPED, skip_reason=reason))
 

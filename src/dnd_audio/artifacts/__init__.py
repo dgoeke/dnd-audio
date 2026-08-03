@@ -7,7 +7,8 @@ round-trip proves only that pydantic agrees with itself.
 
 **Schema versions are provisional until the milestone that owns the artifact closes.**
 ``manifest.json`` is M1's, ``timeline.json`` is M2's, ``activity.json`` is M3's,
-``transcript.json`` is M4's, and ``ingest-report.json`` accretes across every milestone.
+``transcript.json`` and ``transcript-records.json`` are M4's, and ``ingest-report.json``
+accretes across every milestone.
 Before its owner closes, a milestone may change version 1 freely; after, only optional
 additive fields, and anything else bumps the version. M0 checks in skeletons so the drift
 rail exists from the start, not because their shapes are settled.

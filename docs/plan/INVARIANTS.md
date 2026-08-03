@@ -22,9 +22,18 @@ is not. The session's own generated directories are excluded from the snapshot *
 session root only**: excluding any path component named `work` or `output` anywhere in the
 tree left `raw/tx-a/work/notes.txt` unhashed and therefore freely mutable, which M2's
 verify phase found in code inherited from M1.
+**Failure cleanup runs after the carve-out, never before it** (ADR-0021). Every composed
+runner deletes the artifacts a failed run may have left, so a stale file cannot sit beside a
+report calling its stage failed. When an output path resolves inside a source directory, those
+unlinks *are* the violation: `work -> raw/tx-a` makes `work/timeline.json` resolve to
+`raw/tx-a/timeline.json`. `ingest`, `activity` and `transcribe` all cleaned up first and
+checked second, so the run that correctly detected the violation committed it on the way out —
+found in all three at once by M4's verify phase, five months of milestones after the check
+itself was written and tested.
 _Owner: M1, extracted to `raw_guard.py` in M2 so each stage declares its own protected
 outputs. Test: full-run hash equality, plus a run that corrupts a source mid-flight to
-prove the check can fail, plus a source under a directory named `work`._
+prove the check can fail, plus a source under a directory named `work`, plus
+`TestCleanupNeverWritesIntoRaw` over every composed command._
 _Future exception (M7): the owner may delete raw files manually after verified
 archival. That happens outside a pipeline run, by explicit human action. No
 pipeline stage ever deletes from `raw/`. Amend this wording when M7 is planned._
@@ -103,8 +112,17 @@ correct from the outside when the caller commits again afterwards — `_inspect`
 docstring promising it returned the cache uncommitted and published it three lines below,
 which survived M2 and was caught only when M3 composed inspection into a longer run. The
 regression test could not have seen it: it asserted over the one cache that milestone had
-added. **Assert that a failed run leaves no sidecar anywhere under `work/cache`**, by glob
-rather than by naming the caches you know about (M3's verify phase).
+added. **Assert by glob rather than by naming the caches you know about** (M3's verify phase).
+
+**Scoped to a commit point, not to a run** (ADR-0021). A composed run may commit more than
+once — M4's `transcribe` commits the activity caches after the first verification and the ASR
+cache after the second, so that an ASR failure, which reads no source audio, does not discard
+six tracks of verified inference. A failure then leaves no sidecar for any cache **downstream
+of the last successful commit point**, which is the region to glob. Caches committed after a
+verification that did happen were built from bytes that run confirmed; the hazard this rule
+exists to prevent is an entry keyed on bytes nobody checked, and an earlier commit point does
+not create one. Say which region a test globs, because a name promising "anywhere" over a body
+checking one directory is worse than no test (M4's verify phase).
 _Owner: M1 (inspection), M2 (derivatives), M3 (detection and attribution), M6b (ASR)._
 
 **INV-09 — The mix never depends on ASR.**
