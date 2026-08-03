@@ -673,6 +673,12 @@ Implement a smooth speech-aware automixer:
 - Apply final two-pass loudness normalization toward `-16 LUFS` integrated by
   default. The configured `-1.5 dBTP` true-peak ceiling applies to the decoded final
   MP3 deliverable, not merely the lossless pre-encode intermediate.
+- **The ceiling outranks the target.** Loudness and peak can be mutually unreachable —
+  high-crest-factor material cannot be lifted to `-16 LUFS` without clipping, and a
+  session nobody spoke in should not be amplified toward it at all. Where they
+  conflict, honour the ceiling, encode without loudness normalization, and record a
+  warning naming which guard fired. A run that deliberately did not aim at the target
+  is not then failed for missing it. See ADR-0023 (M5).
 - Encode a 128 kbps mono MP3 with metadata containing the session ID/title, decode it,
   and measure integrated loudness and true peak. Because lossy encoding can introduce
   peak overshoot, reduce the pre-encode gain or true-peak target and re-encode from
@@ -834,7 +840,10 @@ At minimum, automate these checks:
 8. The MP3 exists, decodes successfully, is mono, is within one MP3 frame (or another
    documented codec-appropriate tolerance) of the expected duration, is within 1 LU
    of the configured integrated loudness target, and does not exceed the true-peak
-   target beyond a documented measurement tolerance.
+   target beyond a documented measurement tolerance. The loudness clause applies to a
+   run that aimed at the target; where the ceiling, the master-gain clamp, or the
+   silence floor forbade aiming at it, the run instead carries the warning naming that
+   guard, and the duration and true-peak clauses still apply unchanged (ADR-0023).
 9. Re-running unchanged input uses caches and produces byte-stable manifest,
    transcript JSON, and Markdown. Do not require byte-stable per-run telemetry.
 10. Raw source hashes are unchanged before and after a complete run.

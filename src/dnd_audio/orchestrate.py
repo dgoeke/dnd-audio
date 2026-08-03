@@ -393,9 +393,22 @@ def _failed(
     completed = [
         stage for stage in (StageName.RECONSTRUCT, StageName.ACTIVITY) if builder.completed(stage)
     ]
+
+    # A branch that already diagnosed its own failure keeps that diagnosis. ADR-0024 says so
+    # in as many words — "it does not replace whichever error the branch already reported" —
+    # and the first implementation stamped the outer exception over every unrecorded stage, so
+    # an ASR crash concurrent with unrelated source tampering was reported as tampering. Found
+    # by M5's independent review.
+    owned: dict[StageName, StructuredError] = {}
+    if state.mix_error is not None:
+        owned[StageName.MIX] = state.mix_error
+    if state.transcript_error is not None:
+        owned[StageName.TRANSCRIBE] = state.transcript_error
+        owned[StageName.RENDER] = state.transcript_error
+
     for stage in StageName:
         if not builder.recorded(stage):
-            builder.stage_failed(stage, [error])
+            builder.stage_failed(stage, [owned.get(stage, error)])
 
     finished = dt.datetime.now(dt.UTC) if now is None else now
     if isinstance(exc, DiscoveryError) and exc.code == "output_inside_raw":

@@ -59,9 +59,27 @@ MP3_FRAME_SAMPLES: Final = 1152
 
 
 class EncodeError(DndAudioError):
-    """The MP3 could not be produced, or could not be shown to meet its targets."""
+    """The MP3 could not be produced, or could not be shown to meet its targets.
+
+    Carries whatever the loop managed to measure. The spec asks for **all measurements
+    retained in the report**, and the interesting run is the one that failed — so the caller
+    records `attempts` and `commands` before re-raising rather than leaving the report with a
+    single error string and nothing to audit.
+    """
 
     default_code = "mp3_encode_failed"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str | None = None,
+        attempts: tuple[EncodeAttempt, ...] = (),
+        commands: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(message, code=code)
+        self.attempts = attempts
+        self.commands = commands
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +123,12 @@ class EncodeResult:
     attempts: tuple[EncodeAttempt, ...]
     warnings: tuple[MixNote, ...] = ()
     commands: tuple[str, ...] = field(default_factory=tuple)
+    #: Whether this run aimed at the configured loudness target at all.
+    #:
+    #: False when one of ADR-0023's three guards fired, and then the decoded loudness was
+    #: **not** compared against the target. The report says so rather than claiming a
+    #: compliance nothing checked; `warnings` names which guard it was.
+    normalized: bool = True
 
     @property
     def accepted(self) -> EncodeAttempt:
@@ -226,6 +250,7 @@ def encode_mp3(
                 attempts=tuple(attempts),
                 warnings=tuple(warnings),
                 commands=tuple(commands),
+                normalized=normalized,
             )
 
         reduction = _reduction(decoded, ceiling_mb=ceiling_mb, failures=failures)
@@ -233,7 +258,12 @@ def encode_mp3(
             break
         gain_mb -= reduction
 
-    raise EncodeError(_exhausted(attempts, encode.max_retries), code="mp3_not_compliant")
+    raise EncodeError(
+        _exhausted(attempts, encode.max_retries),
+        code="mp3_not_compliant",
+        attempts=tuple(attempts),
+        commands=tuple(commands),
+    )
 
 
 def probe_mp3(path: Path) -> Mp3Facts:
@@ -386,23 +416,36 @@ def _failures(
     the mix was below the silence floor, the gain the target wanted exceeded the clamp, or the
     true-peak ceiling forbade it. The loudness check is then skipped, because failing a run
     for missing a target it was told not to aim at throws away a good MP3 and makes `process`
-    exit nonzero on a session that produced exactly what it should have. The true-peak and
-    duration checks still apply either way: those are claims about the file rather than about
-    a target.
+    exit nonzero on a session that produced exactly what it should have. That waiver is a
+    documented amendment to the spec's acceptance criterion 8 rather than a silent one — see
+    ADR-0023 — and every waived run carries a warning naming which of the three guards fired.
+    The true-peak and duration checks still apply either way: those are claims about the file
+    rather than about a target.
+
+    **A measurement nobody took is never a pass.** Two ways that used to slip through, both
+    found by M5's code review:
+
+    * a decode that reported `-inf` loudness on a run that *was* aiming at the target — the
+      MP3 is silent, and skipping the comparison because the number is ``None`` reports the
+      silence as compliant;
+    * a summary with no true-peak line at all, which means `peak=true` did not take effect.
+      That is a different thing from `Peak: -inf dBFS`, which FFmpeg prints for digital
+      silence and which is a real measurement infinitely below any ceiling.
     """
     encode = settings.encode
     found: list[str] = []
 
     tolerance_mb = round(encode.loudness_tolerance_lu * MILLIBELS_PER_DB)
-    if (
-        normalized
-        and decoded.integrated_lufs_mb is not None
-        and abs(decoded.integrated_lufs_mb - target_mb) > tolerance_mb
+    if normalized and (
+        decoded.integrated_lufs_mb is None
+        or abs(decoded.integrated_lufs_mb - target_mb) > tolerance_mb
     ):
         found.append("integrated_loudness")
 
     peak_tolerance_mb = round(encode.true_peak_tolerance_db * MILLIBELS_PER_DB)
-    if (
+    if not decoded.true_peak_reported:
+        found.append("true_peak_unmeasured")
+    elif (
         decoded.true_peak_dbtp_mb is not None
         and decoded.true_peak_dbtp_mb > ceiling_mb + peak_tolerance_mb
     ):

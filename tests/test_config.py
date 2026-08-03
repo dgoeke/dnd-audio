@@ -296,6 +296,28 @@ class TestTheEnvelopeGridIsExact:
         """
         assert MixConfig().envelope.attack_ms < VadConfig().pad_ms
 
+    def test_an_unachievable_overlap_floor_is_rejected(self, raw: dict[str, Any]) -> None:
+        """The twin of the dominance validator, and the one that was missing.
+
+        The gate's overlap criterion was a property of the score combinations the tests used
+        rather than of the rule: a speaker scoring zero beside one scoring 1000, cut by the
+        permitted 6 dB, lands at -15.66 dB against the -15 that shipped. Found by M5's code
+        review; the promise now has to be one the share rule can keep.
+        """
+        raw["mix"] = {"envelope": {"overlap_min_gain_db": -15.0}}
+        _reject(raw, "is not achievable across")
+
+    def test_the_shipped_overlap_floor_is_what_the_rule_guarantees(self) -> None:
+        """Derived rather than estimated, and stated to two decimals so it cannot drift."""
+        envelope = MixConfig().envelope
+        assert envelope.guaranteed_overlap_gain_db(6) == pytest.approx(-15.66, abs=0.01)
+        assert envelope.guaranteed_overlap_gain_db(6) >= envelope.overlap_min_gain_db
+
+    def test_more_tracks_divide_the_overlap_guarantee_further(self) -> None:
+        """Why this validator lives on `SessionConfig`: the bound depends on the roster."""
+        envelope = MixConfig().envelope
+        assert envelope.guaranteed_overlap_gain_db(12) < envelope.guaranteed_overlap_gain_db(6)
+
     def test_release_is_longer_than_attack(self) -> None:
         """The spec's "short attack and longer release", as a property of the defaults."""
         envelope = MixConfig().envelope

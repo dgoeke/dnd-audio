@@ -74,17 +74,43 @@ every downstream stage depends on. A measurement is not that: it is read, acted 
 recorded alongside the tool that produced it. The alternative — implementing ITU-R BS.1770-4
 K-weighting and 4× true-peak oversampling in NumPy — is a real option and is rejected below.
 
-### Two guards, because a normalizer with no floor is a hazard
+### Three guards, because a normalizer with no floor is a hazard
 
-- The master gain is clamped to `mix.encode.max_master_gain_db`.
+- The master gain is clamped to `mix.encode.max_master_gain_db` (`mix_master_gain_clamped`).
 - A mix whose integrated loudness measures below `mix.encode.silence_floor_lufs` is left
-  **un-normalized**, with a warning, rather than amplified toward the target.
+  **un-normalized**, with a warning, rather than amplified toward the target
+  (`mix_not_normalized`).
+- **Where the true-peak ceiling forbids the gain the target wants, the ceiling wins**, and the
+  MP3 lands quieter than asked for (`mix_loudness_target_unreachable`).
 
 The second is not hypothetical. The canonical fixture through the real Silero release yields
 zero candidates (M3's closeout says so, and it is the correct answer for synthetic noise), so
 every track sits at the room-tone share and the mix is a quiet blend. Normalizing that to
 −16 LUFS means roughly 50 dB of gain on six noise floors. The guard makes the outcome a
 warning about a session with no detected speech, which is what it is.
+
+The third is the one the canonical fixture actually reaches: peaky material 31 dB down wants
++15.6 dB and the ceiling allows +1.6, so the MP3 lands about 14 LU below target. The ceiling is
+a hard limit on clipping and the loudness figure is a target; honouring the first and warning
+about the second is the only reading that does not throw away a good mix.
+
+**A run that did not aim at the target is not then failed for missing it**, in any of the three
+cases. That is a real amendment to the spec's acceptance criterion 8 rather than an
+implementation detail, and the spec is amended in the same commit — M5's code review was right
+that "ceiling wins with a warning" is defensible product behaviour but cannot be adopted
+silently while the spec says otherwise. Two things keep it honest:
+
+- the true-peak and duration checks still apply, because those are claims about the file rather
+  than about a target;
+- the report's `mix_encoded` decision says **which** tolerances were checked, and carries
+  `loudness_normalized`, so a reader is never told "within every configured tolerance" about a
+  comparison nothing performed.
+
+**A measurement nobody took is never a pass.** `-inf` loudness on a run that *was* aiming at
+the target is the loudest possible miss and fails; a summary carrying no true-peak line at all
+means `peak=true` did not take effect and fails as `true_peak_unmeasured`. Neither is the same
+as `Peak: -inf dBFS`, which FFmpeg prints for digital silence and which is a real measurement
+infinitely below any ceiling. Also M5's code review.
 
 ### The retry loop fails rather than claiming compliance
 

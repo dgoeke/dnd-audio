@@ -26,17 +26,24 @@ import pytest
 
 from dnd_audio.activity import ACTIVITY_RELATIVE_PATH
 from dnd_audio.activity.runner import DetectorBundle
+from dnd_audio.artifacts.activity import ActivityGraph
 from dnd_audio.artifacts.report import StageName, StageStatus
 from dnd_audio.determinism import sha256_file
 from dnd_audio.errors import ExitCode
 from dnd_audio.fixtures import FixtureTruth
 from dnd_audio.inspection import OUTPUT_DIRNAME
 from dnd_audio.mix import MIX_CACHE_DIRNAME, MP3_RELATIVE_PATH
+from dnd_audio.mix.encode import encode_mp3
+from dnd_audio.mix.loudness import Measurement
 from dnd_audio.mix.render import render_mix
 from dnd_audio.mix.runner import MixResult, mix_outputs, run_mix
 from dnd_audio.transcript.runner import run_transcribe
 
 REPORT = f"{OUTPUT_DIRNAME}/ingest-report.json"
+
+#: Substituted for every free-text field on the graph, so a mixer that read one would produce
+#: different samples and the assertion would fail rather than pass on a rebuilt document.
+_NO_SAMPLE_MAY_DEPEND_ON_THIS = "REWRITTEN PROSE THAT NO SAMPLE MAY DEPEND ON"
 
 
 def scripted(session_dir: Path) -> DetectorBundle:
@@ -160,8 +167,26 @@ class TestTheCanonicalSession:
 
         assert entered == 0
         assert second.exit_code is ExitCode.OK
-        decision = next(d for d in second.report.decisions if d.code == "mix_intermediate")
-        assert decision.details["from_cache"] == "true"
+        assert second.report.telemetry.cache_hits > 0
+
+    def test_the_decision_subsection_does_not_move_between_a_cold_and_a_warm_run(
+        self, canonical_fixture: FixtureTruth
+    ) -> None:
+        """INV-02: the report as a whole is exempt, its decision subsection is not.
+
+        The first version of `mix_intermediate` carried `from_cache` and said "rendered" or
+        "reused from cache", so two runs over an unchanged session disagreed about a session
+        neither had changed. Cache state is telemetry, and `record_cache` already carries it.
+        Found by M5's code review.
+        """
+        cold = mixed(canonical_fixture, use_cache=False)
+        warm = mixed(canonical_fixture)
+        assert warm.report.telemetry.cache_hits > 0, "the warm run did not hit the cache"
+
+        def decisions(result: MixResult) -> list[dict[str, Any]]:
+            return [item.model_dump(mode="json") for item in result.report.decisions]
+
+        assert decisions(warm) == decisions(cold)
 
     def test_no_cache_re_renders(self, canonical_fixture: FixtureTruth) -> None:
         """The contrast, so the test above is about the cache rather than about the run."""
@@ -241,39 +266,75 @@ class TestInv09:
         assert after == before
 
     def test_rewriting_the_graphs_prose_does_not_change_a_single_sample(
-        self, canonical_fixture: FixtureTruth
+        self,
+        canonical_fixture: FixtureTruth,
+        canonical_activity_graph: ActivityGraph,
+        tmp_path: Path,
     ) -> None:
         """The prohibition the INV-09 field allowlist cannot express.
 
         `ActivityDecision.detail` and `ActivityNote.message` are unrestricted strings on the
         frozen contract, so nothing structural stops the mixer reading them — M3's review
-        raised exactly this and M5's charter carries it as a risk. The graph's prose is
-        rewritten wholesale and the mix re-rendered **with the cache disabled**, because a
-        cache hit would let a mixer that *did* read them pass without ever running.
-        """
-        session_dir = canonical_fixture.session_dir
-        mixed(canonical_fixture, use_cache=False)
-        before = {
-            path.name: sha256_file(path) for path in (session_dir / MIX_CACHE_DIRNAME).glob("*.wav")
-        }
-        assert before
+        raised exactly this and M5's charter carries it as a risk.
 
-        graph_path = session_dir / ACTIVITY_RELATIVE_PATH
-        document = json.loads(graph_path.read_text(encoding="utf-8"))
-        for note in document["warnings"]:
-            note["message"] = "REWRITTEN PROSE THAT NO SAMPLE MAY DEPEND ON"
-        for decision in document["decisions"]:
-            decision["detail"] = "REWRITTEN PROSE THAT NO SAMPLE MAY DEPEND ON"
-        assert document["warnings"] or document["decisions"], (
+        The prose is rewritten **on the graph object the renderer is handed**, not on
+        `work/activity.json`. Rewriting the file was this test's first shape and it proved
+        nothing: `run_mix` rebuilds that document from the attribution cache before mixing, so
+        the edit was overwritten and the mixer never saw it. A mixer that read
+        `ActivityDecision.detail` passed. Found by M5's code review; the two renders below go
+        to different destinations so no cache can stand in for either.
+        """
+        session_dir, timeline = self._reconstructed(canonical_fixture)
+        rewritten = canonical_activity_graph.model_copy(
+            update={
+                "warnings": [
+                    note.model_copy(update={"message": _NO_SAMPLE_MAY_DEPEND_ON_THIS})
+                    for note in canonical_activity_graph.warnings
+                ],
+                "decisions": [
+                    decision.model_copy(update={"detail": _NO_SAMPLE_MAY_DEPEND_ON_THIS})
+                    for decision in canonical_activity_graph.decisions
+                ],
+            }
+        )
+        assert canonical_activity_graph.warnings or canonical_activity_graph.decisions, (
             "the fixture's graph has no free text in it, so this test proves nothing"
         )
-        graph_path.write_text(json.dumps(document), encoding="utf-8")
+        assert rewritten != canonical_activity_graph, "the rewrite changed nothing"
 
-        mixed(canonical_fixture, use_cache=False)
-        after = {
-            path.name: sha256_file(path) for path in (session_dir / MIX_CACHE_DIRNAME).glob("*.wav")
-        }
-        assert after == before
+        plain = self._render(session_dir, timeline, canonical_activity_graph, tmp_path / "a.wav")
+        edited = self._render(session_dir, timeline, rewritten, tmp_path / "b.wav")
+        assert edited == plain
+
+    @staticmethod
+    def _reconstructed(fixture: FixtureTruth) -> tuple[Path, Any]:
+        from dnd_audio.timeline.runner import run_ingest
+
+        result = run_ingest(fixture.session_dir)
+        assert result.timeline is not None
+        return fixture.session_dir, result.timeline
+
+    @staticmethod
+    def _render(session_dir: Path, timeline: Any, graph: ActivityGraph, destination: Path) -> bytes:
+        from dnd_audio.config import EnvelopeConfig
+        from dnd_audio.mix.envelope import EnvelopeStream
+        from dnd_audio.mix.levels import level_corrections
+
+        settings = EnvelopeConfig()
+        track_ids = tuple(track.track_id for track in timeline.tracks)
+        render_mix(
+            destination,
+            session_dir=session_dir,
+            timeline=timeline,
+            track_ids=track_ids,
+            envelope=EnvelopeStream(
+                graph,
+                settings=settings,
+                corrections=level_corrections(graph, settings=settings),
+                track_ids=track_ids,
+            ),
+        )
+        return destination.read_bytes()
 
 
 class TestFailures:
@@ -328,6 +389,33 @@ class TestFailures:
         assert (session_dir / ACTIVITY_RELATIVE_PATH).exists()
         paths = {item.relative_path for item in result.report.provenance.deliverables}
         assert ACTIVITY_RELATIVE_PATH in paths
+
+    def test_an_uncompliant_encode_still_records_every_measurement_it_took(
+        self, canonical_fixture: FixtureTruth
+    ) -> None:
+        """The gate asks for all measurements retained **in the report**, and the run that
+        matters is the one that failed. Recording only on the success path left an exhausted
+        retry budget with one error string. Found by M5's code review."""
+        session_dir = canonical_fixture.session_dir
+        overshooting = Measurement(
+            integrated_lufs_mb=-1600, true_peak_dbtp_mb=500, n_samples=504_000, command="scripted"
+        )
+        real = encode_mp3
+
+        def never_compliant(*args: Any, **kwargs: Any) -> Any:
+            """The real retry loop, driven by a decode that always overshoots the ceiling."""
+            return real(*args, **{**kwargs, "measurer": lambda _path: overshooting})
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr("dnd_audio.mix.runner.encode_mp3", never_compliant)
+            result = run_mix(session_dir, detector=scripted(session_dir))
+
+        assert result.exit_code is not ExitCode.OK
+        attempts = [d for d in result.report.decisions if d.code == "mix_encode_attempt"]
+        assert len(attempts) == 4, "one first attempt plus the default three retries"
+        assert all("true_peak" in d.details["failures"] for d in attempts)
+        assert any(d.code == "mix_intermediate" for d in result.report.decisions)
+        assert sum("libmp3lame" in c for c in result.report.provenance.commands) == 4
 
     def test_a_partial_run_never_exits_zero(self, canonical_fixture: FixtureTruth) -> None:
         """INV-13, on the branch that can genuinely be half successful."""

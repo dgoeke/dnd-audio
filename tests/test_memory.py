@@ -380,13 +380,19 @@ class TestTheMixPathStreams:
                     yield chunk
 
         original = WavWriter.write
+        original_read = TrackReader.read
 
         def watched_write(self: WavWriter, samples: npt.NDArray[np.float32]) -> None:
             journal.record("write", int(samples.shape[0]))
             original(self, samples)
 
+        def watched_read(self: TrackReader, start: int, count: int) -> npt.NDArray[np.float32]:
+            journal.record("read", count)
+            return original_read(self, start, count)
+
         with pytest.MonkeyPatch.context() as patch:
             patch.setattr(WavWriter, "write", watched_write)
+            patch.setattr(TrackReader, "read", watched_read)
             render_mix(
                 destination,
                 session_dir=long_mix.session_dir,
@@ -406,13 +412,18 @@ class TestTheMixPathStreams:
         """The assertion neither an accumulating reader nor an accumulating envelope passes.
 
         Instrumenting only the audio would leave the 690 MB of gains invisible, which is
-        exactly the hole M5's plan review found in the first draft of this proof.
+        exactly the hole M5's plan review found in the first draft of this proof. Instrumenting
+        only the *envelope* leaves the six waveforms invisible, which is the hole M5's code
+        review found in the second — a renderer that collected every track first and only then
+        interleaved lazy envelope chunks with writes would have passed. Both paths are in one
+        ordered log and the write has to beat the last event of each.
         """
         journal = Journal()
         self._render(long_mix, tmp_path / "mix.wav", journal, measure="frames")
 
         produced = [i for i, (kind, _) in enumerate(journal.events) if kind == "envelope"]
         assert journal.first_write_index() < produced[-1]
+        assert journal.first_write_index() < journal.last_read_index()
         assert sum(journal.writes) == LONG_SESSION_SAMPLES
 
     def test_no_envelope_chunk_or_write_exceeds_one_window(
@@ -428,7 +439,10 @@ class TestTheMixPathStreams:
         self._render(long_mix, tmp_path / "mix.wav", journal, measure="bytes")
 
         gains = [count for kind, count in journal.events if kind == "envelope"]
+        reads = [count for kind, count in journal.events if kind == "read"]
         assert max(journal.writes) <= DEFAULT_MIX_WINDOW
+        assert reads, "the mix read nothing, so bounding the reads proves nothing"
+        assert max(reads) <= DEFAULT_MIX_WINDOW
         assert max(gains) <= 1000 * len(long_mix.track_ids) * 8
         # Far more than one window in total, so the bounds are doing work rather than
         # describing a session that happened to be short.

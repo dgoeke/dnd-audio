@@ -7,10 +7,10 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 
 ## Right now
 
-- **Current milestone:** M5 — Automix (in progress)
+- **Current milestone:** M5 — Automix (verified, awaiting close)
 - **Branch:** `milestone/M5-automix`
 - **Last closed milestone:** M4 — Fake transcript
-- **Gate status at HEAD:** passes, zero skips (8 checks, 1768 tests)
+- **Gate status at HEAD:** passes, zero skips (8 checks, 2028 tests)
 - **Blocked on:** nothing for M5. **H1 is still the oldest outstanding item**, but it is no
   longer the whole of the problem it was. A 2026-08-02 sample probe — four real DJI Mic 3
   transmitters, ~47 s, not the H1 fixture — answered **OQ-001, OQ-002, OQ-004 and OQ-005** from
@@ -70,7 +70,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | M2  | Timeline                   | closed      | `f33ad6d` |
 | M3  | Activity                   | closed      | `38bc989` |
 | M4  | Fake transcript            | closed      | `8556f43` |
-| M5  | Automix                    | in progress | —         |
+| M5  | Automix                    | verified    | —         |
 | M6a | ROCm environment           | not started | —         |
 | M6b | Qwen adapter               | not started | —         |
 | H1  | Hardware fixture (2 min)   | not started | —         |

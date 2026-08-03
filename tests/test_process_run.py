@@ -277,6 +277,78 @@ class TestTheReportIsAlwaysFinalized:
         assert "raw_sources_modified" in codes
         assert result.exit_code is not ExitCode.OK
 
+    def test_only_the_final_check_can_see_tampering_after_both_branches_verified(
+        self, canonical_fixture: FixtureTruth
+    ) -> None:
+        """The differentiating case, and the reason the test above is not one.
+
+        Corrupting a source from inside `perform_transcript` is caught by the transcript
+        branch's *own* `verify_unchanged`, so that test passes with the final check deleted.
+        Here the corruption happens after both branches have verified and committed — writing
+        the deliverables is the last thing either branch does — so the outer check at the end
+        of `run_process` is the only thing left that can see it. Found by M5's independent
+        review.
+        """
+        from dnd_audio.transcript.runner import write_transcript_deliverables
+
+        session_dir = canonical_fixture.session_dir
+        victim = session_dir / canonical_fixture.chunks[0].relative_path
+        original = write_transcript_deliverables
+
+        def corrupting(*args: Any, **kwargs: Any) -> Any:
+            found = original(*args, **kwargs)
+            with victim.open("r+b") as handle:
+                handle.seek(0, 2)
+                handle.write(b"\x00" * 16)
+            return found
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr("dnd_audio.orchestrate.write_transcript_deliverables", corrupting)
+            result = processed(canonical_fixture)
+
+        assert result.exit_code is not ExitCode.OK
+        codes = {error.code for stage in result.report.stages for error in stage.errors}
+        assert codes == {"raw_sources_modified"}
+
+    def test_a_branch_that_diagnosed_itself_keeps_its_own_error(
+        self, canonical_fixture: FixtureTruth
+    ) -> None:
+        """ADR-0024: the final check's error "does not replace whichever error the branch
+        already reported".
+
+        It did. `_failed` stamped the outer exception over every stage neither branch had
+        recorded, so an ASR crash concurrent with unrelated tampering was reported as
+        tampering and the real diagnostic was gone. Found by M5's independent review.
+        """
+        from dnd_audio.transcript.runner import write_transcript_deliverables
+
+        session_dir = canonical_fixture.session_dir
+        victim = session_dir / canonical_fixture.chunks[0].relative_path
+        original = write_transcript_deliverables
+
+        def corrupting(*args: Any, **kwargs: Any) -> Any:
+            found = original(*args, **kwargs)
+            with victim.open("r+b") as handle:
+                handle.seek(0, 2)
+                handle.write(b"\x00" * 16)
+            return found
+
+        def exploding(*args: Any, **kwargs: Any) -> Any:
+            message = "the encoder fell over"
+            raise OSError(message)
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr("dnd_audio.orchestrate.write_transcript_deliverables", corrupting)
+            patch.setattr("dnd_audio.orchestrate.encode_deliverable", exploding)
+            result = processed(canonical_fixture)
+
+        stages = {stage.stage: stage for stage in result.report.stages}
+        # The mix keeps the diagnosis it made; the transcript branch reported nothing of its
+        # own, so the final check's error is the right one for it.
+        assert [e.message for e in stages[StageName.MIX].errors] == ["the encoder fell over"]
+        assert {e.code for e in stages[StageName.TRANSCRIBE].errors} == {"raw_sources_modified"}
+        assert result.exit_code is not ExitCode.OK
+
     def test_a_missing_adapter_is_not_a_broken_session(
         self, canonical_fixture: FixtureTruth
     ) -> None:

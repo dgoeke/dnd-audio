@@ -289,7 +289,7 @@
           "type": "number"
         },
         "overlap_min_gain_db": {
-          "default": -15.0,
+          "default": -16.0,
           "exclusiveMaximum": 0.0,
           "minimum": -60.0,
           "title": "Overlap Min Gain Db",

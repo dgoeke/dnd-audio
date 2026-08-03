@@ -259,6 +259,65 @@ class TestTheTolerances:
             _encode(intermediate, tmp_path, measurer, settings=settings)
 
 
+class TestAMeasurementNobodyTookIsNotAPass:
+    """The spec's "fail rather than claim compliance", applied to the absent measurement.
+
+    Both of these used to be accepted, because each check skipped itself when its number was
+    ``None``. Found by M5's code review.
+    """
+
+    def test_a_summary_with_no_true_peak_line_fails_rather_than_skipping_the_ceiling(
+        self, intermediate: Path, tmp_path: Path
+    ) -> None:
+        """An absent line means `peak=true` did not take effect, so nothing measured the
+        ceiling — which is different from `Peak: -inf dBFS`, the test below."""
+        settings = MixConfig(encode=EncodeConfig(max_retries=0))
+        measurer = Scripted(a_measurement(true_peak_dbtp_mb=None, true_peak_reported=False))
+        with pytest.raises(EncodeError, match="true_peak_unmeasured"):
+            _encode(intermediate, tmp_path, measurer, settings=settings)
+
+    def test_digital_silence_reporting_minus_infinity_is_still_a_measurement(
+        self, intermediate: Path, tmp_path: Path
+    ) -> None:
+        """FFmpeg 8.0 prints `Peak: -inf dBFS` for a silent file, which is infinitely below
+        any ceiling. Failing that would turn every silent session into a failed stage."""
+        measurer = Scripted(a_measurement(integrated_lufs_mb=-7000, true_peak_dbtp_mb=None))
+        result = _encode(
+            intermediate,
+            tmp_path,
+            measurer,
+            source=a_measurement(integrated_lufs_mb=-7000, true_peak_dbtp_mb=None),
+        )
+        assert result.accepted.compliant  # type: ignore[attr-defined]
+
+    def test_a_run_aiming_at_the_target_that_decodes_to_silence_fails(
+        self, intermediate: Path, tmp_path: Path
+    ) -> None:
+        """`-inf` where -16 LUFS was asked for is the loudest possible miss, and skipping the
+        comparison because the number is ``None`` reported it as compliant."""
+        settings = MixConfig(encode=EncodeConfig(max_retries=0))
+        measurer = Scripted(a_measurement(integrated_lufs_mb=None))
+        with pytest.raises(EncodeError, match="integrated_loudness"):
+            _encode(intermediate, tmp_path, measurer, settings=settings)
+
+
+class TestAFailedEncodeKeepsItsMeasurements:
+    def test_the_exception_carries_every_attempt_and_command(
+        self, intermediate: Path, tmp_path: Path
+    ) -> None:
+        """ "Retain all measurements in the report" is about the failing run above all, and
+        the report used to receive only an error string. Found by M5's code review."""
+        settings = MixConfig(encode=EncodeConfig(max_retries=1))
+        measurer = Scripted(a_measurement(true_peak_dbtp_mb=50))
+        with pytest.raises(EncodeError) as raised:
+            _encode(intermediate, tmp_path, measurer, settings=settings)
+
+        assert len(raised.value.attempts) == 2
+        assert len(raised.value.commands) == 2
+        assert all(attempt.measurement.n_samples == SAMPLES for attempt in raised.value.attempts)
+        assert raised.value.attempts[0].failures == ("true_peak",)
+
+
 class TestTheMasterGain:
     def test_the_first_gain_moves_the_measured_loudness_onto_the_target(
         self, intermediate: Path, tmp_path: Path

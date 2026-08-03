@@ -468,10 +468,15 @@ request-shaping and text-similarity default in `TranscriptConfig` cites this ent
    names no number. 6 dB is deliberately conservative: it costs 12 dB of the dominance
    margin (a quiet track lifted while a loud one is cut), and a wearer whose lav is more than
    6 dB out is a capture problem a mixer should not paper over.
-4. **`solo_attenuation_margin_db` = 20 and `overlap_min_gain_db` = −15.** The gate's
-   "configured attenuation margin" and "nontrivial audible gain". The first is validated to
-   be *achievable* from (2) and (3) at configuration load; the second is asserted against the
-   applied coefficient, correction included.
+4. **`solo_attenuation_margin_db` = 20 and `overlap_min_gain_db` = −16.** The gate's
+   "configured attenuation margin" and "nontrivial audible gain". **Both** are validated to be
+   *achievable* from (2) and (3) at configuration load, and both are asserted against the
+   applied coefficient, correction included. The second started at −15 on the estimate "two
+   channels share roughly −6 dB each, and the clamp can take another 6"; that is 0.66 dB
+   optimistic, because the quieter of two speakers holds `min_active_share` while the louder
+   holds full weight and four room-tone floors still take a share. The real bound for six
+   tracks is −15.66 dB, and `EnvelopeConfig.guaranteed_overlap_gain_db` computes it from the
+   roster rather than from a worked example. Corrected in M5's verify phase.
 
 **Why it matters:** Every one is a number chosen against a 10.5-second synthetic fixture
 whose speech is shaped noise and whose bleed is a delayed attenuated copy of its source
@@ -501,6 +506,14 @@ Also here: `true_peak_tolerance_db` = 0.3, the "documented measurement tolerance
 asks for. FFmpeg's `ebur128` summary reports one decimal place, so 0.1 dB of it is pure
 quantization; the rest is margin for a measurement taken on a decode rather than on the
 encoder's own model.
+3. **An overshoot large enough to matter is smaller than `loudness_tolerance_lu`.** A retry
+   reduces the master gain by exactly the overshoot, so on a run that *was* aiming at the
+   loudness target an overshoot above 1 dB makes the retry land outside the loudness tolerance
+   and fail the stage rather than resolve it. The ceiling-limited case is unaffected, because
+   there the loudness comparison is waived (ADR-0023). Noticed in M5's verify phase; no
+   evidence either way, and the fix if it bites is a larger pre-encode ceiling margin rather
+   than a wider tolerance.
+
 **Why it matters:** Set the retry budget too low and a compliant mix is reported as a failed
 stage; set the tolerances too loose and the pipeline claims a compliance it did not verify,
 which the spec forbids in as many words. The failure direction is safe either way — the stage

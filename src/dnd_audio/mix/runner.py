@@ -58,7 +58,7 @@ from dnd_audio.errors import DiscoveryError, DndAudioError, ExitCode
 from dnd_audio.inspection import OUTPUT_DIRNAME
 from dnd_audio.mix import MIX_CACHE_DIRNAME, MIX_SEMANTICS_VERSION, MP3_RELATIVE_PATH, MixNote
 from dnd_audio.mix.cache import MixCache, mix_identity
-from dnd_audio.mix.encode import EncodeResult, encode_mp3
+from dnd_audio.mix.encode import EncodeAttempt, EncodeError, EncodeResult, encode_mp3
 from dnd_audio.mix.envelope import EnvelopeStream
 from dnd_audio.mix.levels import MILLIBELS_PER_DB, LevelCorrections, level_corrections
 from dnd_audio.mix.loudness import Measurement, ffmpeg_version, measure
@@ -295,20 +295,33 @@ def encode_deliverable(
     """
     mp3_path = session_dir / MP3_RELATIVE_PATH
     source = measure(work.intermediate)
-    encoded = encode_mp3(
-        work.intermediate,
-        mp3_path,
-        settings=config.mix,
-        session_id=config.session_id,
-        title=config.title,
-        source_measurement=source,
-        expected_samples=work.n_samples,
-    )
 
     builder.record_cache(hits=work.cache.hits, misses=work.cache.misses)
     builder.record_package_version("dnd_audio.mix", str(MIX_SEMANTICS_VERSION))
     builder.record_tool_version("ffmpeg", ffmpeg_version())
     builder.record_command(source.command)
+
+    try:
+        encoded = encode_mp3(
+            work.intermediate,
+            mp3_path,
+            settings=config.mix,
+            session_id=config.session_id,
+            title=config.title,
+            source_measurement=source,
+            expected_samples=work.n_samples,
+        )
+    except EncodeError as exc:
+        # "Retain all measurements in the report", and the interesting run is the one that
+        # failed. Recording only on the success path left an exhausted retry budget with a
+        # single error string and nothing structured to audit — found by M5's code review.
+        for command in exc.commands:
+            builder.record_command(command)
+        _record_intermediate(builder, work, source)
+        for attempt in exc.attempts:
+            _record_attempt(builder, attempt)
+        raise
+
     for command in encoded.commands:
         builder.record_command(command)
     _record_decisions(builder, work, source, encoded)
@@ -380,7 +393,9 @@ def _peak_of(path: Path) -> float:
     """The largest absolute sample in a cached intermediate.
 
     Read back in bounded windows rather than remembered, because a cache hit did not run the
-    renderer and the encode's first gain is aimed with this number.
+    renderer and the report records this number for every run alike. It is *not* what the
+    first encode's gain is aimed with — that is the true peak `measure` reads back off the
+    decode, which accounts for inter-sample overs and this does not.
     """
     import numpy as np
 
@@ -425,61 +440,82 @@ def _record_decisions(
             )
         )
 
-    builder.record_decision(
-        Decision(
-            code="mix_intermediate",
-            subject=work.cache_key,
-            detail=(
-                f"the lossless intermediate is {work.n_samples} samples, "
-                f"{'reused from cache' if work.from_cache else 'rendered'}, at unity master "
-                f"gain (ADR-0023)."
-            ),
-            details={
-                "integrated_lufs_mb": _text(source.integrated_lufs_mb),
-                "true_peak_dbtp_mb": _text(source.true_peak_dbtp_mb),
-                "sample_peak": f"{work.peak:.6f}",
-                "from_cache": str(work.from_cache).lower(),
-            },
-        )
-    )
-
+    _record_intermediate(builder, work, source)
     for attempt in encoded.attempts:
-        builder.record_decision(
-            Decision(
-                code="mix_encode_attempt",
-                subject=f"attempt_{attempt.index}",
-                detail=(
-                    f"encoded at {attempt.gain_mb / MILLIBELS_PER_DB:+.2f} dB master gain; "
-                    + (
-                        "accepted."
-                        if attempt.compliant
-                        else f"rejected: {', '.join(attempt.failures)}."
-                    )
-                ),
-                details={
-                    "gain_mb": str(attempt.gain_mb),
-                    "integrated_lufs_mb": _text(attempt.measurement.integrated_lufs_mb),
-                    "true_peak_dbtp_mb": _text(attempt.measurement.true_peak_dbtp_mb),
-                    "decoded_samples": str(attempt.measurement.n_samples),
-                    "failures": ",".join(attempt.failures),
-                },
-            )
-        )
+        _record_attempt(builder, attempt)
 
+    checked = (
+        "every configured tolerance"
+        if encoded.normalized
+        else "the true-peak ceiling and the decoded duration; the loudness target was not "
+        "aimed at and so was not checked (ADR-0023)"
+    )
     builder.record_decision(
         Decision(
             code="mix_encoded",
             subject=MP3_RELATIVE_PATH,
             detail=(
                 f"{encoded.facts.codec} {encoded.facts.channels}ch "
-                f"{encoded.facts.bit_rate_kbps} kbps, decoded and measured within every "
-                f"configured tolerance after {len(encoded.attempts)} attempt(s)."
+                f"{encoded.facts.bit_rate_kbps} kbps, decoded and measured within {checked} "
+                f"after {len(encoded.attempts)} attempt(s)."
             ),
             details={
                 "channels": str(encoded.facts.channels),
                 "sample_rate": str(encoded.facts.sample_rate),
                 "bit_rate_kbps": str(encoded.facts.bit_rate_kbps),
                 "attempts": str(len(encoded.attempts)),
+                "loudness_normalized": str(encoded.normalized).lower(),
+            },
+        )
+    )
+
+
+def _record_intermediate(builder: ReportBuilder, work: MixWork, source: Measurement) -> None:
+    """The intermediate this encode was made from, and what it measured.
+
+    Deliberately says nothing about whether it was rendered or reused: INV-02 requires this
+    subsection to be *semantically stable* across an unchanged rerun, and cache state is
+    per-run telemetry that `record_cache` already carries. Recording it here made the second
+    run's report disagree with the first about a session neither run changed — found by M5's
+    code review.
+    """
+    builder.record_decision(
+        Decision(
+            code="mix_intermediate",
+            subject=work.cache_key,
+            detail=(
+                f"the lossless intermediate is {work.n_samples} samples at unity master gain "
+                f"(ADR-0023)."
+            ),
+            details={
+                "integrated_lufs_mb": _text(source.integrated_lufs_mb),
+                "true_peak_dbtp_mb": _text(source.true_peak_dbtp_mb),
+                "sample_peak": f"{work.peak:.6f}",
+            },
+        )
+    )
+
+
+def _record_attempt(builder: ReportBuilder, attempt: EncodeAttempt) -> None:
+    """One encode attempt, compliant or not. Recorded either way (the spec asks for both)."""
+    builder.record_decision(
+        Decision(
+            code="mix_encode_attempt",
+            subject=f"attempt_{attempt.index}",
+            detail=(
+                f"encoded at {attempt.gain_mb / MILLIBELS_PER_DB:+.2f} dB master gain; "
+                + (
+                    "accepted."
+                    if attempt.compliant
+                    else f"rejected: {', '.join(attempt.failures)}."
+                )
+            ),
+            details={
+                "gain_mb": str(attempt.gain_mb),
+                "integrated_lufs_mb": _text(attempt.measurement.integrated_lufs_mb),
+                "true_peak_dbtp_mb": _text(attempt.measurement.true_peak_dbtp_mb),
+                "decoded_samples": str(attempt.measurement.n_samples),
+                "failures": ",".join(attempt.failures),
             },
         )
     )

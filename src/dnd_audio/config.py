@@ -477,9 +477,31 @@ class EnvelopeConfig(_Strict):
     #: Validated to be *achievable* below, rather than merely asserted by a test (OQ-019).
     solo_attenuation_margin_db: float = Field(default=20.0, gt=0.0, le=120.0)
     #: The gate's "nontrivial audible gain" during genuine overlap, against the applied
-    #: coefficient. Two active channels share roughly -6 dB each, and the correction clamp can
-    #: take another 6 (OQ-019).
-    overlap_min_gain_db: float = Field(default=-15.0, lt=0.0, ge=-60.0)
+    #: coefficient. **Derived, not estimated** — see :meth:`guaranteed_overlap_gain_db`, which
+    #: `SessionConfig` validates this against for the session's own track count. The estimate
+    #: that used to sit here ("two channels share roughly -6 dB each, and the clamp can take
+    #: another 6" → -15) was 0.66 dB optimistic for a six-track session, because the quieter
+    #: speaker holds `min_active_share` while the louder holds 1.0 and four room-tone floors
+    #: still take a share. Found by M5's code review (OQ-019).
+    overlap_min_gain_db: float = Field(default=-16.0, lt=0.0, ge=-60.0)
+
+    def guaranteed_overlap_gain_db(self, track_count: int) -> float:
+        """The worst applied coefficient a genuine second speaker can be reduced to, in dB.
+
+        The gate's overlap criterion, stated as a bound rather than as something a fixture
+        happens to satisfy — the same treatment `solo_attenuation_margin_db` already gets, and
+        the omission M5's code review found.
+
+        The worst two-speaker case: this speaker scored zero, so its weight is
+        `min_active_share`; the other scored full, so its weight is 1.0; the remaining
+        ``track_count - 2`` channels sit at `room_tone_share`; and this speaker's own level
+        correction is the full clamp downward. Three or more simultaneous speakers divide
+        further still, but "genuine two-person overlap" is what the criterion says and what
+        `overlap_min_gain_db` is compared against.
+        """
+        others = self.room_tone_share * max(track_count - 2, 0)
+        share = self.min_active_share / (1.0 + self.min_active_share + others)
+        return 20.0 * math.log10(share) - self.max_level_correction_db
 
     @model_validator(mode="after")
     def _check_grid(self) -> EnvelopeConfig:
@@ -685,6 +707,33 @@ class SessionConfig(_Strict):
             "receiver_id/receiver_channel",
             [f"{track.receiver_id}:{track.receiver_channel}" for track in self.tracks],
         )
+        return self
+
+    @model_validator(mode="after")
+    def _check_overlap_gain_is_achievable(self) -> SessionConfig:
+        """Refuse a configuration whose overlap criterion the share rule cannot deliver.
+
+        The twin of `EnvelopeConfig._check_margin_is_achievable`, and it lives here rather
+        than beside it because the guarantee depends on how many tracks the gain is divided
+        between — a number only the roster knows. Without it the gate's "both active channels
+        retain nontrivial gain" was a property of the score combinations the tests happened to
+        use: one speaker at 1000 against one at 0, with the permitted correction, lands at
+        -15.66 dB. Found by M5's code review.
+        """
+        envelope = self.mix.envelope
+        guaranteed = envelope.guaranteed_overlap_gain_db(len(self.tracks))
+        if guaranteed < envelope.overlap_min_gain_db:
+            message = (
+                f"mix.envelope.overlap_min_gain_db={envelope.overlap_min_gain_db} dB is not "
+                f"achievable across {len(self.tracks)} tracks: the quieter of two genuine "
+                f"speakers can be reduced to {guaranteed:.2f} dB, because it holds "
+                f"min_active_share={envelope.min_active_share} against the other's full "
+                f"weight while {max(len(self.tracks) - 2, 0)} room-tone floors still take a "
+                f"share, and max_level_correction_db={envelope.max_level_correction_db} can "
+                f"cut it further. Raise min_active_share, lower room_tone_share, tighten the "
+                f"correction clamp, or lower the promise."
+            )
+            raise ValueError(message)
         return self
 
     @model_validator(mode="after")

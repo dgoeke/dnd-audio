@@ -73,14 +73,27 @@ class Measurement:
     arithmetic rather than a float that has been through a text round trip.
     """
 
-    #: Integrated loudness, in hundredths of a LU relative to full scale.
+    #: Integrated loudness, in hundredths of a LU relative to full scale. ``None`` only for a
+    #: summary that printed `-inf`, because :func:`parse_summary` raises when the line is
+    #: absent altogether — so ``None`` here is a measurement of silence, not a missing one.
     integrated_lufs_mb: int | None
-    #: True peak, in hundredths of a dB relative to full scale.
+    #: True peak, in hundredths of a dB relative to full scale. ``None`` when the summary said
+    #: `-inf` **or** when it carried no peak line at all; :attr:`true_peak_reported` is what
+    #: separates those, and only the second is "nobody measured this".
     true_peak_dbtp_mb: int | None
     #: Samples the decoder actually produced. Not a container field.
     n_samples: int
     #: The exact command, for the report. The spec asks for FFmpeg parameters by name.
     command: str
+    #: Whether the summary carried a true-peak line at all.
+    #:
+    #: Load-bearing rather than informational. `measure_command` always passes `peak=true`, so
+    #: an absent line means the filter did not run in peak mode — and a ceiling check that read
+    #: that as ``None`` and skipped itself would report a compliance nobody measured, which is
+    #: the thing the spec forbids in as many words. Digital silence is the case this exists to
+    #: keep apart: FFmpeg 8.0 prints `Peak: -inf dBFS` for it, which is a real measurement
+    #: infinitely below any ceiling.
+    true_peak_reported: bool = True
 
     @property
     def silent(self) -> bool:
@@ -164,6 +177,7 @@ def measure(path: Path) -> Measurement:
         true_peak_dbtp_mb=peak,
         n_samples=decoded // BYTES_PER_SAMPLE,
         command=printable,
+        true_peak_reported=_PEAK.search(text) is not None,
     )
 
 

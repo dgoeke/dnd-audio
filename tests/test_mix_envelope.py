@@ -242,6 +242,40 @@ class TestGenuineOverlap:
         )
         assert np.array_equal(envelope(plain)[1], envelope(flagged)[1])
 
+    def test_the_worst_admissible_pair_still_clears_the_floor(self) -> None:
+        """The cross-product the other tests here miss, and the one that failed.
+
+        Asymmetric scores were tested without an adverse correction, and an adverse correction
+        only with equal scores. Both at once — a speaker scoring zero beside one scoring 1000,
+        cut by the full clamp — is the worst case the rule admits, and it lands at -15.66 dB.
+        The shipped `overlap_min_gain_db` was -15, so the criterion held on the combinations
+        the tests happened to use rather than on the rule. Found by M5's code review; the
+        default is now derived from `guaranteed_overlap_gain_db` instead of estimated.
+        """
+        settings = EnvelopeConfig()
+        clamp = round(settings.max_level_correction_db * 100)
+        _, applied = envelope(
+            self._two_speakers((1000, 0)),
+            settings=settings,
+            corrections=_corrected({"tx-e": -clamp}),
+        )
+        settled = applied[3 * settings.control_rate_hz]
+        assert _db(settled[4]) >= settings.overlap_min_gain_db
+
+    def test_the_measured_worst_case_is_the_bound_the_validator_computes(self) -> None:
+        """The arithmetic and the envelope agree, so neither can drift without the other."""
+        settings = EnvelopeConfig()
+        clamp = round(settings.max_level_correction_db * 100)
+        _, applied = envelope(
+            self._two_speakers((1000, 0)),
+            settings=settings,
+            corrections=_corrected({"tx-e": -clamp}),
+        )
+        settled = applied[3 * settings.control_rate_hz]
+        assert _db(settled[4]) == pytest.approx(
+            settings.guaranteed_overlap_gain_db(len(TRACKS)), abs=0.01
+        )
+
     def test_the_louder_speaker_still_leads(self) -> None:
         """Nontrivial is a floor, not equality: the score still orders the two."""
         _, applied = envelope(self._two_speakers((900, 200)))
@@ -506,6 +540,46 @@ class TestTheBoundedGainInvariant:
         with pytest.raises(EnvelopeError, match="sums to"):
             list(stream.chunks(chunk_frames=100))
 
+    @pytest.mark.parametrize("clamp_db", [0.015, 0.025, 6.006, 6.015])
+    def test_a_fractional_clamp_does_not_make_the_check_fire_on_its_own_corrections(
+        self, clamp_db: float
+    ) -> None:
+        """The clamp is one number, and it used to be spelled two ways.
+
+        `levels` rounds it to whole millibels, the way every level in this project is carried;
+        the checker converted the raw dB instead. For any clamp whose hundredths round *up* —
+        `round(0.015 * 100) == 2` — a track's own permitted correction then exceeded the bound
+        the checker enforces, and an ordinary two-speaker session failed the mix stage with an
+        invariant violation. Found by M5's verify phase.
+        """
+        settings = EnvelopeConfig(max_level_correction_db=clamp_db)
+        corrections = level_corrections(
+            a_graph(
+                candidates=[a_candidate("tx-a", 0, 2 * SECOND)],
+                tracks=[
+                    a_track("tx-a", speech_reference_mbfs=-4000),
+                    a_track("tx-b", speech_reference_mbfs=-2000),
+                    a_track("tx-c", speech_reference_mbfs=-2000),
+                ],
+                duration_samples=3 * SECOND,
+            ),
+            settings=settings,
+        )
+        graph = a_graph(
+            candidates=[a_candidate("tx-a", 0, 2 * SECOND)],
+            tracks=[
+                a_track("tx-a", speech_reference_mbfs=-4000),
+                a_track("tx-b", speech_reference_mbfs=-2000),
+                a_track("tx-c", speech_reference_mbfs=-2000),
+            ],
+            duration_samples=3 * SECOND,
+        )
+        ids = ("tx-a", "tx-b", "tx-c")
+        stream = EnvelopeStream(graph, settings=settings, corrections=corrections, track_ids=ids)
+        applied = np.concatenate([chunk.applied for chunk in stream.chunks(chunk_frames=500)])
+        limit = 10.0 ** (round(clamp_db * 100) / 2000.0)
+        assert np.sum(applied, axis=-1).max() <= limit + 1e-9
+
     def test_the_runtime_check_fires_when_a_correction_escapes_the_clamp(self) -> None:
         stream = EnvelopeStream(
             _solo_graph(),
@@ -531,6 +605,30 @@ class TestTheEnvelopeIsBounded:
         whole = envelope(graph, chunk_frames=100_000)[1]
         for chunk_frames in (1, 7, 48, 1000, 4999):
             assert np.array_equal(envelope(graph, chunk_frames=chunk_frames)[1], whole)
+
+    def test_overlapping_spans_on_one_track_partition_identically_too(self) -> None:
+        """The case the test above cannot see, because a solo graph has one span per track.
+
+        `_targets` used to stop scanning a track at the first span running past the chunk end,
+        so a second, overlapping span was skipped in that chunk and applied in the next: the
+        envelope depended on the caller's window size, which the mix's cache identity does not
+        carry. M3's merge keeps a track's retained candidates disjoint, so this is unreachable
+        through the pipeline — which is the reason to assert it structurally rather than to
+        rely on an upstream promise the artifact does not make. Found by M5's verify phase.
+        """
+        graph = a_graph(
+            candidates=[
+                a_candidate("tx-a", 0, 2 * SECOND, score_permille=0),
+                a_candidate("tx-a", SECOND // 2, 3 * SECOND // 2, score_permille=1000),
+            ],
+            tracks=_tracks(),
+            duration_samples=4 * SECOND,
+        )
+        whole = envelope(graph, chunk_frames=100_000)[1]
+        for chunk_frames in (1, 7, 48, 1000, 4999):
+            assert np.array_equal(envelope(graph, chunk_frames=chunk_frames)[1], whole), (
+                chunk_frames
+            )
 
     def test_no_chunk_exceeds_the_size_asked_for(self) -> None:
         stream = EnvelopeStream(

@@ -200,9 +200,14 @@ class EnvelopeStream:
         self._rise = 1.0 / (settings.attack_ms * settings.control_rate_hz / 1000)
         self._fall = 1.0 / (settings.release_ms * settings.control_rate_hz / 1000)
 
-        clamp = 10.0 ** (
-            settings.max_level_correction_db * MILLIBELS_PER_DB / (20.0 * MILLIBELS_PER_DB)
-        )
+        # Rounded to millibels **first**, exactly as `levels.level_corrections` clamps, and
+        # then converted once. Spelling the same clamp two ways was a real defect rather than
+        # an aesthetic one: `round(0.015 * 100) == 2` millibels is a larger gain than
+        # `10 ** (0.015 / 20)`, so a fractional clamp made a track's own permitted correction
+        # exceed the bound this checker enforces and failed the mix stage on an ordinary
+        # session. One rounding, in the unit the graph already speaks.
+        clamp_mb = round(settings.max_level_correction_db * MILLIBELS_PER_DB)
+        clamp = 10.0 ** (clamp_mb / (20.0 * MILLIBELS_PER_DB))
         self._applied_min = 1.0 / clamp
         self._applied_max = clamp
 
@@ -279,14 +284,25 @@ class EnvelopeStream:
         end = start + n_frames
         targets = np.zeros((n_frames, len(self._track_ids)), dtype=np.float64)
         for track_index, spans in enumerate(self._by_track):
+            # The cursor only ever advances past spans that are wholly behind this chunk, so
+            # it is a lower bound rather than a position: a span that runs *past* `end` stays
+            # under it and is visited again by the next chunk.
             cursor = self._cursors[track_index]
-            while cursor < len(spans):
-                span = spans[cursor]
-                if span.end_frame <= start:
-                    cursor += 1
-                    continue
+            while cursor < len(spans) and spans[cursor].end_frame <= start:
+                cursor += 1
+            self._cursors[track_index] = cursor
+
+            # Every remaining span that touches this chunk, not just up to the first long
+            # one. Breaking there was a real defect: with two overlapping candidates on one
+            # track, the second was skipped in the chunk the first straddled and applied in
+            # the next, so the envelope depended on how the caller partitioned the session —
+            # and the mix's cache identity carries no window size. M3's merge makes it
+            # unreachable today, which is exactly why the bound has to be structural.
+            for span in spans[cursor:]:
                 if span.start_frame >= end:
                     break
+                if span.end_frame <= start:
+                    continue
                 lower = max(span.start_frame, start) - start
                 upper = min(span.end_frame, end) - start
                 # `maximum` rather than assignment: a track's retained candidates are disjoint
@@ -295,10 +311,6 @@ class EnvelopeStream:
                 targets[lower:upper, track_index] = np.maximum(
                     targets[lower:upper, track_index], span.weight
                 )
-                if span.end_frame > end:
-                    break
-                cursor += 1
-            self._cursors[track_index] = cursor
         return targets
 
     def _share(self, presence: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
