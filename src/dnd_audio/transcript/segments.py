@@ -76,7 +76,7 @@ def draft_segments(
         drafts.append(draft)
 
     drafts.sort(key=lambda item: (item.start_sample, item.track_id, item.candidate_ids))
-    return drafts, _notes(empty)
+    return drafts, [*_notes(empty), *_alignment_notes(drafts)]
 
 
 def _grouped_candidates(outcomes: tuple[RequestOutcome, ...]) -> set[tuple[str, ...]]:
@@ -223,6 +223,37 @@ def _ordered_ids(outcomes: list[RequestOutcome]) -> tuple[str, ...]:
 
 def _ordered(values: set[str]) -> tuple[str, ...]:
     return tuple(sorted(values))
+
+
+def _alignment_notes(drafts: list[SegmentDraft]) -> list[TranscriptNote]:
+    """Warn about segments the aligner ran on and failed. The spec requires exactly this.
+
+    *"If alignment fails for one segment, retain the segment-level transcript and emit a
+    warning rather than failing the entire session."* The retention is above; this is the
+    warning.
+
+    One warning per **track**, not per segment. An aligner that fails does not usually fail
+    once — a four-hour session where it fails throughout would put thousands of lines in front
+    of an operator, which is a way of hiding the problem rather than reporting it. Which
+    individual segments lost their word times is in the records, where `alignment_status` says
+    so per segment; the report gets the number and the tracks.
+    """
+    affected: dict[str, int] = {}
+    for draft in drafts:
+        if draft.alignment_status == "segment_only":
+            affected[draft.track_id] = affected.get(draft.track_id, 0) + 1
+    return [
+        TranscriptNote(
+            code="alignment_failed",
+            message=(
+                f"{count} segment(s) on {track_id} kept their text but have no word times: "
+                f"forced alignment ran and did not produce them. The transcript is complete "
+                f"and its word-level timings are not."
+            ),
+            path=track_id,
+        )
+        for track_id, count in sorted(affected.items())
+    ]
 
 
 def _notes(empty: int) -> list[TranscriptNote]:

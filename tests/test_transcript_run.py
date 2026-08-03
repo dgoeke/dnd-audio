@@ -365,6 +365,51 @@ class TestFailureBehaviour:
         assert list((session_dir / "work" / "cache" / "activity").rglob("*.json"))
 
 
+class TestAlignmentFailureNeverFailsTheSession:
+    def test_the_segment_survives_the_run_warns_and_the_exit_is_clean(
+        self, canonical_fixture: FixtureTruth
+    ) -> None:
+        """The spec: "retain the segment-level transcript and emit a warning rather than
+        failing the entire session"."""
+        session_dir = canonical_fixture.session_dir
+
+        class NeverAligns:
+            def transcribe(self, request: Any) -> TranscriptionResult:
+                return TranscriptionResult(
+                    request_id=request.request_id,
+                    text="the words are here and their times are not",
+                    alignment_status="segment_only",
+                )
+
+        from dnd_audio.transcript.fakemodels import load_fake_models
+
+        fake = load_fake_models(session_dir)
+        result = run_transcribe(
+            session_dir,
+            detector=fake.detector,
+            transcriber=TranscriberBundle(
+                transcriber=NeverAligns(), name="never-aligns", variant_digest="e" * 64
+            ),
+        )
+
+        assert result.exit_code is ExitCode.OK
+        assert result.records is not None
+        retained = result.records.retained()
+        assert retained
+        assert {segment.alignment_status for segment in retained} == {"segment_only"}
+        assert all(segment.words == [] for segment in retained)
+        assert all(segment.text for segment in retained)
+        codes = {note.code for stage in result.report.stages for note in stage.warnings}
+        assert "alignment_failed" in codes
+
+        document = json.loads(
+            (session_dir / TRANSCRIPT_JSON_RELATIVE_PATH).read_text(encoding="utf-8")
+        )
+        assert {s["provenance"]["alignment_status"] for s in document["segments"]} == {
+            "segment_only"
+        }
+
+
 class TestInv09:
     def test_nothing_under_activity_imports_the_transcript_package(self, repo_root: Path) -> None:
         """Structural, because the invariant is about direction: the graph is model-
@@ -383,6 +428,37 @@ class TestInv09:
 
         run_transcribe(session_dir, fake_models=True)
         assert sha256_file(graph) == before
+
+    def test_a_write_into_the_graph_fails_the_run(self, canonical_fixture: FixtureTruth) -> None:
+        """The check exists to catch a write from anywhere, so prove it can fire.
+
+        A verification that is present, looks right, and cannot fail is the shape this
+        project keeps finding (M1's closeout, M2's INV-01 hole). This one is driven by a
+        transcriber that writes into the graph while ASR is running.
+        """
+        session_dir = canonical_fixture.session_dir
+        graph_path = session_dir / "work" / "activity.json"
+
+        class Meddling:
+            def transcribe(self, request: Any) -> TranscriptionResult:
+                graph_path.write_text(
+                    graph_path.read_text(encoding="utf-8") + "\n", encoding="utf-8"
+                )
+                return TranscriptionResult(request_id=request.request_id, text="x")
+
+        from dnd_audio.transcript.fakemodels import load_fake_models
+
+        fake = load_fake_models(session_dir)
+        result = run_transcribe(
+            session_dir,
+            detector=fake.detector,
+            transcriber=TranscriberBundle(
+                transcriber=Meddling(), name="meddling", variant_digest="f" * 64
+            ),
+        )
+        codes = {error.code for stage in result.report.stages for error in stage.errors}
+        assert codes == {"activity_graph_modified"}
+        assert result.exit_code is not ExitCode.OK
 
     def test_no_asr_text_reaches_the_graph(self, canonical_fixture: FixtureTruth) -> None:
         """The hazard M3's review deferred: `ActivityDecision.detail` and `ActivityNote

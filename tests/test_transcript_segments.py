@@ -263,6 +263,45 @@ class TestAWordlessResult:
         assert only.text == "first second"
 
 
+class TestAlignmentFailureWarns:
+    """The spec: retain the segment-level transcript and *emit a warning* (not fail)."""
+
+    def test_a_failed_alignment_produces_a_warning(self) -> None:
+        plan = a_plan("req-1", (an_ownership("cand-a", RATE, RATE * 2),))
+        drafts, notes = draft(an_outcome(plan, "no word times", alignment_status="segment_only"))
+        assert [note.code for note in notes] == ["alignment_failed"]
+        assert notes[0].path == "tx-a"
+        assert "1 segment(s) on tx-a" in notes[0].message
+        assert drafts[0].text == "no word times"
+
+    def test_an_aligner_that_never_ran_is_not_a_failure(self) -> None:
+        """`not_attempted` is a different state, and warning about it would be noise."""
+        plan = a_plan("req-1", (an_ownership("cand-a", RATE, RATE * 2),))
+        _, notes = draft(an_outcome(plan, "text", alignment_status="not_attempted"))
+        assert [note.code for note in notes] == []
+
+    def test_one_warning_per_track_rather_than_per_segment(self) -> None:
+        """An aligner that fails does not fail once; thousands of lines hide the problem."""
+        first = a_plan("req-1", (an_ownership("cand-a", RATE, RATE * 2),))
+        second = a_plan("req-2", (an_ownership("cand-b", RATE * 5, RATE * 6),))
+        third = a_plan("req-3", (an_ownership("cand-c", RATE, RATE * 2),), track="tx-b")
+        _, notes = draft(
+            an_outcome(first, "one", alignment_status="segment_only"),
+            an_outcome(second, "two", alignment_status="segment_only"),
+            an_outcome(third, "three", alignment_status="segment_only"),
+        )
+        assert [(note.path, note.code) for note in notes] == [
+            ("tx-a", "alignment_failed"),
+            ("tx-b", "alignment_failed"),
+        ]
+        assert "2 segment(s) on tx-a" in notes[0].message
+
+    def test_a_successful_alignment_warns_about_nothing(self) -> None:
+        plan = a_plan("req-1", (an_ownership("cand-a", RATE, RATE * 2),))
+        _, notes = draft(an_outcome(plan, "hi", (a_word(RATE + 1, "hi"),)))
+        assert notes == []
+
+
 class TestOrdering:
     def test_drafts_are_ordered_by_time_then_track(self) -> None:
         early = a_plan("req-1", (an_ownership("cand-a", RATE, RATE * 2),), track="tx-b")
