@@ -293,20 +293,65 @@ cheap extension if it ever fails is to compare across a process restart as well,
 warm HIP context can be reproducible where a cold one is not.
 **Needs:** M6b · **Blocks:** nothing — INV-02 is a claim about artifacts, and if the answer
 is no the fix is to say so in the invariant rather than to change the pipeline ·
-**Status:** open
+**Status:** **answered — yes, on this stack, in process and across processes** (M6b,
+2026-08-03)
 
 **Raised by M6b's plan review**, which noticed that a rule two milestones old had quietly
-acquired a new dependency nobody had written down. If the answer turns out to be no, the
-honest consequence is that INV-02's byte-stability guarantee holds for everything the
-pipeline *computes* and not for what the model *says*, and the invariant gets amended to
-name the boundary. See [ADR-0028](decisions/0028-the-qwen-adapter-seam.md).
+acquired a new dependency nobody had written down.
+
+**Answer — reproducible, and compared exactly rather than within a tolerance.** Two
+measurements on `gfx1151` in bfloat16 through ROCm SDPA:
+
+- **In process**, the same request submitted twice with the cache bypassed returns identical
+  text, identical language, identical truncation verdict, and **identical word times** — done
+  for two different pieces of real audio, because one short utterance agreeing with itself
+  could be a coincidence of having little to disagree about
+  (`tests/test_qwen_smoke.py::TestOq022Determinism`).
+- **Across processes**, which is the stronger claim and the one the review specifically asked
+  for, since a warm HIP context can be reproducible where a cold one is not: two separate
+  interpreter runs, each loading the models from scratch, produced byte-identical text and
+  the same fifteen word times.
+
+Sampling is disabled explicitly rather than inherited from the snapshot's
+`generation_config.json` (`qwen.py::_force_greedy`), so this is a statement about greedy
+decoding and not about a temperature that happened to be zero.
+
+**INV-02 therefore stands as written**, and needs no amendment naming a model boundary. What
+would overturn this is a different GPU, a different ROCm or Torch version, or a batch size
+above one — none of which this project uses today, and all of which are in the ASR cache key
+(INV-08), so a change to any of them re-runs the work rather than serving an answer produced
+under different arithmetic. See [ADR-0028](decisions/0028-the-qwen-adapter-seam.md).
 
 ## OQ-009 — Where does `qwen-asr`'s timestamp path actually chunk?
 **Assumption:** 180 s in 0.0.6, which is why `max_segment_s` defaults to 120 and
 the advertised five-minute model limit is not trusted.
 **Why it matters:** Segment construction in M4 and request sizing in M6b.
 **Evidence:** Reading the installed package plus a long-segment experiment.
-**Needs:** M6b · **Blocks:** M6b · **Status:** open
+**Needs:** M6b · **Blocks:** M6b · **Status:** **answered — 180 s, and it is not on this
+project's route at all** (M6b, 2026-08-03)
+
+**Answer — the assumption was exactly right about the number.**
+`qwen_asr/inference/utils.py` declares `MAX_FORCE_ALIGN_INPUT_SECONDS = 180` against
+`MAX_ASR_INPUT_SECONDS = 1200`, and `Qwen3ASRModel.transcribe` picks between them on
+`return_time_stamps`. So the timestamp path chunks at 180 s, the advertised five-minute
+model limit is indeed not the package limit, and `max_segment_s`'s 120 s cap sits under
+both with room to spare.
+
+**What the reading alone does not show is that neither limit binds here.** The chunking
+lives in `Qwen3ASRModel.transcribe`, and M6b's adapter never calls it: the package's
+combined `transcribe(return_time_stamps=True)` runs alignment *after* ASR and destroys
+already-generated text when the aligner raises, which makes the gate's "alignment failure
+retains the segment text" unimplementable through it. The adapter therefore drives
+`transcribe(return_time_stamps=False)` and `Qwen3ForcedAligner.align` separately
+(**ADR-0028**) — and `align` does no chunking at all. So on this route the ASR call would
+chunk at 1200 s and alignment never chunks, while `max_segment_s` holds every padded window
+at or under 120 s regardless.
+
+Both halves are asserted in `tests/test_qwen_smoke.py::TestOq009WhereThePackageChunks`: the
+constants, and that `align`'s source contains neither `split_audio_into_chunks` nor
+`return_time_stamps`. **The 120 s cap stays**, because it is the number that actually bounds
+a request's memory and latency, and because a limit that is currently unreachable is a poor
+thing to rely on remaining unreachable.
 
 ## OQ-010 — How is Silero pinned and loaded without a runtime `torch.hub` fetch?
 **Assumption:** A pinned package plus a locally vendored/cached model artifact with
@@ -361,7 +406,26 @@ of frames falls back to `duration_ts` instead of flooring, which would invent a 
 the start is a capture-procedure problem the pipeline should detect and warn about.
 **Evidence:** Displayed timecode/rate on all three receivers recorded after the
 jam procedure, cross-checked against the files' embedded timecode.
-**Needs:** H1 · **Blocks:** nothing directly · **Status:** open
+**Needs:** H1 · **Blocks:** nothing directly · **Status:** open — **and the first real
+attempt is reported to have failed**
+
+**Operator report (2026-08-03), about the 2026-08-02 sample probe.** Within each pair the
+two transmitters are timecode-synced — TX01 with TX02, TX03 with TX04 — but the jam
+*between* the two receivers is believed not to have taken, so the four files are not
+mutually aligned. Reported rather than measured: no displayed timecode was recorded at
+capture, which is the evidence this entry actually asks for.
+
+It is consistent with what the files say. **OQ-004** derived per-receiver epochs of
+19:20:26.9 and 19:21:16.8 from the `bext` references — about fifty seconds apart, which is
+what two independently-started receivers look like and not what a successful jam does.
+
+**Two consequences.** For M6b, none: every measurement in this milestone used TX03 and TX04
+only — one receiver, one pair — so nothing here rests on cross-receiver alignment. For H1,
+this is the first sign that the jam procedure is a step that can silently not work, which is
+exactly the "capture-procedure problem the pipeline should detect and warn about" this entry
+names. `session.sync_qa` (M2, off by default) is the instrument that would have caught it
+from the audio, and running it on the sample pair is a cheap way to turn this report into a
+measurement.
 
 ## OQ-013 — How much working disk does a full session actually consume?
 **Assumption:** Roughly 25 GiB for a four-hour six-transmitter session — about 15 GiB of
@@ -530,6 +594,68 @@ default would cite an open question and then had none to cite for any of these: 
 only the package's segment limit and OQ-017 only the acoustic side of bleed. Every
 request-shaping and text-similarity default in `TranscriptConfig` cites this entry, so
 `rg 'OQ-018'` finds all of them at once.
+
+---
+
+**Items (1)–(3) measured against the real model** (M6b, 2026-08-03). 47 s of real speech from
+the sample probe, on `gfx1151` in bfloat16; `tests/test_qwen_smoke.py` is the instrument and
+prints every number below. Item (4) is untouched and still needs a real session.
+
+**(2) Timestamp stability — answered, and the answer is better than the rule needs.** Two
+requests over the same audio, offset by four seconds so they share twelve. Paired the way M4's
+stitch rule pairs — same `comparison_key` *and* overlapping in time:
+
+| recording | paired words | worst disagreement |
+| --- | --- | --- |
+| TX03 (`pcm_f32le`, receiver B) | 18 | **400 ms** (17 of 18 at exactly 0) |
+| TX01 (`pcm_s24le`, receiver A) | 20 | **0 ms** (20 of 20 exact) |
+
+The stitch rule recognizes a duplicate on text plus overlap, and a word whose two placements
+are bit-identical overlaps itself trivially. The failure this item was raised against — times
+wandering by more than a word's length, so the duplicate is emitted twice — is not happening.
+Two recordings from two different receivers and two different sample formats agree, which is
+what makes this a property of the model rather than of one file.
+
+*A note on how that number was obtained, because the first attempt got it wrong.* Matching
+shared words by text alone reported five outliers of 2–9 seconds. Those were the test's
+fault: the recording says "testing", "a" and "transmitter" twice, and a text-only key paired
+the first occurrence in one window with the second in the other. Pairing the way the rule
+under test actually pairs is the fix, and it is worth remembering that a measurement of a
+stitch rule has to use the stitch rule's own notion of "the same word".
+
+**(3) Truncation — answered.** With `max_new_tokens` forced to 8, the model returned
+`'Testing a first transmitter. Hello, one'` — visibly cut off mid-utterance — and the
+retokenized-length heuristic flagged it. At the default 1024 the same audio is not flagged, so
+the heuristic is not trivially satisfiable. That is the whole of truncation detection, because
+0.0.6 exposes no finish reason (**ADR-0028**). Whether a low-energy split *resolves* a
+truncation better than the midpoint is still unmeasured: an eight-token ceiling truncates
+everything, and a natural truncation needs an utterance long enough to exhaust 1024 tokens,
+which 47 seconds of one person testing microphones does not contain.
+
+**(1) Padding — answered, and it found something the question was not asking about.**
+The padding does its job: submitted a window padded by `transcript.pad_ms` and the same speech
+clipped hard at its first and last aligned words, the model returned *identical text* both
+times. `pad_ms` = 500 is not the constraint.
+
+**What is** is the ownership boundary, and it is costing real words. On the real end-to-end
+run, the model heard `'Testing a first transmitter. Hello. One two three. Here we go.'` and the
+transcript recorded `'a first transmitter Hello One two three Here we go'`. The aligner places
+"Testing" at 10.480 s; the VAD candidate's ownership interval begins at 10.530 s; M4's rule —
+a word belongs to the interval containing its **start** — correctly drops it. Five of eleven
+retained segments lost their opening word this way, always the word the utterance starts with.
+
+Two things follow, and neither is M6b's to act on:
+
+- **It is a threshold, not a defect.** `activity.vad.pad_ms` is 30 ms, and a stop consonant
+  like the /t/ in "Testing" is exactly the onset a VAD is late on. M4's ownership rule and the
+  transcript padding are both behaving as designed. The number that is wrong is M3's, it is
+  registered here and under **OQ-017** as a value chosen against synthetic audio, and it is
+  the kind of thing only a real model on real speech could have revealed.
+- **This recording is not enough to retune on.** It is one operator holding one mic at a time
+  — the deliberately hard geometry OQ-017 already describes — and moving a detection threshold
+  on 47 seconds of it would be over-fitting to a microphone test. A real table is what should
+  move it, and when it does, the symptom to look for is a transcript quietly missing the first
+  word of an utterance rather than anything that raises.
 
 ## OQ-019 — What do the automix constants need to be at a real table?
 **Assumption:** Six numbers, each of which M5 has to choose before anyone has heard a mix:

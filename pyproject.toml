@@ -210,7 +210,7 @@ ignore_missing_imports = true
 # into `QwenText`/`AlignedItem`, so no untyped object escapes `_TransformersBackend`
 # (ADR-0028).
 [[tool.mypy.overrides]]
-module = ["qwen_asr"]
+module = ["qwen_asr", "qwen_asr.*"]
 ignore_missing_imports = true
 
 [tool.pydantic-mypy]
