@@ -116,14 +116,56 @@ itself is not evidence.
 
 **Consequence, not yet acted on.** `rg 'OQ-004'` finds the sites that encode the old
 reading — `timeline/rasterize.py`'s conversion and the assumption string M1 stamps into
-every manifest. Two things follow and neither is done: absolute wall-clock placement from a
-BWF reference alone is **not available** on this hardware, and cross-receiver alignment from
-it is meaningless because the epochs differ. Within one receiver the value still looks
-usable for relative placement, to ±33 ms. **This is a scoped piece of work on M1 and M2,
-deliberately left undone at the time of writing** so it is not folded into an unrelated
-session. INV-12 already forbids inventing timing, which is the behaviour that keeps this
-safe in the meantime: a wrong *epoch* shifts a whole session uniformly rather than
-scrambling it, and the clap-sync QA exists to catch the cross-receiver case.
+every manifest. Absolute wall-clock placement from a BWF reference alone is **not available**
+on this hardware. Within one receiver the value is usable for relative placement, to ±33 ms.
+**This is a scoped piece of work on M1 and M2, deliberately left undone at the time of
+writing** so it is not folded into an unrelated session. INV-12 already forbids inventing
+timing, which is what keeps this safe in the meantime: a wrong *epoch* shifts a whole session
+uniformly rather than scrambling it, and the clap-sync QA exists to catch the cross-receiver
+case.
+
+---
+
+**Reframed 2026-08-03, and the reframe shrinks the work considerably. A *shared* origin is
+sufficient; wall clock was never the requirement.**
+
+Placing six tracks on one timeline is `rasterize.session_position(source_time,
+session_zero_time)` — a **subtraction**. A common epoch cancels out of it no matter what that
+epoch means. Wall-clock time is useful for archival naming and for a human reading a report;
+it is not needed to align anything. Earlier phrasing here treated "not midnight-relative" as
+though it invalidated the quantity, when what it invalidates is the *label*.
+
+So the requirement is not "recover real time" but **"make every file share one origin"**, and
+the hardware already has a mechanism for that: jamming receivers L-OUT → L-IN, which the
+operator can perform and watch succeed on the displays (**OQ-012**). Whether the jammed value
+reaches `bext.time_reference` is the thing that actually decides this, and it is **OQ-023** —
+untested, and the first thing to test.
+
+**What genuinely breaks, narrowly.** Only the case where session zero comes from a configured
+wall-clock `timecode.origin_timecode` while the files carry a power-on-relative count: the
+subtraction then spans two unrelated origins, and the day-origin and 24-hour-wrap logic in
+`timeline/origin.py` assumes a real day that these files do not have. Inferring session zero
+from the earliest source instead sidesteps all of it, and that path already exists.
+
+**Two corrections to what was written above, from DJI's documentation** ([FAQ](https://www.dji.com/mic-3/faq),
+[Introduction to the Use of Timecode](https://support.dji.com/help/content?customId=01700007306&spaceId=17&re=US&lang=en&documentType=&paperDocType=ARTICLE)):
+
+- **There is no time-of-day mode to misconfigure.** Timecode is "a frame counter relative to
+  recording duration"; it "resets to zero and restarts"; users cannot set its value. The
+  per-receiver epochs are the hardware behaving as designed, not a settings mistake — so
+  there is nothing to fix at capture on that axis, only something to *share* via a jam.
+- **33.3 ms is not the floor.** Supported rates are 23.98, 24, 25, 29.97, 29.97DF, 30, **50
+  and 60**. The sample files declare 30/1. At **60 fps the quantum halves to 800 samples —
+  16.7 ms**. That is a menu setting and should be applied before the next capture regardless
+  of how OQ-023 resolves.
+
+**An unused signal worth remembering.** `bext.origination_date`/`origination_time` carry real
+wall clock — 19:26:55 on the rx-a pair, 19:27:39 on rx-b — consistent within each receiver.
+The strategy chain in `inspection/starttime.py` reads `time_reference` and a timecode tag and
+**nothing reads these**. One-second resolution cannot place a session precisely, but it bounds
+a cross-receiver offset to ±1 s, which is exactly the search window a correlator needs and
+does not currently have. Caveat: two receivers' real-time clocks are independent and may not
+agree with each other, so this is a hint to be verified, never evidence on its own (INV-12).
 
 **What M2 does with it.** `timeline/rasterize.py` treats a `bwf_sample_reference` as
 unsigned samples since **midnight at the file's own rate**, converts it to exact rational
@@ -406,14 +448,19 @@ of frames falls back to `duration_ts` instead of flooring, which would invent a 
 the start is a capture-procedure problem the pipeline should detect and warn about.
 **Evidence:** Displayed timecode/rate on all three receivers recorded after the
 jam procedure, cross-checked against the files' embedded timecode.
-**Needs:** H1 · **Blocks:** nothing directly · **Status:** open — **and the first real
-attempt is reported to have failed**
+**Needs:** H1 · **Blocks:** nothing directly · **Status:** open — **the capability is
+confirmed on the devices; what is unverified is whether it reaches the files (OQ-023)**
 
-**Operator report (2026-08-03), about the 2026-08-02 sample probe.** Within each pair the
-two transmitters are timecode-synced — TX01 with TX02, TX03 with TX04 — but the jam
-*between* the two receivers is believed not to have taken, so the four files are not
-mutually aligned. Reported rather than measured: no displayed timecode was recorded at
-capture, which is the evidence this entry actually asks for.
+**The capability is not in doubt (operator, 2026-08-03).** Connecting the receivers
+L-OUT → L-IN and pressing SYNC visibly aligns the timecodes on their displays. This entry
+previously read as though the jam were unreliable equipment; it is not. What follows below
+is about one specific capture that predates a jam, and the earlier phrasing over-generalized
+from it.
+
+**About the 2026-08-02 sample probe specifically.** Within each pair the two transmitters
+are timecode-synced — TX01 with TX02, TX03 with TX04 — but the four files are not mutually
+aligned. No displayed timecode was recorded at capture, which is the evidence this entry
+actually asks for, so this is inference from the files rather than measurement.
 
 It is consistent with what the files say. **OQ-004** derived per-receiver epochs of
 19:20:26.9 and 19:21:16.8 from the `bext` references — about fifty seconds apart, which is
@@ -421,11 +468,17 @@ what two independently-started receivers look like and not what a successful jam
 
 **Two consequences.** For M6b, none: every measurement in this milestone used TX03 and TX04
 only — one receiver, one pair — so nothing here rests on cross-receiver alignment. For H1,
-this is the first sign that the jam procedure is a step that can silently not work, which is
-exactly the "capture-procedure problem the pipeline should detect and warn about" this entry
-names. `session.sync_qa` (M2, off by default) is the instrument that would have caught it
-from the audio, and running it on the sample pair is a cheap way to turn this report into a
+the lesson survives the correction above even though the diagnosis changed: the jam is a step
+whose *outcome is not visible in the output*, so the recipe has to capture evidence of it at
+the time. `session.sync_qa` (M2, off by default) is the instrument that would settle it from
+the audio, and running it on the sample pair is a cheap way to turn this inference into a
 measurement.
+
+**What this entry is actually asking, restated.** Two receivers holding the same displayed
+timecode is necessary and not sufficient. The pipeline never sees a display — it reads
+`bext.time_reference`. Whether a jammed display propagates into the written file is a
+separate assumption and is now **OQ-023**, which is the one to test first, because if it
+fails then holding identical timecode on the displays buys this project nothing.
 
 ## OQ-013 — How much working disk does a full session actually consume?
 **Assumption:** Roughly 25 GiB for a four-hour six-transmitter session — about 15 GiB of
@@ -748,3 +801,46 @@ which the spec forbids in as many words. The failure direction is safe either wa
 first real session answers both halves by being encoded once. A 10.5-second fixture answers
 neither: overshoot is a property of material with real dynamics over a real duration.
 **Needs:** H2 or the first real session · **Blocks:** nothing · **Status:** open
+
+## OQ-023 — Does the receiver's displayed timecode reach `bext.time_reference` in the WAV?
+**Assumption:** Yes. The receiver holds one timecode, shows it on the display, and writes
+that same value into every file its transmitters record — so jamming two receivers to a
+common count makes their files mutually placeable.
+**Why it matters:** **This is the assumption the whole cross-receiver synchronization
+strategy rests on, and it is the one nobody has checked.** The operator can connect
+L-OUT → L-IN, press SYNC, and watch two displays align (**OQ-012**) — but the pipeline never
+sees a display. It reads `bext.time_reference` through FFprobe. If the displayed timecode and
+the written reference have different origins, then a jam that visibly succeeds produces files
+that are no more alignable than unjammed ones, and the failure is invisible at capture time
+*and* at ingest time. That is the worst shape a failure can have here: a procedure the
+operator correctly believes worked.
+
+There is a specific reason to doubt it rather than merely to check it. DJI's documentation
+describes timecode as "a frame counter relative to recording duration" that "resets to zero
+and restarts", with no facility for the user to set its value — while the 2026-08-02 sample
+files carry references implying **per-receiver power-on epochs about fifty seconds apart**
+(**OQ-004**). Both are consistent with a device-local counter. Neither tells us what a jam
+does to the number that gets written.
+
+**Evidence:** Jam the receivers, confirm the displays match, then record ten seconds on both
+simultaneously and run `dnd-audio inspect`. The discriminator is whether the two receivers'
+files now imply the **same** epoch. Do this before a real session, not during one — it costs
+five minutes and it decides whether the capture is usable.
+
+Three outcomes worth telling apart:
+
+1. **Epochs match.** The jam propagates. Cross-receiver alignment is solved to one frame
+   (16.7 ms at 60 fps — see **OQ-004**), and `session.sync_qa` refines from there.
+2. **Epochs still differ by the pre-jam amount.** The written reference ignores the jam
+   entirely and is a device-local counter. Cross-receiver alignment must then come from the
+   audio — `session.sync_qa` and a shared transient — and the timecode is per-receiver only.
+3. **Epochs differ by something new.** The jam reaches the file partially or with an offset,
+   which is the case most likely to be silently wrong in production and most deserving of a
+   warning.
+
+**A warning is wanted in every case except (1).** The pipeline can compute the implied epoch
+per source at ingest and compare across receivers; disagreement is exactly the
+"capture-procedure problem the pipeline should detect and warn about" OQ-012 names, and
+unlike the display it is checkable after the fact, on every session, for free.
+**Needs:** H1, or five minutes with the receivers · **Blocks:** nothing yet — but it decides
+what OQ-004's rework has to achieve · **Status:** open

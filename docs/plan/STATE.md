@@ -53,6 +53,16 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
   registered under **OQ-017**, and a real table is what should move it. **Nothing raises or
   warns** — the symptom is prose that reads fine and is missing a word.
 
+  **OQ-023, new and cheap, is the highest-value thing to do next.** The receivers can be
+  jammed L-OUT → L-IN and the displays visibly agree — but nothing has ever checked whether
+  that jammed value reaches `bext.time_reference`, which is the only timecode the pipeline
+  reads. Five minutes with the receivers settles it, and it decides how much of OQ-004's
+  rework is real: **a shared origin is sufficient for alignment, wall clock was never the
+  requirement**, so if the jam propagates then cross-receiver placement is solved to one
+  frame and the remaining work is a mislabelled quantity rather than a broken one. Set the
+  receivers to **60 fps** first — the finest rate the Mic 3 offers, halving the quantum to
+  16.7 ms.
+
   **OQ-008 answered** (M6a): `torch 2.9.1+rocm7.13.0` (HIP `7.13.99004-3309c6114a`) on
   `Radeon 8060S Graphics` / `gfx1151`, bfloat16 and float32 both exact.
   **OQ-009 answered** (M6b): the package chunks its timestamp path at 180 s, and that path

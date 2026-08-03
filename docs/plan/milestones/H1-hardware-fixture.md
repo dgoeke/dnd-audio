@@ -15,10 +15,26 @@ multi-hour clock stability, which is H2.
 ## Recording recipe (for the owner)
 
 - [ ] Durable labels on receivers `rx-a`–`rx-c` and transmitters `tx-a`–`tx-f`.
-- [ ] Same frame rate configured on all three receivers.
-- [ ] Kits kept as three independent two-transmitter groups (a group holds only four).
+- [ ] **Timecode frame rate set to 60 fps on all three receivers.** Same rate everywhere is
+      the requirement; 60 is the choice, because DJI's written reference is quantized to one
+      frame and 60 is the finest rate the Mic 3 offers. It halves the quantum from 1600
+      samples to 800 — 33.3 ms to 16.7 ms. The sample probe was recorded at 30/1 (**OQ-004**).
+- [ ] Kits kept as independent groups. **A group holds up to four transmitters and eight
+      receivers**, so six transmitters force at least two groups — but receivers *within* a
+      group auto-sync timecode wirelessly, at intervals, with no user action. Only the
+      cross-group boundary needs a jam.
 - [ ] Jam: receiver A LTC out → receiver B LTC in, Sync, disconnect. Then A → C,
-      Sync, disconnect.
+      Sync, disconnect. **Confirm on each display that the timecode matches A's before
+      disconnecting.** DJI also documents jamming from an external generator (Deity TC-1,
+      Tentacle Sync), which is worth preferring over a daisy chain if one is available.
+- [ ] **Verify the jam reached the files before recording anything that matters
+      (OQ-023).** Immediately after jamming, record ten seconds on every receiver
+      simultaneously, then run `dnd-audio inspect` on the result and compare the epoch each
+      receiver's file implies — `time_reference ÷ 48000` subtracted from
+      `bext.origination_time`. **They must agree.** This is the assumption the entire
+      cross-receiver strategy rests on and it has never been checked; the display agreeing
+      does not establish it, because the pipeline never sees the display. Five minutes here
+      decides whether the session's timing is usable at all.
 - [ ] Record the displayed timecode and rate on all three receivers after the
       procedure, **against wall-clock time** — this is the only evidence for OQ-012 and
       OQ-015 and it cannot be recovered later. OQ-015 asks whether `00:00:00:00` is real
@@ -92,7 +108,13 @@ they matter rather than merely that they were on a list:
 
 - [ ] Every `OQ-` entry with `Needs: H1` is marked `answered` (with the evidence) or
       explicitly re-scoped: **OQ-001, OQ-002, OQ-003, OQ-004, OQ-005, OQ-007,
-      OQ-011, OQ-012, OQ-015**.
+      OQ-011, OQ-012, OQ-015, OQ-023**.
+- [ ] **OQ-023 answered first, and separately.** It is the only one here that can be settled
+      in five minutes with no session at all, and it decides what OQ-004's rework has to
+      achieve — so it should be answered *before* the fixture is recorded rather than
+      alongside it. If a jammed display does not reach `bext.time_reference`, cross-receiver
+      alignment has to come from the audio and the recipe needs a shared transient loud
+      enough for `session.sync_qa` to correlate on.
 - [ ] A fixture note in `docs/` documents the discovered filename grammar, metadata
       layout, and timecode behavior, including what differed from the assumptions.
 - [ ] Sanitized `ffprobe` JSON and the generic RIFF chunk inventory are committed.
