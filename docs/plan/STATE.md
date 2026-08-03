@@ -78,7 +78,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | M3  | Activity                   | closed      | `38bc989` |
 | M4  | Fake transcript            | closed      | `8556f43` |
 | M5  | Automix                    | closed      | `d282688` |
-| M6a | ROCm environment           | not started | —         |
+| M6a | ROCm environment           | verified    | —         |
 | M6b | Qwen adapter               | not started | —         |
 | H1  | Hardware fixture (2 min)   | not started | —         |
 | H2  | Drift soak / first session | not started | —         |
