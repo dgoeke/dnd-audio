@@ -36,13 +36,38 @@
         pkg-config
       ];
 
-      # Held for M6a. AMD's gfx1151 Torch wheels pull a `rocm[libraries]` sdist that
-      # builds at install time and expects a /usr/lib layout, which is what an FHS
-      # sandbox provides and `mkShell` does not.
+      # Two gfx1151 knobs, applied by both shells. Neither is tuning-for-taste and both
+      # fail *silently* when unset, which is why they are set here rather than left in a
+      # README (`dnd-audio doctor` re-checks them, so this stays verifiable):
       #
-      # M0 proves only that this opens. The package list is modelled on the host's
-      # ComfyUI service and is a starting point for M6a to refine against a real
-      # ROCm install, not a validated set.
+      #   TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL — gfx1151 is not on AOTriton's
+      #     officially supported list, so its SDPA kernels are gated behind this flag.
+      #     Without it Torch falls back to the math SDPA backend: correct, much slower,
+      #     and nothing in the output says the fast path was skipped.
+      #   HSA_ENABLE_SDMA — stability, not speed. gfx1151's SDMA copy engines are
+      #     implicated in ring timeouts and GPU resets during large transfers. With SDMA
+      #     off, copies go through compute-queue blits, which on a UMA host costs
+      #     approximately nothing.
+      #
+      # Deliberately NOT promoted to host defaults yet; that waits for M6b's real
+      # transcription smoke test. ComfyUI's other knobs (HSA_USE_SVM, MIOPEN_FIND_MODE)
+      # are separate performance tuning and are not assumed to help ASR.
+      rocmEnv = {
+        TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL = "1";
+        HSA_ENABLE_SDMA = "0";
+      };
+
+      exportRocmEnv = lib.concatStringsSep "\n" (
+        lib.mapAttrsToList (name: value: "export ${name}=${value}") rocmEnv
+      );
+
+      # AMD's gfx1151 Torch wheels pull a `rocm[libraries]` sdist that builds at install
+      # time and expects a /usr/lib layout, which is what an FHS sandbox provides and
+      # `mkShell` does not.
+      #
+      # M0 proved only that this opens; M6a used it in anger and the package list below
+      # needed no additions — the `rocm` sdist built first time against exactly this
+      # toolchain (ADR-0025). It is now a tested set rather than a starting point.
       fhsEnv = pkgs.buildFHSEnv {
         name = "dnd-audio-fhs";
         targetPkgs =
@@ -69,6 +94,7 @@
             curl
             which
           ]);
+        profile = exportRocmEnv;
         runScript = "bash";
       };
     in
@@ -100,6 +126,11 @@
             export UV_PYTHON_DOWNLOADS=never
 
             export LD_LIBRARY_PATH=${lib.makeLibraryPath nativeLibs}''${LD_LIBRARY_PATH:+:}''${LD_LIBRARY_PATH:-}
+
+            # Set here too, not only in the FHS shell. `dnd-audio doctor` runs from this
+            # shell and reports on them, and a variable that were set only where the GPU
+            # work happens would make doctor's answer differ from the run's.
+            ${exportRocmEnv}
           '';
         };
 

@@ -37,6 +37,8 @@ from __future__ import annotations
 import datetime as dt
 import shutil
 import socket
+import sys
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -111,6 +113,44 @@ def _blocked_function(name: str) -> Any:
         raise NetworkAccessBlockedError(message)
 
     return blocked
+
+
+@pytest.fixture(autouse=True)
+def no_torch_import(request: pytest.FixtureRequest) -> Iterator[None]:
+    """Fail any default-suite test that leaves Torch resident in ``sys.modules``.
+
+    INV-05's other half, and it exists because the first version of M6a broke it. `doctor`
+    legitimately probes the GPU — that is its job — so the four `test_cli.py` invocations
+    of it started importing Torch and running kernels *inside the default suite*. On the
+    project environment nothing happened, because there is no Torch to import. On the ROCm
+    environment the suite began doing GPU work it is specified not to do, and the only
+    symptom was an unrelated test in `test_silero.py` failing on run order.
+
+    That is the shape this project keeps rediscovering: a rule held by convention, honoured
+    everywhere it was thought about, and broken by the one place nobody did. So it is a
+    fixture now, like the socket block above, and it names the test that did it rather than
+    the test that noticed.
+
+    Scoped to *newly* resident: a test that runs after one which already imported Torch is
+    not the culprit, and blaming it would send the next person to the wrong file.
+    ``host_smoke`` is exempt, since needing the real device is the whole point of the mark.
+    """
+    if request.node.get_closest_marker("host_smoke"):
+        yield
+        return
+
+    before = "torch" in sys.modules
+    yield
+    if not before and "torch" in sys.modules:
+        pytest.fail(
+            "this test imported torch, which the default suite must not do (INV-05). "
+            "Torch is in the opt-in `asr-qwen` group, so on the project environment this "
+            "would have been an ImportError instead — the failure only appears on the "
+            "ROCm environment, which is why it needs a fixture rather than a habit. "
+            "Inject a `RuntimeProbe` instead of measuring the machine, or mark the test "
+            "`host_smoke`.",
+            pytrace=False,
+        )
 
 
 @pytest.fixture

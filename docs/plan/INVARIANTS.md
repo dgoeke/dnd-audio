@@ -70,7 +70,25 @@ _Owner: M2._
 Everything except tests marked `host_smoke` must pass with no network, no GPU, and
 no model weights. Socket access is blocked by an autouse fixture so a violation
 fails loudly instead of quietly depending on the developer's machine.
-_Owner: M0._
+**"CPU-only" means the suite does no GPU work, not merely that it survives without one**
+(M6a). Three mechanisms, because one is not enough:
+- The heavyweight runtime lives in the opt-in `asr-qwen` group and installs into a
+  *separate* environment (`.venv-rocm`), never `.venv`. The gate runs `--no-sync` against
+  `.venv`, so it keeps **running** the group-absent case rather than proving it once
+  (ADR-0025).
+- An autouse `no_torch_import` fixture fails any non-`host_smoke` test that leaves Torch
+  newly resident in `sys.modules`, naming the test that imported it rather than the one
+  that noticed. `doctor` legitimately probes the GPU, so its in-process callers must inject
+  a `RuntimeProbe` instead of measuring the machine.
+- **A subprocess has its own address space, so neither fixture can see into one** — the
+  same honest boundary `conftest.py` already records for the socket block. A subprocess
+  test that touches `doctor` or `dnd_audio.runtime` must shadow `torch` on the child's
+  `PYTHONPATH` (`tests/test_runtime.py::shadow`). Two did not, and launched real HIP
+  kernels inside the default suite.
+**Run the default suite from the ROCm environment periodically. No gate does.** That is
+the only place the second and third mechanisms can fail, and it is how M6a's breach was
+found — as an unrelated test failing on run order and blaming itself.
+_Owner: M0; the GPU half M6a._
 
 **INV-06 — Session audio never leaves the machine.**
 Audio is passed to models as local paths or in-memory arrays. No cloud ASR, no

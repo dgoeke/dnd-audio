@@ -23,7 +23,10 @@ samples/
 # Python
 __pycache__/
 *.py[cod]
-.venv/
+# `.venv` is the project environment; `.venv-rocm` is the opt-in ROCm one the
+# `asr-qwen` group installs into, kept separate so the everyday gate keeps running the
+# group-absent case rather than proving it once (ADR-0025).
+.venv*/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/

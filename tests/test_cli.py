@@ -10,6 +10,7 @@ exist. The subprocess tests cover that, and they are what the spec's user contra
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -18,11 +19,14 @@ import pytest
 from typer.testing import CliRunner
 
 from dnd_audio import cli, models
+from dnd_audio import doctor as doctor_module
 from dnd_audio.cli import app
 from dnd_audio.determinism import sha256_bytes
 from dnd_audio.errors import ExitCode
 from dnd_audio.fixtures import FixtureTruth
 from dnd_audio.models import ModelDescriptor
+from dnd_audio.runtime import RuntimeProbe
+from tests.test_runtime import shadow
 
 runner = CliRunner()
 
@@ -92,6 +96,28 @@ class TestCommandSurface:
 
 
 class TestDoctorCommand:
+    """The command wiring, with the hardware measurement substituted.
+
+    `doctor` genuinely probes the GPU — that is its job, and it is the one command allowed
+    to. But these tests run it *in process*, so an unsubstituted probe would import Torch
+    and launch kernels inside the default suite, which INV-05 forbids. On the project
+    environment that is invisible, because there is no Torch to import; on the ROCm
+    environment it is real, and it first showed up as an unrelated failure in
+    `test_silero.py` that depended on run order. `conftest.py`'s `no_torch_import` fixture
+    is the general guard; this is the local fix.
+
+    What is under test here is the CLI: exit codes, output shape, argument handling. The
+    checks themselves are `test_doctor.py`'s, and the real device is `host_smoke`'s.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _bare_machine(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            doctor_module,
+            "probe_runtime",
+            lambda: RuntimeProbe(installed=False, error="No module named 'torch'"),
+        )
+
     def test_runs_and_reports(self, tmp_path: Path) -> None:
         result = runner.invoke(app, ["doctor", str(tmp_path)])
         assert result.exit_code == ExitCode.OK
@@ -220,9 +246,31 @@ class TestInstalledConsoleScript:
         assert "dnd-audio" in completed.stdout
 
     def test_doctor_works(self, tmp_path: Path) -> None:
-        completed = self._run("doctor", str(tmp_path), "--json")
-        assert completed.returncode == 0
-        assert json.loads(completed.stdout)["checks"]
+        """The installed script really runs — with Torch shadowed out of the child.
+
+        `doctor` probes the GPU, which is its job. But this is the default suite, and a
+        subprocess is exactly where `conftest.py`'s `no_torch_import` fixture cannot look:
+        it watches the parent's `sys.modules`. Unshadowed, this test launched real HIP
+        kernels whenever it ran from the ROCm environment, and nothing noticed. Found by
+        the verify phase's independent review; `test_runtime.py` owns the helper.
+        """
+        shadow(tmp_path / "shadow")
+        env = dict(os.environ)
+        existing = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = str(tmp_path / "shadow") + (os.pathsep + existing if existing else "")
+        completed = subprocess.run(
+            [str(CONSOLE_SCRIPT), "doctor", str(tmp_path), "--json"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=120,
+            env=env,
+        )
+
+        assert completed.returncode == 0, completed.stderr
+        checks = {check["name"]: check for check in json.loads(completed.stdout)["checks"]}
+        assert checks
+        assert "not installed" in checks["torch"]["detail"], "the shadow did not take"
 
     def test_an_unbuilt_adapter_exits_with_the_not_implemented_code(
         self, canonical_fixture: FixtureTruth

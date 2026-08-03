@@ -112,9 +112,64 @@ complete cache identity — dropped in behind the interface M4 already exercises
   snapshot, which is where a model that holds a file descriptor or mutates a shared path
   shows up and a single-branch run does not.
 
+## What M6a already provides (read before starting)
+
+- **The environment works and OQ-008 is answered.** `torch 2.9.1+rocm7.13.0` (HIP
+  `7.13.99004-3309c6114a`) resolves from AMD's gfx1151 index, installs into `.venv-rocm`
+  from inside the FHS shell, and computes both bfloat16 and float32 exactly right on
+  `Radeon 8060S Graphics` / `gfx1151`. `transformers==4.57.6` and `accelerate==1.12.0` are
+  already locked at the versions `qwen-asr` 0.0.6 pins, **so adding `qwen-asr` should not
+  relock or redownload the stack** — if it wants to, something moved and that is worth
+  understanding before accepting it.
+- **There are two environments.** `.venv` is the project one and never carries torch;
+  `.venv-rocm` is the ROCm one. Anything touching torch runs as
+  `nix run .#fhs -- -c 'UV_PROJECT_ENVIRONMENT=.venv-rocm …'`. Do not sync the group into
+  `.venv`: the everyday gate runs `--no-sync` against it, and that is what keeps INV-05's
+  group-absent case continuously proved rather than proved once (ADR-0025).
+- **`[tool.uv.sources]` only routes packages that are also *direct* members of a
+  dependency list.** A transitive-only requirement resolves from PyPI regardless —
+  silently, with the wrong registry simply recorded in the lock. `qwen-asr` pulls Gradio,
+  Flask, `nagisa`, `soynlp` and Python SoX; if any of them brings an AMD-only requirement,
+  the fix is to add it to the group *and* the sources table.
+  `test_packaging.py::test_every_routed_package_is_also_a_direct_dependency` is the guard,
+  and `test_everything_else_comes_from_pypi` is what catches the silent case.
+- **`dnd_audio.runtime` is the seam, and it is finished.** `probe_runtime()` returns one
+  frozen `RuntimeProbe` — device nodes, torch/HIP identity, gfx target, and which dtypes
+  computed correctly on which device. `resolve_runtime(device=…, dtype=…, probe=…)` is a
+  pure function of it and already implements every rule the spec states. The adapter calls
+  both once and then honours the answer; nothing in the resolution logic should need to
+  change (ADR-0026).
+- **The report's `runtime` subsection exists and is empty, and filling it is yours.**
+  `Provenance.runtime` is a `RuntimeProvenance` carrying python, torch, hip, device,
+  device name and dtype; `ReportBuilder.record_runtime()` puts it there;
+  `RuntimeResolution.provenance()` builds it. Nothing in M6a resolves a runtime during a
+  run, so it is `None` everywhere today. **Add the same fields to `TranscriberIdentity`**
+  so they reach the ASR cache key (INV-08) — they are defined in one place precisely so
+  there is no second vocabulary to drift from.
+- **Attention implementation is not in `RuntimeProvenance`.** M6b's gate asks for it and
+  M6a had nothing to put there. Add it alongside the rest rather than in a second
+  structure.
+- **`doctor --device cuda --dtype bfloat16` is the pre-flight**, and it exercises the
+  same resolver the adapter will. If it reports a healthy GPU and the adapter still fails,
+  the problem is the adapter, which is a genuinely useful thing to be able to say.
+- **The two gfx1151 environment variables are applied by both shells** and re-checked by
+  `doctor`. Promoting them to host defaults waits for *your* smoke test — that is the
+  event M6a deferred it to.
+- **Three things M6a's verify phase learned the hard way, all of which you will meet.**
+  A probe must catch `Exception`, not `ImportError` — a ROCm build with a missing shared
+  library raises `OSError` from the loader, and the adapter loading a model has the same
+  exposure. A subprocess is where `conftest.py`'s Torch guard cannot look, so a subprocess
+  test touching the adapter must shadow `torch` on `PYTHONPATH`
+  (`tests/test_runtime.py::shadow`). And after fixing a review finding, **revert the fix
+  and watch a test fail** — one of M6a's fixes shipped with no test at all and only a
+  mutation run caught it.
+- **The `host_smoke` marker now means "needs the ROCm environment" as well as "needs the
+  GPU".** A `host_smoke` test run from `.venv` reports "torch is not installed" rather
+  than a GPU failure, and the assertion messages say which environment to use.
+
 ## Known risks and open questions
 
-- Depends on **OQ-008, OQ-009, OQ-018**.
+- Depends on **OQ-008** (answered), **OQ-009, OQ-018**.
 - `qwen-asr` pins Transformers and pulls Accelerate, Gradio, Flask, and Python SoX.
   All of it stays inside the `asr-qwen` group.
 - If real Qwen output differs structurally from the fake, the fake was wrong.

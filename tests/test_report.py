@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import sys
 import typing
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from dnd_audio.artifacts.report import (
     Provenance,
     ReportBuilder,
     ReportWarning,
+    RuntimeProvenance,
     StageName,
     StageReport,
     StageStatus,
@@ -340,12 +342,83 @@ class TestProvenanceTelemetrySplit:
             for field in model.model_fields.values():  # type: ignore[attr-defined]
                 annotation = field.annotation
                 found.append(annotation)
-                found.extend(typing.get_args(annotation))
-                if hasattr(annotation, "model_fields"):
-                    found.extend(annotations_of(annotation))
+                # Descend through unions and containers as well as into the annotation
+                # itself. `RuntimeProvenance | None` is a model whose fields this walk
+                # missed entirely until M6a added one: the union has no `model_fields`, so
+                # the recursion below never fired and the nested fields were unchecked
+                # while the test read as though it covered them.
+                for candidate in (annotation, *typing.get_args(annotation)):
+                    found.append(candidate)
+                    if hasattr(candidate, "model_fields"):
+                        found.extend(annotations_of(candidate))
             return found
 
-        assert not forbidden & set(annotations_of(Provenance))
+        walked = annotations_of(Provenance)
+        assert not forbidden & set(walked)
+        # The walk reaches the nested model at all, so the assertion above is not vacuous.
+        assert str in walked
+
+    def test_the_python_version_is_recorded_on_every_run(self, instant: dt.datetime) -> None:
+        """The spec's observability list asks for it, and it is true of the process rather
+        than of a stage — so a run that failed in `inspect` should still say which Python
+        produced that failure. Recorded by the builder rather than by whichever stage
+        remembers to."""
+        builder = _builder(instant)
+        _fill_remaining(builder, recorded=set())
+        versions = builder.build(instant).provenance.package_versions
+
+        assert versions["python"] == ".".join(str(part) for part in sys.version_info[:3])
+
+    def test_a_run_that_resolved_no_runtime_records_none(self, instant: dt.datetime) -> None:
+        """`inspect`, `ingest`, `activity` and `mix` never load a model. Filling this in
+        for them would mean probing a GPU they have no use for and recording an answer no
+        stage acted on — an absent section says "nothing here chose a device", which is
+        true and is not the same as "there is no GPU"."""
+        builder = _builder(instant)
+        _fill_remaining(builder, recorded=set())
+        assert builder.build(instant).provenance.runtime is None
+
+    def test_a_resolved_runtime_reaches_the_report(self, instant: dt.datetime) -> None:
+        builder = _builder(instant)
+        builder.record_runtime(
+            RuntimeProvenance(
+                python="3.12.13",
+                torch="2.9.1+rocm7.13.0",
+                hip="7.13.99004-3309c6114a",
+                device="cuda:0",
+                device_name="Radeon 8060S Graphics",
+                dtype="bfloat16",
+            )
+        )
+        _fill_remaining(builder, recorded=set())
+        runtime = builder.build(instant).provenance.runtime
+
+        assert runtime is not None
+        assert (runtime.device, runtime.dtype) == ("cuda:0", "bfloat16")
+        assert runtime.hip == "7.13.99004-3309c6114a"
+
+    def test_recording_the_same_runtime_twice_is_fine(self, instant: dt.datetime) -> None:
+        """Two stages agreeing is not a conflict, and M6b may well record from both."""
+        runtime = RuntimeProvenance(python="3.12.13", device="cuda:0", dtype="bfloat16")
+        builder = _builder(instant)
+        builder.record_runtime(runtime)
+        builder.record_runtime(runtime)
+        _fill_remaining(builder, recorded=set())
+
+        assert builder.build(instant).provenance.runtime == runtime
+
+    def test_recording_a_conflicting_runtime_fails(self, instant: dt.datetime) -> None:
+        """One run resolves one device. This used to overwrite silently, which would have
+        left M6b's report authoritative-looking and carrying only whichever stage recorded
+        last — with the disagreement, the thing worth knowing, gone. Found in M6a's verify
+        phase by a reviewer reading the docstring against the body."""
+        builder = _builder(instant)
+        builder.record_runtime(RuntimeProvenance(python="3.12.13", device="cpu", dtype="float32"))
+
+        with pytest.raises(ValueError, match="different compute runtimes"):
+            builder.record_runtime(
+                RuntimeProvenance(python="3.12.13", device="cuda:0", dtype="bfloat16")
+            )
 
     def test_telemetry_is_where_the_clock_lives(self, instant: dt.datetime) -> None:
         assert {"started_at", "finished_at"} <= set(Telemetry.model_fields)

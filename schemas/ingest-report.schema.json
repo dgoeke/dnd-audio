@@ -116,6 +116,17 @@
           "title": "Package Versions",
           "type": "object"
         },
+        "runtime": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeProvenance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "tool_versions": {
           "additionalProperties": {
             "type": "string"
@@ -223,6 +234,67 @@
         }
       },
       "title": "RosterSummary",
+      "type": "object"
+    },
+    "RuntimeProvenance": {
+      "additionalProperties": false,
+      "description": "The compute runtime a stage resolved: which device, which precision, which build.\n\nPresent only on a run that actually resolved one. That is deliberate rather than\ndefensive: ``inspect``, ``ingest``, ``activity`` and ``mix`` never load Torch, so\nfilling this in for them would mean probing a GPU those stages have no use for, and\nrecording an answer no stage acted on. An absent section says \"nothing here chose a\ndevice\", which is true and is not the same as \"there is no GPU\".\n\nEvery field reaches an ASR cache key (INV-08): the same audio transcribed in BF16 on\ngfx1151 and in float32 on a CPU are not the same result, and a Torch or HIP upgrade\ncan change a kernel's rounding. Defining them here once means M6b adds them to\n``TranscriberIdentity`` without a second vocabulary to drift from this one.",
+      "properties": {
+        "device": {
+          "title": "Device",
+          "type": "string"
+        },
+        "device_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Device Name"
+        },
+        "dtype": {
+          "title": "Dtype",
+          "type": "string"
+        },
+        "hip": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hip"
+        },
+        "python": {
+          "title": "Python",
+          "type": "string"
+        },
+        "torch": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Torch"
+        }
+      },
+      "required": [
+        "python",
+        "device",
+        "dtype"
+      ],
+      "title": "RuntimeProvenance",
       "type": "object"
     },
     "StageName": {

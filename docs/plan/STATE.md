@@ -7,66 +7,52 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 
 ## Right now
 
-- **Current milestone:** M6a — ROCm environment (not started)
+- **Current milestone:** M6b — Qwen adapter (not started)
 - **Branch:** `main`
-- **Last closed milestone:** M5 — Automix
-- **Gate status at HEAD:** passes, zero skips (8 checks, 2028 tests)
-- **Blocked on:** nothing for M6a — it is environment work whose dependencies are all closed.
-  **The spec changed in M5** and this is the one place it is easy to miss: the true-peak
-  ceiling now outranks the `-16 LUFS` loudness target where the two are mutually unreachable
-  (acceptance criterion 8, ADR-0023). The code already behaved that way and the spec did not
-  say so. On the canonical fixture through real Silero this is not hypothetical — the mix
-  measures ~40 LUFS below target and the run says so and exits zero.
+- **Last closed milestone:** M6a — ROCm environment
+- **Gate status at HEAD:** passes, zero skips (8 checks, 2122 tests)
+- **Blocked on:** nothing for M6b — its environment is built, locked, and proved on the
+  real device. **OQ-008 is answered:** `torch 2.9.1+rocm7.13.0` (HIP `7.13.99004-3309c6114a`)
+  on `Radeon 8060S Graphics` / `gfx1151`, bfloat16 and float32 both exact, and the
+  `rocm[libraries]` sdist built first time in the FHS shell with no additions to the package
+  list M0 guessed.
 
-  **H1 is still the oldest outstanding item**, but it is no
-  longer the whole of the problem it was. A 2026-08-02 sample probe — four real DJI Mic 3
-  transmitters, ~47 s, not the H1 fixture — answered **OQ-001, OQ-002, OQ-004 and OQ-005** from
-  metadata alone, and the design that made that cheap is M1's: the manifest names the strategy,
-  the evidence, and the assumption by `OQ-` id, so settling them was reading one manifest.
+  **The one thing most likely to cost M6b an afternoon** is not the adapter: it is that
+  `[tool.uv.sources]` only routes packages that are also **direct** members of a dependency
+  list, and ignores a transitive-only requirement *silently* — no warning, no error, just
+  the wrong registry in the lock. `qwen-asr` pulls Gradio, Flask, `nagisa`, `soynlp` and
+  Python SoX; if any brings an AMD-only requirement, it must go in the group **and** the
+  sources table. `transformers==4.57.6` and `accelerate==1.12.0` are already locked at
+  `qwen-asr` 0.0.6's exact pins, so adding it should not relock — if it wants to, something
+  moved and that is worth understanding before accepting it.
 
-  **One of those answers is bad news and is not yet acted on. OQ-004's assumption is false on
-  both halves**: DJI's `bext.time_reference` is *not* samples since midnight (a 19:26:55 file
-  carries 388 seconds' worth, and the later-created pair carries a *smaller* value), and it is
-  frame-quantized to **33.3 ms** rather than sample-accurate. M1 and M2 both encode the old
-  reading. Absolute wall-clock placement from a BWF reference alone is not available on this
-  hardware, and cross-receiver alignment from it is meaningless because the epochs differ.
-  Nothing is corrupted meanwhile — INV-12 forbids inventing timing, a wrong epoch shifts a
-  session uniformly rather than scrambling it, and the clap-sync QA exists for the
-  cross-receiver case — but **reworking the timing model is now the largest known piece of
-  outstanding work in the project**, and it is deliberately unscheduled rather than folded into
-  a milestone that did not ask for it. `rg 'OQ-004'` finds every site.
+  **There are two environments now**, and it is load-bearing: `.venv` never contains torch,
+  `.venv-rocm` is where the `asr-qwen` group installs from inside the FHS shell. The gate
+  runs against `.venv`, which is what keeps INV-05's group-absent case continuously proved.
+  **Run the default suite from `.venv-rocm` occasionally — no gate does**, and that is
+  exactly where M6a found a real INV-05 breach that was invisible everywhere else.
 
-  Also from the probe: **`ingest` refuses real 24-bit `_orig` files** and the reason it gives is
-  wrong for 24-bit specifically (`s24 → f32` is lossless — verified over 2M values). ADR-0011's
-  principle is intact, its guard is too broad. Recorded under **OQ-007**, not fixed.
+  **H1 is still the oldest outstanding item.** M6a neither needed nor touched real DJI
+  metadata. The 2026-08-02 sample probe answered **OQ-001, OQ-002, OQ-004 and OQ-005**;
+  **OQ-004's assumption is false on both halves** — DJI's `bext.time_reference` is not
+  samples since midnight and is frame-quantized to 33.3 ms — and **reworking the timing
+  model remains the largest known piece of outstanding work in the project**, deliberately
+  unscheduled. `rg 'OQ-004'` finds every site. **OQ-007** (`ingest` refuses real 24-bit
+  `_orig` files, with a reason that is wrong for 24-bit specifically) is likewise recorded
+  and not fixed.
 
   What H1 still owes: OQ-003's counter across a power cycle, OQ-007's `orig`/`edit` pairing,
-  **OQ-012 and OQ-015** (receiver displays against wall clock — still unrecoverable afterwards),
-  and a second recording from one power-on cycle to confirm OQ-004's epoch reading.
+  **OQ-012 and OQ-015**, and a second recording from one power-on cycle to confirm OQ-004's
+  epoch reading.
 
-  M3 added a second kind of waiting, and it is not H1's kind. **OQ-017** — what separates
-  real speech from lav bleed at a real table — needs H2 or a first real session, because a
-  two-minute metadata fixture cannot tune a bleed threshold. Every VAD, bleed, and scoring
-  default cites it, and the pipeline already records the numbers that answer it, so this is
-  reading one session's graph rather than running an experiment. Nothing is blocked on it:
-  the thresholds work on synthetic audio and the gate is conservative by construction.
-
-  The sample probe took the **first real measurements** against it, from a deliberately harder
-  geometry than a table: real bleed sat 18–22 dB below the held mic while two mics hearing the
-  same voice sat ~1 dB apart — an order of magnitude, with room to spare. The surprise is that
-  **correlation does not discriminate** (814–913‰ for bleed, 866–901‰ for genuine co-incidence,
-  overlapping ranges): it confirms two lavs heard one room, and *level* is what says whose lav
-  it is. ADR-0014's margin **and** correlation **and** veto is what keeps that from being read
-  as noise. Peak lag was 7–11 ms where air explains under 2 — a zero-lag correlator would have
-  found none of it.
-
-  M4 added a third, and it is M6b's rather than a room's. **OQ-018** — what Qwen3-ASR and its
-  aligner need at a request boundary — covers padding, timestamp stability across two
-  overlapping requests, whether a low-energy split beats the midpoint, the retry budget, and
-  the text-similarity thresholds. M6b's smoke test settles the first three directly; the last
-  needs a real session, or one utterance genuinely heard on two transmitters. Nothing is
-  blocked: M4 is correct under whatever the configured values are, and only the *defaults*
-  are guesses. `rg 'OQ-018'` finds all twelve sites at once.
+  **OQ-017** (what separates real speech from lav bleed at a real table) waits on H2 or a
+  first real session; the sample probe took the first real measurements and found level
+  separates by an order of magnitude while **correlation does not discriminate at all**.
+  **OQ-018** (what Qwen needs at a request boundary) is now **M6b's to answer** — its smoke
+  test settles padding, timestamp stability across overlapping requests, and whether a
+  low-energy split beats the midpoint. **OQ-019** and **OQ-020** wait on a real session.
+  **OQ-021**, new in M6a, asks which render node backs the compute device on a multi-GPU
+  host; nothing is blocked on it.
 
 ## Milestone status
 
@@ -78,7 +64,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | M3  | Activity                   | closed      | `38bc989` |
 | M4  | Fake transcript            | closed      | `8556f43` |
 | M5  | Automix                    | closed      | `d282688` |
-| M6a | ROCm environment           | not started | —         |
+| M6a | ROCm environment           | closed      | pending   |
 | M6b | Qwen adapter               | not started | —         |
 | H1  | Hardware fixture (2 min)   | not started | —         |
 | H2  | Drift soak / first session | not started | —         |
@@ -95,6 +81,25 @@ Status values: `not started` → `in progress` → `verified` → `closed`.
 idea but the work is deliberately unplanned.
 
 ## What works end to end
+
+`uv run dnd-audio doctor` — now including the GPU, and it **opens** the device nodes rather
+than inferring access from group membership. On the target host from the ROCm environment:
+`opened /dev/kfd`, `opened /dev/dri/renderD128`, `torch 2.9.1+rocm7.13.0 (HIP 7.13.99004-3309c6114a)`,
+`Radeon 8060S Graphics, gfx1151 — verified bfloat16, float32`, and
+`auto resolves to cuda:0 / bfloat16`. `--device` and `--dtype` answer whether *your*
+configuration works here before a four-hour session finds out during it: an explicitly
+requested combination this machine cannot deliver exits 1 with a diagnostic, never a quiet
+downgrade to a different precision.
+
+`dnd_audio.runtime` splits probing from resolution — probing imports torch, opens nodes and
+runs kernels; resolution is a pure function of what it found — so the spec's whole
+device/dtype matrix is tested on a machine with no GPU. The smoke test is per device **and**
+per dtype, and compares exactly rather than within a tolerance.
+
+The lock holds exactly five packages from AMD's index and everything else from PyPI, with
+`accelerate 1.12.0` in it wanting `torch>=2.0.0` and not getting a CUDA build. It pins
+**versions, not bytes**: AMD publishes no hashes (ADR-0025).
+
 
 `uv run dnd-audio process /path/to/session --fake-models` — **every applicable stage**, which
 is the whole of the spec's stage DAG on synthetic input.
@@ -217,32 +222,19 @@ writer that cannot lose a stage, and a test suite that is provably offline.
 
 ## Next smallest step
 
-Begin **M6a — ROCm environment**. It is the only milestone whose dependencies are all closed,
-and it is pure environment work: the AMD `gfx1151` Torch wheel index wired into uv with
-per-package sourcing, the separate FHS shell for the `rocm[libraries]` sdist (ADR-0002),
-locked versions, and `doctor` device checks. Nothing in M0–M5 depends on it and M6b cannot
-start without it. (Claude Code: `/ms-start 6a`.)
+Begin **M6b — Qwen adapter**. Read its "What M6a already provides" section first. The seam
+is finished and exercised: `transcript/runner.py::_default_transcriber` holds the only
+`DEFERRED: M6b` raise, and replacing it reaches **both** `transcribe` and `process` through
+one construction site (M5). `dnd-audio mix` needs no adapter at all, so an adapter
+regression can never cost a session its audio deliverable. (Claude Code: `/ms-start 6b`.)
 
-Start with `doctor`'s device checks rather than with the wheel index. The checks are what tell
-you whether the index worked, and writing them second means debugging two unknowns at once.
-They must **open** `/dev/kfd` and the render node rather than testing that the paths exist —
-the charter says so and it is the whole difference between a check and a guess.
+Queued first, and deliberately outside any milestone because it touches every milestone's
+tests: **`pytest-xdist` parallelism in the gate**, as its own commit with its own gate run.
+The suite is ~120 s, of which about 80% is ~200 end-to-end tests each running a real
+pipeline stage over the canonical fixture; the other ~1900 unit tests take ~24 s between
+them. This box has 16 cores and the suite is almost entirely independent per test. The risk
+worth watching is a pair of tests that currently pass because of shared `tmp_path_factory`
+ordering surfacing as flakes — which is information, not damage.
 
-Read M6b's new "What M5 already provides" section when you get there. The short version:
-`process` composes the transcript branch through `perform_transcript`/`resolve_models` rather
-than reimplementing it, so replacing the `DEFERRED: M6b` raise site reaches both commands
-through one seam — and `dnd-audio mix` needs no adapter at all, so an adapter regression can
-never cost a session its audio deliverable.
-
-**Real DJI metadata has still not been validated.** Acquiring the H1 fixture is the oldest
-outstanding item in the project, and five milestones have now been built on assumptions it
-would settle. M2 added OQ-015 to what it must settle; M3 added **OQ-017**, M4 added
-**OQ-018**, and M5 added **OQ-019** and **OQ-020** — none of which H1 can answer. A two-minute
-metadata fixture cannot tune a bleed threshold, a text-similarity threshold, an automix
-constant, or an encoder's real overshoot. OQ-017 and OQ-019 wait for H2 or a first real
-session; OQ-018's first three parts are M6b's smoke test; OQ-020 is answered by encoding one
-real session once, because every attempt's measurements are already retained in the report.
-
-**Nothing in the pipeline is blocked on any of them.** Every default is conservative by
-construction, two configuration validators refuse a combination the gain rule cannot deliver,
-and the encode stage fails rather than claiming a compliance it did not measure.
+**Real DJI metadata has still not been validated.** Six milestones have now been built on
+assumptions H1 would settle. M6a is the first that neither needed nor touched them.
