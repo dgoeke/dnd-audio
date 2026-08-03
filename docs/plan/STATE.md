@@ -11,12 +11,31 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 - **Branch:** `main` (M4 merged)
 - **Last closed milestone:** M4 — Fake transcript
 - **Gate status at HEAD:** passes, zero skips (8 checks, 1768 tests)
-- **Blocked on:** nothing for M5. **H1 is still the oldest outstanding item in the
-  project** and now gates six open questions (OQ-001, OQ-002, OQ-003, OQ-004, OQ-007,
-  OQ-015). It needs a physical recording session, not code. Every DJI layout assumption
-  M1 and M2 made sits behind a named strategy or a cited constant tagged with its `OQ-`
-  ID, so settling them is cheap once a real file exists — but they stay unsettled until
-  one does.
+- **Blocked on:** nothing for M5. **H1 is still the oldest outstanding item**, but it is no
+  longer the whole of the problem it was. A 2026-08-02 sample probe — four real DJI Mic 3
+  transmitters, ~47 s, not the H1 fixture — answered **OQ-001, OQ-002, OQ-004 and OQ-005** from
+  metadata alone, and the design that made that cheap is M1's: the manifest names the strategy,
+  the evidence, and the assumption by `OQ-` id, so settling them was reading one manifest.
+
+  **One of those answers is bad news and is not yet acted on. OQ-004's assumption is false on
+  both halves**: DJI's `bext.time_reference` is *not* samples since midnight (a 19:26:55 file
+  carries 388 seconds' worth, and the later-created pair carries a *smaller* value), and it is
+  frame-quantized to **33.3 ms** rather than sample-accurate. M1 and M2 both encode the old
+  reading. Absolute wall-clock placement from a BWF reference alone is not available on this
+  hardware, and cross-receiver alignment from it is meaningless because the epochs differ.
+  Nothing is corrupted meanwhile — INV-12 forbids inventing timing, a wrong epoch shifts a
+  session uniformly rather than scrambling it, and the clap-sync QA exists for the
+  cross-receiver case — but **reworking the timing model is now the largest known piece of
+  outstanding work in the project**, and it is deliberately unscheduled rather than folded into
+  a milestone that did not ask for it. `rg 'OQ-004'` finds every site.
+
+  Also from the probe: **`ingest` refuses real 24-bit `_orig` files** and the reason it gives is
+  wrong for 24-bit specifically (`s24 → f32` is lossless — verified over 2M values). ADR-0011's
+  principle is intact, its guard is too broad. Recorded under **OQ-007**, not fixed.
+
+  What H1 still owes: OQ-003's counter across a power cycle, OQ-007's `orig`/`edit` pairing,
+  **OQ-012 and OQ-015** (receiver displays against wall clock — still unrecoverable afterwards),
+  and a second recording from one power-on cycle to confirm OQ-004's epoch reading.
 
   M3 added a second kind of waiting, and it is not H1's kind. **OQ-017** — what separates
   real speech from lav bleed at a real table — needs H2 or a first real session, because a
@@ -24,6 +43,15 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
   default cites it, and the pipeline already records the numbers that answer it, so this is
   reading one session's graph rather than running an experiment. Nothing is blocked on it:
   the thresholds work on synthetic audio and the gate is conservative by construction.
+
+  The sample probe took the **first real measurements** against it, from a deliberately harder
+  geometry than a table: real bleed sat 18–22 dB below the held mic while two mics hearing the
+  same voice sat ~1 dB apart — an order of magnitude, with room to spare. The surprise is that
+  **correlation does not discriminate** (814–913‰ for bleed, 866–901‰ for genuine co-incidence,
+  overlapping ranges): it confirms two lavs heard one room, and *level* is what says whose lav
+  it is. ADR-0014's margin **and** correlation **and** veto is what keeps that from being read
+  as noise. Peak lag was 7–11 ms where air explains under 2 — a zero-lag correlator would have
+  found none of it.
 
   M4 added a third, and it is M6b's rather than a room's. **OQ-018** — what Qwen3-ASR and its
   aligner need at a request boundary — covers padding, timestamp stability across two

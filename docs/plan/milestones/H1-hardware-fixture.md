@@ -34,6 +34,49 @@ multi-hour clock stability, which is H2.
 - [ ] Export both `orig` and `edit` if dual-file mode is enabled.
 - [ ] Note anything surprising the receivers displayed.
 
+## Partial evidence received — 2026-08-02 sample probe
+
+Not the H1 fixture, and it does not close this milestone. Four transmitters (not six), two
+receivers (not three), ~47 s, no LTC jam, no power cycle, no clap pattern, no `edit` files,
+and the operator held one mic at a time in front of their mouth with the others about two
+feet away rather than wearing six around a table. Recorded here because **four of the six
+questions this milestone gates turned out to be answerable from metadata alone**, and because
+one of the answers invalidates an assumption M1 and M2 are built on.
+
+Ledger effect — details and measurements live in each entry, not here:
+
+| question | outcome |
+| --- | --- |
+| **OQ-001** metadata layout | **answered** — `bext` + `iXML` + `cue`(0 points) + `PAD`; no `INFO`/`ISMP` |
+| **OQ-002** `TX##` uniqueness | **answered, assumption confirmed** — two receivers each produced `TX01`/`TX02`; INV-11 stands |
+| **OQ-004** `time_reference` semantics | **answered, assumption false on both halves** — not midnight-relative, and frame-quantized to 33.3 ms |
+| **OQ-005** private/iXML chunks | **answered** — none; the iXML duplicates `bext` and adds only the 30/1 timecode rate |
+| **OQ-003** filename grammar | grammar confirmed; the `MIC###` counter's behaviour across a power cycle still open |
+| **OQ-007** dual-file `orig`/`edit` | `orig` is **not** always 32-bit float; `orig`/`edit` pairing untested |
+| **OQ-017** bleed thresholds | first real measurements, from a harder geometry than a table |
+| **OQ-012**, **OQ-015** | untouched — both need receiver displays read against wall clock |
+
+Two things the pipeline did on real files, worth knowing before the real fixture arrives:
+
+- **`inspect` handled all four unchanged**, and the manifest named the strategy, the evidence,
+  and the assumption *by OQ id* — which is what turned "acquire a fixture" into "read one
+  manifest". That design paid for itself here.
+- **`ingest` refused the two 24-bit files** (OQ-007), and **`activity` ran end to end on the
+  float pair with the real Silero release** — the first real speech this project has seen.
+
+### What the real fixture must still deliver
+
+Everything in the recipe above, and these in particular, because the sample probe showed why
+they matter rather than merely that they were on a list:
+
+- **A second recording from the same power-on cycle**, to confirm OQ-004's epoch reading.
+  One session cannot distinguish "since power-on" from another fixed epoch.
+- **The receiver displays read against wall clock** — still the only evidence for OQ-012 and
+  OQ-015, and still unrecoverable afterwards.
+- **A power cycle**, for OQ-003's counter.
+- **All six transmitters confirmed on the same recording format**, per the recipe — and note
+  that the pipeline should tolerate a mismatch rather than fail, which OQ-007 now records.
+
 ## Completion gate
 
 - [ ] Every `OQ-` entry with `Needs: H1` is marked `answered` (with the evidence) or

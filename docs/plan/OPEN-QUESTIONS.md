@@ -19,7 +19,16 @@ reachable through `ffprobe -show_format -show_streams`.
 **Why it matters:** The entire timecode strategy chain in M1/M2 rests on it. The
 spec explicitly forbids inventing a layout.
 **Evidence:** Raw `ffprobe` JSON + RIFF chunk inventory from a real file.
-**Needs:** H1 · **Blocks:** M1, M2 · **Status:** open
+**Needs:** H1 · **Blocks:** M1, M2 · **Status:** **answered** (sample probe, 2026-08-02)
+
+**Answer — `bext` and `iXML`, both present, and no `INFO`/`ISMP` timecode.** Four real
+DJI Mic 3 transmitter files (firmware `ver:02.00.06.01`) carry, in order: `fmt `(16),
+`bext`(602), `iXML`(1088), `cue`(28, **zero cue points**), `PAD`(30982 — audio starts at a
+32768-byte boundary), `data`. `bext.originator` is `MIC 3`, `bext.description` is the
+firmware string, `originator_reference` and `coding_history` are **empty**, and
+`bext.version` is 0 even though the iXML claims `BWF_VERSION 02.00`. FFprobe surfaces the
+sample reference as `format.tags.time_reference` exactly as assumed — so the *plumbing* is
+right. What it means is not: see **OQ-004**.
 
 **What M1 built while waiting.** Both halves of the assumption are reachable through
 FFprobe on a hand-built file: a `bext` time reference surfaces as `format.tags
@@ -36,7 +45,16 @@ can both produce `TX01`. Directory identity is authoritative (INV-11).
 **Why it matters:** If it were unique it would be a useful cross-check; if it is
 not, treating it as identity would silently mis-attribute a speaker.
 **Evidence:** Filenames from six transmitters across three kits recorded together.
-**Needs:** H1 · **Blocks:** M1 (validation hints only) · **Status:** open
+**Needs:** H1 · **Blocks:** M1 (validation hints only) · **Status:** **answered**
+(sample probe, 2026-08-02)
+
+**Answer — no, it is not unique, and the assumption was right.** Two receivers recording
+together each produced a `TX01` and a `TX02`; the operator renamed them by hand afterwards
+so the four files could sit in one directory at all. That is the collision this entry
+predicted, observed directly at two kits rather than three. **INV-11 stands: the configured
+directory is the only identity**, and `TX##` is a validation hint that two kits will happily
+duplicate. Note for whoever reads the sample files: their `TX##` components are the
+operator's renames, not DJI's — only the `MIC###`, date, and time components are original.
 
 ## OQ-003 — What is the exact DJI filename grammar, including the sequence field?
 **Assumption:** Roughly `TX##_MIC###_YYYYMMDD_HHMMSS_orig.wav`, with a
@@ -44,7 +62,23 @@ monotonically increasing counter usable only as a secondary chunk-order hint.
 **Why it matters:** Chunk discontinuity warnings and `orig`/`edit` pairing in M1.
 **Evidence:** A full directory listing from the fixture, including a
 power-cycle-induced discontinuity.
-**Needs:** H1 · **Blocks:** M1 · **Status:** open
+**Needs:** H1 · **Blocks:** M1 · **Status:** open — **grammar confirmed, counter not**
+
+**Partial evidence (sample probe, 2026-08-02).** The grammar is exactly as assumed:
+`TX##_MIC###_YYYYMMDD_HHMMSS_orig.wav`, and `inspection`'s parser recognized all four real
+files without a change. Two observations about the middle field, which M1 reads as
+`sequence`:
+
+- **It is not a per-transmitter serial.** Both transmitters on one receiver produced
+  `MIC001`, while the other receiver's two produced `MIC004` and `MIC002`. A serial would
+  not repeat within a kit.
+- **It is consistent with a per-transmitter recording counter**, which is what this entry
+  assumed: the operator had recorded with one kit several times before and with the other
+  not at all. Consistent with, not evidence for — two files at `001` prove very little.
+
+The date and time components match `bext.origination_date`/`_time` exactly in all four.
+**Still unanswered:** what the counter does across a power cycle, which is the only reason
+M1 wants it, and whether it ever wraps. The sample has no power cycle in it.
 
 ## OQ-004 — Is `time_reference` present, midnight-relative, and at the file rate?
 **Assumption:** Yes: integer sample count since midnight at the file's own sample
@@ -52,7 +86,44 @@ rate, kept as an integer and never rounded through frames (INV-04).
 **Why it matters:** It is the preferred source in the strategy chain; the fallback
 is a timecode tag plus configured frame rate.
 **Evidence:** `bext` chunk contents from a file whose wall-clock start is known.
-**Needs:** H1 · **Blocks:** M1, M2 · **Status:** open
+**Needs:** H1 · **Blocks:** M1, M2 · **Status:** **answered — and the answer is no, on
+both halves.** The implementation still encodes the old assumption; see the consequence
+below. (sample probe, 2026-08-02)
+
+**Answer — it is neither midnight-relative nor sample-accurate.**
+
+| file | `bext.origin_time` | `time_reference` | ÷48000 | as a clock | ÷1600 |
+| --- | --- | --- | --- | --- | --- |
+| rx-a tx1 | 19:26:55 | 18628800 | 388.100 s | 00:06:28 | 11643 |
+| rx-a tx2 | 19:26:55 | 18627200 | 388.067 s | 00:06:28 | 11642 |
+| rx-b tx1 | 19:27:39 | 18347200 | 382.233 s | 00:06:22 | 11467 |
+| rx-b tx2 | 19:27:39 | 18347200 | 382.233 s | 00:06:22 | 11467 |
+
+1. **Not since midnight.** A 19:26:55 file would carry 3 360 720 000 samples; it carries
+   18 628 800, a factor of 180 out. The files also contradict each other: the pair created
+   *44 seconds later* has the *smaller* reference. Subtracting gives per-receiver epochs of
+   19:20:26.9 and 19:21:16.8 — consistent with **elapsed since that receiver powered on**,
+   the alternative this entry named. One recording supports that reading; a second from the
+   same power-on cycle would confirm it, and nothing here rules out another epoch entirely.
+2. **Not sample-accurate.** Every value is an exact multiple of **1600**, which is one frame
+   at the 30/1 rate the iXML declares. The timestamp is frame-quantized: **resolution is
+   33.3 ms**, not one sample. So "kept as an integer and never rounded through a frame
+   count" describes what M2 does with the number, not what DJI did to it before writing it.
+
+DJI copies the same value into iXML's `TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_LO` beside
+`TIMESTAMP_SAMPLE_RATE 48000`, so the misleading label appears twice and agreeing with
+itself is not evidence.
+
+**Consequence, not yet acted on.** `rg 'OQ-004'` finds the sites that encode the old
+reading — `timeline/rasterize.py`'s conversion and the assumption string M1 stamps into
+every manifest. Two things follow and neither is done: absolute wall-clock placement from a
+BWF reference alone is **not available** on this hardware, and cross-receiver alignment from
+it is meaningless because the epochs differ. Within one receiver the value still looks
+usable for relative placement, to ±33 ms. **This is a scoped piece of work on M1 and M2,
+deliberately left undone at the time of writing** so it is not folded into an unrelated
+session. INV-12 already forbids inventing timing, which is the behaviour that keeps this
+safe in the meantime: a wrong *epoch* shifts a whole session uniformly rather than
+scrambling it, and the clap-sync QA exists to catch the cross-receiver case.
 
 **What M2 does with it.** `timeline/rasterize.py` treats a `bwf_sample_reference` as
 unsigned samples since **midnight at the file's own rate**, converts it to exact rational
@@ -69,7 +140,18 @@ needs a DJI-specific parser rather than standard BWF handling.
 **Evidence:** RIFF chunk inventory from the fixture.
 **Also matters for:** M7 — a compressor that cannot reproduce an unknown private
 chunk byte-for-byte fails the archival hash check.
-**Needs:** H1 · **Blocks:** M1, M7 · **Status:** open
+**Needs:** H1 · **Blocks:** M1, M7 · **Status:** **answered** (sample probe, 2026-08-02)
+
+**Answer — no private chunks, and the iXML carries nothing new.** The inventory is
+`fmt `, `bext`, `iXML`, `cue`, `PAD`, `data` — all standard. The iXML is a `<BWFXML>`
+document whose `<BEXT>` block restates the `bext` chunk field for field, and whose
+`<SPEED>` block adds `MASTER_SPEED`/`TIMECODE_RATE` `30/1`, `TIMECODE_FLAG NDF`,
+`FILE_SAMPLE_RATE`/`DIGITIZER_SAMPLE_RATE` 48000, `AUDIO_BIT_DEPTH`, and a
+`TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_*` pair duplicating `time_reference` (**with the same
+wrong semantics — OQ-004**). The declared 30/1 timecode rate is itself useful: it is where
+the 1600-sample quantization in OQ-004 comes from. `cue` declares **zero** cue points, and
+`PAD` is alignment padding that puts `data` at offset 32768. **No DJI-specific parser is
+needed**, and M7's archival hash check has no unknown chunk to reproduce.
 
 **Half-answered in M1, about FFprobe rather than about DJI.** Measured against FFmpeg
 8.0: a WAV carrying both an `iXML` chunk and a four-byte-named private chunk produces
@@ -104,7 +186,32 @@ is the only file consumed.
 **Why it matters:** Selection rules, duplicate detection, and the
 `allow_processed_audio` recovery path in M1.
 **Evidence:** A fixture recorded with dual-file mode enabled.
-**Needs:** H1 · **Blocks:** M1 · **Status:** open
+**Needs:** H1 · **Blocks:** M1 · **Status:** open — **but half the assumption is already
+known false**
+
+**`orig` is not always 32-bit float (sample probe, 2026-08-02).** Two of four real
+transmitters wrote `pcm_s24le` `_orig` files and two wrote `pcm_f32le`, same firmware,
+same session — a per-transmitter setting the operator had not matched across kits, which
+is exactly the mistake H1's recipe already tells the owner to check for. It will be made
+again, so the pipeline has to survive it.
+
+**It currently does not.** `ingest` refuses the 24-bit files:
+
+> `undecodable_source: ... is 1-channel pcm_s24le, and the working path reads mono
+> pcm_f32le — dual-file mode's `orig`. An integer format cannot be converted to float32
+> exactly, so it is refused rather than quietly rounded (ADR-0011).`
+
+**The stated reason is wrong for 24-bit.** A 24-bit signed integer is exactly
+representable in float32 — the significand is 24 bits — so `s24 → f32` is lossless.
+Verified empirically rather than argued: 2 000 000 random values plus the range edges
+round-trip with zero error, and the same test on 32-bit integers fails, so the guard is
+right to refuse `s32` and wrong to refuse `s24` with it. ADR-0011's principle — never
+quietly round — is intact; only its implementation is too broad.
+
+**Not fixed at the time of writing**, deliberately: it is a change to closed M2 code and
+belongs in its own scoped piece of work, with the ADR amended and a test that fails if
+the guard narrows again. The remaining half of this entry — whether `orig`/`edit` pairs
+appear as assumed — is untouched: the sample has no `edit` files at all.
 
 ## OQ-008 — Does AMD's stable `gfx1151` index yield a working Torch under uv + FHS?
 **Assumption:** Yes, with the `rocm[libraries]` sdist building at install time
@@ -265,7 +372,40 @@ pipeline already records exactly these numbers for every candidate pair in
 `work/activity.json` and in the report, so answering this is reading one real session's
 graph rather than running an experiment.
 **Needs:** H2 or the first real session · **Blocks:** nothing (threshold tuning) ·
-**Status:** open
+**Status:** open — **first real measurements taken, from a deliberately hard geometry**
+
+**First real numbers (sample probe, 2026-08-02).** 47 s, two transmitters, one operator
+holding one mic at a time in front of their mouth with the others roughly two feet away —
+so the "bleed" is far closer and louder than anyone sitting across a table. The real Silero
+release fired on real speech for the first time in this project: 14 candidates, **0
+suppressed**, 5 kept by the track-level veto.
+
+| population | band-limited level delta | peak correlation |
+| --- | --- | --- |
+| one mic held at the mouth, others nearby (bleed) | 1796–2201 mb (**18–22 dB**) | 814–913‰ |
+| both mics hearing the operator similarly | 94–149 mb (**~1 dB**) | 866–901‰ |
+
+Three things follow, and the geometry makes all three conservative — a real table can only
+separate further:
+
+- **The two populations are an order of magnitude apart in level**, which is the separation
+  this entry exists to establish. `min_score_margin` has a great deal of room.
+- **Correlation does not discriminate.** It is 814–913‰ for bleed and 866–901‰ for genuine
+  co-incidence — *overlapping ranges*. Correlation confirms two tracks heard the same room;
+  the **level delta** is what says which lav belongs to the speaker. A gate leaning on
+  correlation alone would be reading noise, and ADR-0014's insistence on margin **and**
+  correlation **and** a veto is what stops that.
+- **Peak lag was 115–174 derivative samples (7.2–10.9 ms)** — and at two feet, air accounts
+  for under 2 ms. Most of it is device or clock offset, consistent with OQ-004's 33 ms
+  quantization. **A zero-lag correlator would have found none of this**, which retroactively
+  justifies M3's lag-tolerant one. It also means two tracks summed during genuine overlap
+  are ~9 ms apart, which is **M5's** problem, not M3's.
+
+The veto kept 5 bleed copies rather than suppressing them — the conservative direction the
+spec asks for, with M4's post-ASR duplicate collapse as the thing that actually removes
+them once text confirms. That handoff behaving as designed on real audio is itself a result.
+**Still needed:** a real table, real spacing, more than one pair of speakers, and long
+enough to see a distribution rather than 14 candidates.
 
 ## OQ-018 — What do Qwen3-ASR and its aligner need at a request boundary?
 **Assumption:** Four guesses, each of which M4 has to make a number out of before any model
