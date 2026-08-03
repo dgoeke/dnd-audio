@@ -266,6 +266,7 @@ def build_timeline(
     builder: ReportBuilder,
     use_cache: bool = True,
     materialize_48k: bool = False,
+    mix: bool = False,
     warp: TimeWarp | None = None,
     window_samples: int = DEFAULT_WINDOW_SAMPLES,
 ) -> TimelineBuild:
@@ -276,6 +277,11 @@ def build_timeline(
     and returns the caches **uncommitted**, because the INV-01 snapshot belongs to the whole
     composed run and every entry must publish at the same moment, after verification
     (ADR-0015).
+
+    ``mix`` adds the mix intermediate to the work-space preflight. It is the caller's to
+    declare rather than something inferred here, because the preflight's whole point is to
+    refuse *before* a long session is expanded, and only the caller knows which stages this
+    run will reach.
 
     The caller owns the snapshot, the verification, the commits, and writing the timeline.
     That split is deliberate: a function that both verified and published would make a
@@ -302,6 +308,7 @@ def build_timeline(
                 duration_samples=duration,
                 track_count=sum(1 for track in tracks if track.segments),
                 materialize_48k=materialize_48k,
+                mix=mix,
             )
         )
     )

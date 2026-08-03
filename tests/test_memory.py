@@ -18,6 +18,7 @@ while still being far larger than any window.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -25,11 +26,17 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from dnd_audio.artifacts.timeline import TimelineSegment, TimelineTrack
+from dnd_audio.artifacts.activity import ActivityGraph
+from dnd_audio.artifacts.timeline import Timeline, TimelineSegment, TimelineTrack
+from dnd_audio.config import EnvelopeConfig
 from dnd_audio.fixtures import FixtureTruth
+from dnd_audio.mix.envelope import EnvelopeChunk, EnvelopeStream
+from dnd_audio.mix.levels import LevelCorrections, level_corrections
+from dnd_audio.mix.render import DEFAULT_MIX_WINDOW, render_mix
 from dnd_audio.timeline import CANONICAL_SAMPLE_RATE
 from dnd_audio.timeline.reader import TrackReader
 from dnd_audio.timeline.resample import decimate_stream, output_length
+from dnd_audio.timeline.runner import run_ingest
 from dnd_audio.timeline.wavwrite import WavWriter
 
 #: Twenty minutes at 48 kHz, against a 48 000-sample window: 1200 windows, so an
@@ -60,6 +67,18 @@ class Journal:
 
     def last_read_index(self) -> int:
         return max(i for i, (kind, _) in enumerate(self.events) if kind == "read")
+
+
+@dataclass(frozen=True, slots=True)
+class _LongMix:
+    """Everything one long-session mix needs, resolved once."""
+
+    session_dir: Path
+    timeline: Timeline
+    graph: ActivityGraph
+    settings: EnvelopeConfig
+    corrections: LevelCorrections
+    track_ids: tuple[str, ...]
 
 
 @pytest.fixture
@@ -308,3 +327,110 @@ class TestTheDetectionPathStreams:
         assert reads, "the gate read nothing, so this proves nothing"
         assert max(reads) <= cap
         assert cap < minutes // 100
+
+
+class TestTheMixPathStreams:
+    """The same proof for M5's path, which has **two** things that could accumulate.
+
+    The audio is the obvious one. The gains are the one M5's plan review had to point out: a
+    four-hour envelope at 1 kHz over six tracks is 690 MB, and a renderer that built all of it
+    first and only then interleaved reads and writes would pass a proof written over the audio
+    path alone. So the envelope's own chunk production goes into the same ordered log, and the
+    assertion is that a write happens before the *last chunk is produced*.
+    """
+
+    @pytest.fixture
+    def long_mix(
+        self, canonical_fixture: FixtureTruth, canonical_activity_graph: ActivityGraph
+    ) -> _LongMix:
+        """The real session, answering to twenty minutes instead of ten seconds.
+
+        The same trick `long_track` uses and for the same reason: a track switched off for
+        nineteen minutes costs nineteen minutes of mix and no source bytes at all. That is
+        what a segment map *is*, so this is an ordinary session shape rather than a
+        contrivance.
+        """
+        result = run_ingest(canonical_fixture.session_dir)
+        assert result.timeline is not None
+        timeline = result.timeline.model_copy(update={"duration_samples": LONG_SESSION_SAMPLES})
+        graph = canonical_activity_graph.model_copy(
+            update={"duration_samples": LONG_SESSION_SAMPLES}
+        )
+        settings = EnvelopeConfig()
+        return _LongMix(
+            session_dir=canonical_fixture.session_dir,
+            timeline=timeline,
+            graph=graph,
+            settings=settings,
+            corrections=level_corrections(graph, settings=settings),
+            track_ids=tuple(track.track_id for track in timeline.tracks),
+        )
+
+    @staticmethod
+    def _render(long_mix: _LongMix, destination: Path, journal: Journal, measure: str) -> None:
+        """Render the long session with the envelope and the writer both instrumented."""
+
+        class Watched(EnvelopeStream):
+            def chunks(self, *, chunk_frames: int) -> Iterator[EnvelopeChunk]:
+                for chunk in super().chunks(chunk_frames=chunk_frames):
+                    journal.record(
+                        "envelope",
+                        chunk.n_frames if measure == "frames" else chunk.applied.nbytes,
+                    )
+                    yield chunk
+
+        original = WavWriter.write
+
+        def watched_write(self: WavWriter, samples: npt.NDArray[np.float32]) -> None:
+            journal.record("write", int(samples.shape[0]))
+            original(self, samples)
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(WavWriter, "write", watched_write)
+            render_mix(
+                destination,
+                session_dir=long_mix.session_dir,
+                timeline=long_mix.timeline,
+                track_ids=long_mix.track_ids,
+                envelope=Watched(
+                    long_mix.graph,
+                    settings=long_mix.settings,
+                    corrections=long_mix.corrections,
+                    track_ids=long_mix.track_ids,
+                ),
+            )
+
+    def test_a_write_happens_before_the_last_envelope_chunk_is_produced(
+        self, long_mix: _LongMix, tmp_path: Path
+    ) -> None:
+        """The assertion neither an accumulating reader nor an accumulating envelope passes.
+
+        Instrumenting only the audio would leave the 690 MB of gains invisible, which is
+        exactly the hole M5's plan review found in the first draft of this proof.
+        """
+        journal = Journal()
+        self._render(long_mix, tmp_path / "mix.wav", journal, measure="frames")
+
+        produced = [i for i, (kind, _) in enumerate(journal.events) if kind == "envelope"]
+        assert journal.first_write_index() < produced[-1]
+        assert sum(journal.writes) == LONG_SESSION_SAMPLES
+
+    def test_no_envelope_chunk_or_write_exceeds_one_window(
+        self, long_mix: _LongMix, tmp_path: Path
+    ) -> None:
+        """The size bound on both paths.
+
+        A window's gains are 1000 frames across six tracks — 48 kB. The whole session's would
+        be 57 MB here and 690 MB for four real hours, on the host whose free-space warning
+        this pipeline is supposed to reduce.
+        """
+        journal = Journal()
+        self._render(long_mix, tmp_path / "mix.wav", journal, measure="bytes")
+
+        gains = [count for kind, count in journal.events if kind == "envelope"]
+        assert max(journal.writes) <= DEFAULT_MIX_WINDOW
+        assert max(gains) <= 1000 * len(long_mix.track_ids) * 8
+        # Far more than one window in total, so the bounds are doing work rather than
+        # describing a session that happened to be short.
+        assert len(gains) > 100
+        assert sum(journal.writes) > 100 * DEFAULT_MIX_WINDOW

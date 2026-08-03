@@ -8,8 +8,10 @@ requested are both known, and the estimate is arithmetic rather than a guess.
 
 Two of the three terms in `doctor`'s original estimate turn out not to exist. There is no
 15 GiB of materialized 48 kHz working audio unless `--materialize-48k` asks for it
-(ADR-0011), and the mix intermediate belongs to M5. So this **partially answers OQ-013**
-and does not close it: what a full pipeline consumes still needs a real session to measure.
+(ADR-0011). The third — the mix intermediate — arrived with M5 and is here: one mono float32
+file at the session's own duration, requested only when a run will actually mix. So this
+**partially answers OQ-013** and does not close it: what a full pipeline consumes still needs
+a real session to measure, and the ASR cache is not sized here at all.
 
 Running out of disk halfway through writing six derivatives leaves a directory of
 half-files that the cache correctly refuses and that nothing cleans up. Refusing before the
@@ -55,11 +57,14 @@ class WorkspaceEstimate:
     track_count: int
     derivative_bytes: int
     materialized_bytes: int
+    #: The lossless mix intermediate: one mono float32 file at the session's own duration,
+    #: whatever the track count (M5). Zero for a run that will not mix.
+    mix_bytes: int
     free_bytes: int
 
     @property
     def total_bytes(self) -> int:
-        return self.derivative_bytes + self.materialized_bytes
+        return self.derivative_bytes + self.materialized_bytes + self.mix_bytes
 
     @property
     def sufficient(self) -> bool:
@@ -71,13 +76,22 @@ class WorkspaceEstimate:
 
 
 def estimate(
-    session_dir: Path, *, duration_samples: int, track_count: int, materialize_48k: bool
+    session_dir: Path,
+    *,
+    duration_samples: int,
+    track_count: int,
+    materialize_48k: bool,
+    mix: bool = False,
 ) -> WorkspaceEstimate:
     """Size this run's output from the timeline it is about to write.
 
     Every track's derivative is the session's full duration, not the track's own: a track
     that stopped early is still readable to the aligned duration, and the derivative is
     what M3 and M4 read.
+
+    Args:
+        mix: Whether this run will render the mix intermediate. One mono file, not one per
+            track — 2.8 GiB for four hours, against 5 GiB of derivatives.
     """
     per_track_16k = _decimated_length(duration_samples) * _BYTES_PER_SAMPLE
     per_track_48k = duration_samples * _BYTES_PER_SAMPLE if materialize_48k else 0
@@ -86,6 +100,7 @@ def estimate(
         track_count=track_count,
         derivative_bytes=per_track_16k * track_count,
         materialized_bytes=per_track_48k * track_count,
+        mix_bytes=duration_samples * _BYTES_PER_SAMPLE if mix else 0,
         free_bytes=shutil.disk_usage(session_dir).free,
     )
 

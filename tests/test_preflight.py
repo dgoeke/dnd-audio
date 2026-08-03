@@ -37,6 +37,7 @@ def an_estimate(**overrides: object) -> WorkspaceEstimate:
         track_count=6,
         derivative_bytes=1_000_000,
         materialized_bytes=0,
+        mix_bytes=0,
         free_bytes=100_000_000,
     )
     return replace(base, **overrides)  # type: ignore[arg-type]
@@ -81,6 +82,32 @@ class TestTheEstimateIsArithmeticNotAGuess:
         """The disk that matters is the one the session is on, not the one `/` is on."""
         found = estimate(tmp_path, duration_samples=HOUR, track_count=1, materialize_48k=False)
         assert found.free_bytes > 0
+
+
+class TestTheMixIntermediateIsSized:
+    """M5's term, which the charter says this milestone owes (OQ-013)."""
+
+    def test_the_intermediate_is_one_mono_file_not_one_per_track(self, tmp_path: Path) -> None:
+        """The share is mixed down to mono, so six tracks cost one file's worth of disk."""
+        found = estimate(
+            tmp_path, duration_samples=HOUR, track_count=6, materialize_48k=False, mix=True
+        )
+        assert found.mix_bytes == HOUR * 4
+        assert found.mix_bytes * 6 != found.mix_bytes
+
+    def test_a_run_that_will_not_mix_is_not_charged_for_it(self, tmp_path: Path) -> None:
+        lean = estimate(tmp_path, duration_samples=HOUR, track_count=6, materialize_48k=False)
+        full = estimate(
+            tmp_path, duration_samples=HOUR, track_count=6, materialize_48k=False, mix=True
+        )
+        assert lean.mix_bytes == 0
+        assert full.total_bytes - lean.total_bytes == HOUR * 4
+
+    def test_it_counts_toward_the_refusal(self, tmp_path: Path) -> None:
+        """A term that is estimated and then not summed is worse than no term at all."""
+        found = an_estimate(derivative_bytes=0, mix_bytes=200_000_000, free_bytes=100_000_000)
+        with pytest.raises(WorkspaceError, match=r"0\.19 GiB"):
+            preflight(found)
 
 
 class TestPreflight:

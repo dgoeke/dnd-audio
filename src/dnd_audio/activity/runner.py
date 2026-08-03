@@ -317,6 +317,7 @@ def perform_activity(
     builder: ReportBuilder,
     detector: DetectorBundle | None = None,
     use_cache: bool = True,
+    mix: bool = False,
     window_samples: int = DEFAULT_WINDOW_SAMPLES,
     detect_window_samples: int = DEFAULT_DETECT_WINDOW,
 ) -> ActivityWork:
@@ -325,6 +326,9 @@ def perform_activity(
     The composable half of `activity`, so a longer run — `transcribe`, and `process` in M5 —
     performs these stages exactly once and exactly the way the `activity` command does, rather
     than reimplementing the composition beside it (ADR-0015's argument, one milestone later).
+
+    ``mix`` is passed through to the work-space preflight, so a run that will go on to render
+    the mix intermediate refuses *before* expanding the session rather than after.
 
     What it deliberately does **not** do: snapshot `raw/`, verify it, commit anything, write
     the graph, or write a report. Those belong to whoever owns the whole run, because INV-01
@@ -345,6 +349,7 @@ def perform_activity(
         config,
         builder=builder,
         use_cache=use_cache,
+        mix=mix,
         window_samples=window_samples,
     )
     write_json_atomic(timeline_path, build.timeline.model_dump(mode="json"))
