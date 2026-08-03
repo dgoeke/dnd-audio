@@ -7,8 +7,8 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 
 ## Right now
 
-- **Current milestone:** M5 — Automix (not started)
-- **Branch:** `main` (M4 merged)
+- **Current milestone:** M5 — Automix (in progress)
+- **Branch:** `milestone/M5-automix`
 - **Last closed milestone:** M4 — Fake transcript
 - **Gate status at HEAD:** passes, zero skips (8 checks, 1768 tests)
 - **Blocked on:** nothing for M5. **H1 is still the oldest outstanding item**, but it is no
@@ -70,7 +70,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | M2  | Timeline                   | closed      | `f33ad6d` |
 | M3  | Activity                   | closed      | `38bc989` |
 | M4  | Fake transcript            | closed      | `8556f43` |
-| M5  | Automix                    | not started | —         |
+| M5  | Automix                    | in progress | —         |
 | M6a | ROCm environment           | not started | —         |
 | M6b | Qwen adapter               | not started | —         |
 | H1  | Hardware fixture (2 min)   | not started | —         |
