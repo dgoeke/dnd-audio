@@ -108,6 +108,12 @@ toolchain for the `rocm[libraries]` sdist, locked versions, `doctor` device chec
 (`/dev/kfd` and render-node openability tested by opening them, `torch.cuda`,
 `torch.version.hip`, device name, BF16 op), and device/dtype resolution rules.
 
+Two things the original entry did not anticipate, both recorded in ADR-0025: the AMD-only
+packages torch depends on must be **direct** members of the dependency group, because
+`[tool.uv.sources]` silently ignores a transitive-only requirement; and the group installs
+into a **separate** `.venv-rocm`, so the everyday gate keeps running the group-absent case
+INV-05 describes instead of proving it once.
+
 **Gate:** `doctor` reports a healthy GPU on the target host; the marked host smoke
 test runs a BF16 op on gfx1151; the lock file demonstrably contains AMD Torch and
 not a CUDA build from PyPI.

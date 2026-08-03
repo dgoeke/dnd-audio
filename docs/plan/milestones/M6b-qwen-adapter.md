@@ -155,6 +155,14 @@ complete cache identity — dropped in behind the interface M4 already exercises
 - **The two gfx1151 environment variables are applied by both shells** and re-checked by
   `doctor`. Promoting them to host defaults waits for *your* smoke test — that is the
   event M6a deferred it to.
+- **Three things M6a's verify phase learned the hard way, all of which you will meet.**
+  A probe must catch `Exception`, not `ImportError` — a ROCm build with a missing shared
+  library raises `OSError` from the loader, and the adapter loading a model has the same
+  exposure. A subprocess is where `conftest.py`'s Torch guard cannot look, so a subprocess
+  test touching the adapter must shadow `torch` on `PYTHONPATH`
+  (`tests/test_runtime.py::shadow`). And after fixing a review finding, **revert the fix
+  and watch a test fail** — one of M6a's fixes shipped with no test at all and only a
+  mutation run caught it.
 - **The `host_smoke` marker now means "needs the ROCm environment" as well as "needs the
   GPU".** A `host_smoke` test run from `.venv` reports "torch is not installed" rather
   than a GPU failure, and the assertion messages say which environment to use.
