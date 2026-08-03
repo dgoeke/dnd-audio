@@ -9,9 +9,16 @@ exact tool versions, and INV-08 makes a tool upgrade a cache-invalidating event.
 a tool's version is not the "no ffprobe invocation" boundary M1 owns — that boundary is
 about probing session audio.
 
+The model-availability check is a **warning** when the model is absent, not a failure.
+A host with no models can still inspect, ingest, mix, and run the entire default test
+suite; the one thing it cannot do is run activity detection against the real detector.
+Failing the whole check would tell an operator their machine is broken when it is
+merely incomplete, and the fix is one named command away.
+
 GPU checks — ``/dev/kfd`` and render-node openability, ``torch.cuda``, a BF16
-operation — land in M6a. The spec is emphatic that openability must be *tested* rather
-than inferred from group membership, so there is no half-check of it here.
+operation — land in M6a, and the ASR models in M6b. The spec is emphatic that GPU
+openability must be *tested* rather than inferred from group membership, so there is no
+half-check of it here.
 """
 
 from __future__ import annotations
@@ -25,6 +32,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Final
+
+from dnd_audio.models import SILERO_VAD, find_model, models_dir
 
 __all__ = [
     "REQUIRED_TOOLS",
@@ -72,12 +81,22 @@ class CheckResult:
     detail: str
 
 
-def run_checks(path: Path, *, min_free_gib: float = MIN_FREE_GIB) -> list[CheckResult]:
-    """Run every non-GPU check against ``path``, in a stable order."""
+def run_checks(
+    path: Path,
+    *,
+    min_free_gib: float = MIN_FREE_GIB,
+    models_directory: Path | None = None,
+) -> list[CheckResult]:
+    """Run every non-GPU check against ``path``, in a stable order.
+
+    ``models_directory`` overrides where models are looked for; the default is the one
+    :func:`~dnd_audio.models.models_dir` resolves, which is what the CLI uses.
+    """
     results = [_check_interpreter()]
     results.extend(_check_tool(name, flag) for name, flag in REQUIRED_TOOLS)
     results.append(_check_writable(path))
     results.append(_check_free_space(path, min_free_gib))
+    results.append(_check_vad_model(models_directory))
     return results
 
 
@@ -171,6 +190,32 @@ def _check_writable(path: Path) -> CheckResult:
     os.close(handle_fd)
     Path(name).unlink(missing_ok=True)
     return CheckResult(name="writable path", status=CheckStatus.OK, detail=str(path))
+
+
+def _check_vad_model(models_directory: Path | None) -> CheckResult:
+    """Is the pinned VAD model present *and* verifying?
+
+    :func:`~dnd_audio.models.find_model` answers the second half too, so a truncated or
+    substituted file reports as absent here rather than as available-but-broken. That is
+    the failure this check is worth having for: a missing file announces itself the first
+    time activity runs, and a wrong one does not.
+    """
+    directory = models_dir() if models_directory is None else models_directory
+    path = find_model(SILERO_VAD, directory=directory)
+    if path is None:
+        return CheckResult(
+            name="vad model",
+            status=CheckStatus.WARN,
+            detail=(
+                f"{SILERO_VAD.filename} is absent or does not match its pinned sha256 in "
+                f"{directory} — run `dnd-audio models fetch`"
+            ),
+        )
+    return CheckResult(
+        name="vad model",
+        status=CheckStatus.OK,
+        detail=f"{SILERO_VAD.key} {SILERO_VAD.release} at {path}",
+    )
 
 
 def _check_free_space(path: Path, min_free_gib: float) -> CheckResult:

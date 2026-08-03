@@ -28,7 +28,7 @@ TOOLS = ToolVersions(ffmpeg="ffmpeg version 8.0", ffprobe="ffprobe version 8.0")
 BASE: dict[str, Any] = {
     "relative_path": "raw/tx-a/TX01_MIC001_20260815_190000_orig.wav",
     "source_sha256": "a" * 64,
-    "config_hash": "b" * 64,
+    "stage_config_hash": "b" * 64,
     "tools": TOOLS,
     "ffprobe_args": ("-show_format", "-show_streams"),
 }
@@ -43,7 +43,7 @@ class TestIdentity:
         [
             ("relative_path", "raw/tx-b/TX02_MIC001_20260815_190000_orig.wav"),
             ("source_sha256", "c" * 64),
-            ("config_hash", "d" * 64),
+            ("stage_config_hash", "d" * 64),
             ("tools", ToolVersions(ffmpeg="ffmpeg version 8.1", ffprobe="ffprobe version 8.0")),
             ("tools", ToolVersions(ffmpeg="ffmpeg version 8.0", ffprobe="ffprobe version 8.1")),
             ("ffprobe_args", ("-show_format",)),

@@ -64,7 +64,12 @@ from dnd_audio.artifacts.report import (
     StructuredError,
 )
 from dnd_audio.artifacts.roster import RosterSummary
-from dnd_audio.config import SessionConfig, config_hash, load_session_config
+from dnd_audio.config import (
+    SessionConfig,
+    config_hash,
+    load_session_config,
+    stage_config_hash,
+)
 from dnd_audio.determinism import write_atomic, write_json_atomic
 from dnd_audio.errors import DiscoveryError, DndAudioError, ExitCode
 from dnd_audio.inspection import (
@@ -347,7 +352,7 @@ def _capture(
     key = cache_key(
         relative_path=item.relative_path,
         source_sha256=item.sha256,
-        config_hash=config_hash(config),
+        stage_config_hash=stage_config_hash(config, "inspection"),
         tools=tools,
         ffprobe_args=FFPROBE_ARGS,
     )

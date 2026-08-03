@@ -1,0 +1,662 @@
+{
+  "$defs": {
+    "ActivityCandidate": {
+      "additionalProperties": false,
+      "description": "One region of speech on one track, and what was decided about it.",
+      "properties": {
+        "ambiguous": {
+          "default": false,
+          "title": "Ambiguous",
+          "type": "boolean"
+        },
+        "band_level_mbfs": {
+          "title": "Band Level Mbfs",
+          "type": "integer"
+        },
+        "candidate_id": {
+          "minLength": 1,
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "decision": {
+          "enum": [
+            "retained",
+            "suppressed"
+          ],
+          "title": "Decision",
+          "type": "string"
+        },
+        "derivative_end_sample": {
+          "exclusiveMinimum": 0,
+          "title": "Derivative End Sample",
+          "type": "integer"
+        },
+        "derivative_start_sample": {
+          "minimum": 0,
+          "title": "Derivative Start Sample",
+          "type": "integer"
+        },
+        "end_sample": {
+          "exclusiveMinimum": 0,
+          "title": "End Sample",
+          "type": "integer"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/CandidateEvidence"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "peak_probability_permille": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Peak Probability Permille",
+          "type": "integer"
+        },
+        "probability_permille": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Probability Permille",
+          "type": "integer"
+        },
+        "relative_level_mb": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relative Level Mb"
+        },
+        "score_confidence_permille": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Score Confidence Permille",
+          "type": "integer"
+        },
+        "score_correlation_permille": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Score Correlation Permille",
+          "type": "integer"
+        },
+        "score_dominance_permille": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Score Dominance Permille",
+          "type": "integer"
+        },
+        "score_level_permille": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Score Level Permille",
+          "type": "integer"
+        },
+        "score_permille": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Score Permille",
+          "type": "integer"
+        },
+        "start_sample": {
+          "minimum": 0,
+          "title": "Start Sample",
+          "type": "integer"
+        },
+        "suppressed_by_candidate_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Suppressed By Candidate Id"
+        },
+        "track_id": {
+          "minLength": 1,
+          "title": "Track Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "track_id",
+        "start_sample",
+        "end_sample",
+        "derivative_start_sample",
+        "derivative_end_sample",
+        "probability_permille",
+        "peak_probability_permille",
+        "band_level_mbfs",
+        "score_permille",
+        "score_level_permille",
+        "score_confidence_permille",
+        "score_dominance_permille",
+        "score_correlation_permille",
+        "decision"
+      ],
+      "title": "ActivityCandidate",
+      "type": "object"
+    },
+    "ActivityDecision": {
+      "additionalProperties": false,
+      "description": "An attribution choice worth auditing. Deterministic: no counters, no timings.",
+      "properties": {
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "detail": {
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "subject": {
+          "minLength": 1,
+          "title": "Subject",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "subject",
+        "detail"
+      ],
+      "title": "ActivityDecision",
+      "type": "object"
+    },
+    "ActivityNote": {
+      "additionalProperties": false,
+      "description": "A warning: worth a human's attention, did not stop the run.",
+      "properties": {
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "ActivityNote",
+      "type": "object"
+    },
+    "ActivityProvenance": {
+      "additionalProperties": false,
+      "description": "What produced this graph. Deterministic, and part of its cache identity.",
+      "properties": {
+        "activity_semantics_version": {
+          "minimum": 1,
+          "title": "Activity Semantics Version",
+          "type": "integer"
+        },
+        "detector": {
+          "$ref": "#/$defs/DetectorIdentity"
+        },
+        "inspection_semantics_version": {
+          "minimum": 1,
+          "title": "Inspection Semantics Version",
+          "type": "integer"
+        },
+        "numpy_version": {
+          "minLength": 1,
+          "title": "Numpy Version",
+          "type": "string"
+        },
+        "onnxruntime_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Onnxruntime Version"
+        },
+        "scipy_version": {
+          "minLength": 1,
+          "title": "Scipy Version",
+          "type": "string"
+        },
+        "speech_band_filter_identity": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Speech Band Filter Identity",
+          "type": "string"
+        },
+        "speech_band_filter_name": {
+          "minLength": 1,
+          "title": "Speech Band Filter Name",
+          "type": "string"
+        },
+        "timeline_semantics_version": {
+          "minimum": 1,
+          "title": "Timeline Semantics Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "activity_semantics_version",
+        "timeline_semantics_version",
+        "inspection_semantics_version",
+        "numpy_version",
+        "scipy_version",
+        "detector",
+        "speech_band_filter_name",
+        "speech_band_filter_identity"
+      ],
+      "title": "ActivityProvenance",
+      "type": "object"
+    },
+    "ActivityTrack": {
+      "additionalProperties": false,
+      "description": "One transmitter's detection results and the person wearing it.",
+      "properties": {
+        "detection_cache_key": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Detection Cache Key",
+          "type": "string"
+        },
+        "frame_samples": {
+          "exclusiveMinimum": 0,
+          "title": "Frame Samples",
+          "type": "integer"
+        },
+        "probability_frames": {
+          "minimum": 0,
+          "title": "Probability Frames",
+          "type": "integer"
+        },
+        "probability_relative_path": {
+          "minLength": 1,
+          "title": "Probability Relative Path",
+          "type": "string"
+        },
+        "speaker_id": {
+          "minLength": 1,
+          "title": "Speaker Id",
+          "type": "string"
+        },
+        "speaker_name": {
+          "minLength": 1,
+          "title": "Speaker Name",
+          "type": "string"
+        },
+        "speech_reference_mbfs": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Speech Reference Mbfs"
+        },
+        "track_id": {
+          "minLength": 1,
+          "title": "Track Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "track_id",
+        "speaker_id",
+        "speaker_name",
+        "detection_cache_key",
+        "probability_relative_path",
+        "probability_frames",
+        "frame_samples"
+      ],
+      "title": "ActivityTrack",
+      "type": "object"
+    },
+    "CandidateEvidence": {
+      "additionalProperties": false,
+      "description": "One candidate compared against one competing candidate on another track.\n\nKept per *pair* rather than summarized per candidate: a candidate that two tracks each\nnearly suppressed is the marginal case worth seeing, and a best-competitor summary is\nexactly where it disappears.",
+      "properties": {
+        "compared_derivative_samples": {
+          "minimum": 0,
+          "title": "Compared Derivative Samples",
+          "type": "integer"
+        },
+        "correlation_permille": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Correlation Permille",
+          "type": "integer"
+        },
+        "lag_derivative_samples": {
+          "title": "Lag Derivative Samples",
+          "type": "integer"
+        },
+        "level_delta_mb": {
+          "title": "Level Delta Mb",
+          "type": "integer"
+        },
+        "other_candidate_id": {
+          "minLength": 1,
+          "title": "Other Candidate Id",
+          "type": "string"
+        },
+        "other_track_id": {
+          "minLength": 1,
+          "title": "Other Track Id",
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "suppresses",
+            "insufficient_margin",
+            "insufficient_correlation",
+            "vetoed_by_track_level"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "overlap_end_sample": {
+          "exclusiveMinimum": 0,
+          "title": "Overlap End Sample",
+          "type": "integer"
+        },
+        "overlap_start_sample": {
+          "minimum": 0,
+          "title": "Overlap Start Sample",
+          "type": "integer"
+        },
+        "score_margin_permille": {
+          "maximum": 1000,
+          "minimum": -1000,
+          "title": "Score Margin Permille",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "other_candidate_id",
+        "other_track_id",
+        "overlap_start_sample",
+        "overlap_end_sample",
+        "compared_derivative_samples",
+        "correlation_permille",
+        "lag_derivative_samples",
+        "score_margin_permille",
+        "level_delta_mb",
+        "outcome"
+      ],
+      "title": "CandidateEvidence",
+      "type": "object"
+    },
+    "DetectorIdentity": {
+      "additionalProperties": false,
+      "description": "Everything that decides what the detector would answer.\n\nA fake carries a ``variant_digest`` instead of a model hash — two scripted detectors with\ndifferent scripts are different detectors, and a cache that could not tell them apart\nwould serve one test's answer to another.",
+      "properties": {
+        "commit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Commit"
+        },
+        "execution_provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Provider"
+        },
+        "interface": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DetectorInterface"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "model_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Sha256"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "release": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Release"
+        },
+        "runtime": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Runtime"
+        },
+        "runtime_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Runtime Version"
+        },
+        "variant_digest": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Variant Digest"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "DetectorIdentity",
+      "type": "object"
+    },
+    "DetectorInterface": {
+      "additionalProperties": false,
+      "description": "How the detector was *called*, not merely which weights it holds.\n\nPart of the identity because a future release carrying the same name with a different\nframe protocol would otherwise produce different answers under an unchanged cache key\n(INV-08, ADR-0013).",
+      "properties": {
+        "context_samples": {
+          "minimum": 0,
+          "title": "Context Samples",
+          "type": "integer"
+        },
+        "frame_samples": {
+          "exclusiveMinimum": 0,
+          "title": "Frame Samples",
+          "type": "integer"
+        },
+        "input_names": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Input Names",
+          "type": "array"
+        },
+        "sample_rate": {
+          "exclusiveMinimum": 0,
+          "title": "Sample Rate",
+          "type": "integer"
+        },
+        "state_shape": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "State Shape",
+          "type": "array"
+        }
+      },
+      "required": [
+        "frame_samples",
+        "context_samples",
+        "sample_rate"
+      ],
+      "title": "DetectorInterface",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The deterministic activity and attribution graph, at ``work/activity.json``.",
+  "properties": {
+    "attribution_cache_key": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Attribution Cache Key",
+      "type": "string"
+    },
+    "candidates": {
+      "items": {
+        "$ref": "#/$defs/ActivityCandidate"
+      },
+      "title": "Candidates",
+      "type": "array"
+    },
+    "config_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Config Hash",
+      "type": "string"
+    },
+    "decisions": {
+      "items": {
+        "$ref": "#/$defs/ActivityDecision"
+      },
+      "title": "Decisions",
+      "type": "array"
+    },
+    "derivative_sample_rate": {
+      "exclusiveMinimum": 0,
+      "title": "Derivative Sample Rate",
+      "type": "integer"
+    },
+    "duration_samples": {
+      "minimum": 0,
+      "title": "Duration Samples",
+      "type": "integer"
+    },
+    "provenance": {
+      "$ref": "#/$defs/ActivityProvenance"
+    },
+    "sample_rate": {
+      "exclusiveMinimum": 0,
+      "title": "Sample Rate",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "session_id": {
+      "minLength": 1,
+      "title": "Session Id",
+      "type": "string"
+    },
+    "timeline_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Timeline Sha256",
+      "type": "string"
+    },
+    "tracks": {
+      "items": {
+        "$ref": "#/$defs/ActivityTrack"
+      },
+      "title": "Tracks",
+      "type": "array"
+    },
+    "warnings": {
+      "items": {
+        "$ref": "#/$defs/ActivityNote"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "session_id",
+    "config_hash",
+    "timeline_sha256",
+    "attribution_cache_key",
+    "provenance",
+    "sample_rate",
+    "derivative_sample_rate",
+    "duration_samples"
+  ],
+  "title": "ActivityGraph",
+  "type": "object"
+}

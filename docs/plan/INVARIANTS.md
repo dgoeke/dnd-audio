@@ -96,7 +96,16 @@ of the file the entry names. **An entry is committed only after INV-01 has been
 re-verified**, never at publish time: a run that correctly fails on a changed source must
 not leave behind an entry keyed on the bytes it read, because restoring the original file
 makes that key match again forever (M2's verify phase).
-_Owner: M1 (inspection), M2 (derivatives), M6b (ASR)._
+
+**This holds for every cache a run touches, and the test must be scoped that way.** A helper
+that commits its own cache defeats the verification its caller performs, and it reads as
+correct from the outside when the caller commits again afterwards — `_inspect` carried a
+docstring promising it returned the cache uncommitted and published it three lines below,
+which survived M2 and was caught only when M3 composed inspection into a longer run. The
+regression test could not have seen it: it asserted over the one cache that milestone had
+added. **Assert that a failed run leaves no sidecar anywhere under `work/cache`**, by glob
+rather than by naming the caches you know about (M3's verify phase).
+_Owner: M1 (inspection), M2 (derivatives), M3 (detection and attribution), M6b (ASR)._
 
 **INV-09 — The mix never depends on ASR.**
 The automixer consumes only the model-independent pre-ASR activity/attribution

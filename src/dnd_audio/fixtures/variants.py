@@ -26,10 +26,13 @@ from dnd_audio.fixtures.session import (
 )
 
 __all__ = [
+    "DELAYED_BLEED_SAMPLES",
     "DRIFT_END_SHIFT_SAMPLES",
+    "delayed_bleed_session",
     "drift_session",
     "drop_frame_session",
     "inconsistent_rate_session",
+    "mutual_bleed_session",
     "no_origin_session",
     "nonconforming_rate_session",
     "overlapping_session",
@@ -37,6 +40,12 @@ __all__ = [
 ]
 
 _SECOND: Final = 48000
+
+#: How late the bleed arrives in :func:`delayed_bleed_session`, in samples at 48 kHz — 25 ms.
+#: Inside the default ±30 ms correlation window and far outside the canonical fixture's 3 ms,
+#: so a correlator restricted to small lags finds nothing and one searching the whole window
+#: finds it at a lag it has to report correctly to be believed (OQ-017).
+DELAYED_BLEED_SAMPLES: Final = 1200
 
 #: How far the end transient is moved on one track in :func:`drift_session`, in samples at
 #: 48 kHz — 20 ms. Chosen to be far outside any plausible quantization and far inside the
@@ -276,4 +285,119 @@ def dated_session(day: dt.date) -> FixtureSession:
             (FixtureChunk(start_sample=0, n_samples=_SECOND, sequence=1),),
             (FixtureChunk(start_sample=_SECOND, n_samples=_SECOND, sequence=1),),
         ),
+    )
+
+
+def delayed_bleed_session() -> FixtureSession:
+    """One speaker, one listener, and 25 ms of air between them.
+
+    `tx-a` speaks; `tx-b` hears it :data:`DELAYED_BLEED_SAMPLES` later and 20 dB down. `tx-b`
+    says nothing at all, so it has too few candidates for a speech reference and its veto is
+    inactive — which is what makes this a clean test of the *correlation* half of the gate
+    rather than of the veto.
+
+    The delay is the point. At 3 ms the canonical fixture cannot distinguish a lag-tolerant
+    correlator from a sloppy zero-lag one; at 25 ms it can, and the reported peak lag has to
+    come back as 400 derivative samples rather than as whatever the search happened to find
+    at its boundary.
+    """
+    length = 12 * _SECOND
+    return FixtureSession(
+        session_id="delayed-bleed",
+        title="Delayed bleed",
+        tracks=_two_tracks(
+            (FixtureChunk(start_sample=0, n_samples=length, sequence=1),),
+            (FixtureChunk(start_sample=0, n_samples=length, sequence=1),),
+        ),
+        speech=(
+            SpeechInterval(
+                track_id="tx-a",
+                start_sample=4 * _SECOND,
+                n_samples=2 * _SECOND,
+                bleeds_into=("tx-b",),
+                bleed_delay_samples=DELAYED_BLEED_SAMPLES,
+                bleed_attenuation_db=20.0,
+                gain=0.30,
+                utterance_id="utt_delayed_a",
+                text="Can you hear me from over here?",
+            ),
+        ),
+    )
+
+
+def mutual_bleed_session() -> FixtureSession:
+    """Two people genuinely talking at once, each lav also carrying the other's voice.
+
+    The case independent review produced against M3's first plan, and the reason the gate
+    has a veto at all (ADR-0014). `tx-a` is loud and `tx-b` is ten times quieter; during the
+    overlap at 14 s each lav also carries the other's voice. `tx-b`'s candidate is therefore
+    *dominated* by `tx-a` — the score margin comes out around 185 against a threshold of 150
+    — and *correlates* with it at around 0.73 against a threshold of 0.5. Both numeric
+    conditions say bleed. Both are wrong: `tx-b`'s wearer is talking.
+
+    What saves it is that `tx-b`'s own level during the overlap sits *above* what `tx-b`
+    sounds like when its wearer speaks alone, which the three solo utterances establish. A
+    lav hearing its wearer at the wearer's normal level is not hearing bleed.
+
+    The gains are tuned so that all three conditions clear their thresholds with room —
+    otherwise the fixture would "pass" for the wrong reason, proving only that the margin
+    fell short. `tests/test_activity_bleed.py` pins that by running this same audio with
+    `min_reference_candidates` raised beyond reach: with no reference the veto cannot fire,
+    and the identical overlap is suppressed. That contrast is the proof; the retention on
+    its own would not be.
+
+    The three solo utterances per track are not decoration either:
+    `bleed.min_reference_candidates` is what stops a reference being estimated from one
+    region, and a fixture with fewer would silently disable the very veto it exercises.
+    """
+    length = 20 * _SECOND
+    solo = (
+        ("tx-a", 1, 0.30),
+        ("tx-b", 3, 0.03),
+        ("tx-a", 5, 0.30),
+        ("tx-b", 7, 0.03),
+        ("tx-a", 9, 0.30),
+        ("tx-b", 11, 0.03),
+    )
+    speech = (
+        *(
+            SpeechInterval(
+                track_id=track_id,
+                start_sample=second * _SECOND,
+                n_samples=_SECOND,
+                gain=gain,
+                utterance_id=f"utt_mutual_{track_id}_{second:02d}",
+                text=f"Solo line at {second} seconds.",
+            )
+            for track_id, second, gain in solo
+        ),
+        SpeechInterval(
+            track_id="tx-a",
+            start_sample=14 * _SECOND,
+            n_samples=2 * _SECOND,
+            bleeds_into=("tx-b",),
+            bleed_attenuation_db=18.0,
+            gain=0.30,
+            utterance_id="utt_mutual_overlap_a",
+            text="I think we should take the left passage.",
+        ),
+        SpeechInterval(
+            track_id="tx-b",
+            start_sample=14 * _SECOND,
+            n_samples=2 * _SECOND,
+            bleeds_into=("tx-a",),
+            bleed_attenuation_db=18.0,
+            gain=0.03,
+            utterance_id="utt_mutual_overlap_b",
+            text="No, the right one, I already checked.",
+        ),
+    )
+    return FixtureSession(
+        session_id="mutual-bleed",
+        title="Mutual bleed during real overlap",
+        tracks=_two_tracks(
+            (FixtureChunk(start_sample=0, n_samples=length, sequence=1),),
+            (FixtureChunk(start_sample=0, n_samples=length, sequence=1),),
+        ),
+        speech=speech,
     )

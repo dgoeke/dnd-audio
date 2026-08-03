@@ -531,11 +531,24 @@ the VAD probabilities/decisions needed to debug a bad result.
 
 Keep VAD behind an `ActivityDetector` interface and provide a deterministic fake or
 ground-truth-mask implementation for tests. Synthetic speech-shaped noise must not
-be expected to trigger a particular learned Silero release. Pin the Silero package
-and model artifact/revision, load it locally rather than through an unpinned runtime
-`torch.hub` fetch, and include its identity in cache keys and the report. CPU or ONNX
-inference is the preferred baseline for this small 16 kHz model so it does not
-contend with ASR for unified GPU memory.
+be expected to trigger a particular learned Silero release. Pin the Silero model
+artifact by upstream release and commit **and by its content hash**, pin the runtime
+that executes it and the interface it is invoked through, load it locally rather than
+through an unpinned runtime `torch.hub` fetch, and include that identity in cache keys
+and the report. CPU or ONNX inference is the preferred baseline for this small 16 kHz
+model: it keeps Torch and the ROCm stack out of the environment the default test suite
+runs in, and the GPU's scarce resource during a session is compute for ASR.
+
+_Amended twice (ADR-0013)._ _First:_ this paragraph originally said "pin the Silero
+package and model artifact/revision". Installing the `silero-vad` distribution would
+drag `torch` and `torchaudio` into the environment the default test suite runs in, for
+a model this project drives through ONNX Runtime and never through that package's API —
+and it would collide with the AMD-sourced Torch M6a installs. What reproducibility
+actually requires is the artifact's bytes, the runtime, and the calling interface, which
+is what the wording now names. _Second:_ it justified CPU inference as avoiding
+contention "for unified GPU memory". The target host is a unified-memory machine, so a
+CPU tensor and a GPU tensor draw on the same pool and the contention is not avoided by
+choosing CPU. The preference is right for other reasons, which the sentence now gives.
 
 Because each lav also hears the room, VAD alone will create duplicate candidates.
 Implement a conservative two-stage attribution strategy:

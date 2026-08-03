@@ -64,7 +64,7 @@ def a_track(
 
 def key_for(track: TimelineTrack, **overrides: object) -> str:
     settings: dict[str, object] = {
-        "config_hash": CONFIG_HASH,
+        "stage_config_hash": CONFIG_HASH,
         "target_rate": DERIVATIVE_SAMPLE_RATE,
         "filter_identity": FILTER_ID,
     }
@@ -99,7 +99,7 @@ class TestIdentityCoversEverythingThatChangesTheAudio:
         assert key_for(a_track()) != key_for(a_track(track_id="tx-b"))
 
     def test_the_configuration_changes_the_key(self) -> None:
-        assert key_for(a_track()) != key_for(a_track(), config_hash="e" * 64)
+        assert key_for(a_track()) != key_for(a_track(), stage_config_hash="e" * 64)
 
     def test_the_filter_changes_the_key(self) -> None:
         """A redesigned filter must rebuild every derivative it ever produced."""
@@ -136,7 +136,7 @@ class TestIdentityCoversEverythingThatChangesTheAudio:
         """
         document = derivative_identity_document(
             a_track(),
-            config_hash=CONFIG_HASH,
+            stage_config_hash=CONFIG_HASH,
             target_rate=DERIVATIVE_SAMPLE_RATE,
             filter_identity=FILTER_ID,
         )
@@ -147,7 +147,7 @@ class TestIdentityCoversEverythingThatChangesTheAudio:
         """So the two cannot drift apart and leave the assertions above meaningless."""
         document = derivative_identity_document(
             a_track(),
-            config_hash=CONFIG_HASH,
+            stage_config_hash=CONFIG_HASH,
             target_rate=DERIVATIVE_SAMPLE_RATE,
             filter_identity=FILTER_ID,
         )

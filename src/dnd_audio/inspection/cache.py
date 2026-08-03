@@ -52,14 +52,22 @@ def cache_key(
     *,
     relative_path: str,
     source_sha256: str,
-    config_hash: str,
+    stage_config_hash: str,
     tools: ToolVersions,
     ffprobe_args: tuple[str, ...],
 ) -> str:
-    """The identity of one source's inspection. See the module docstring."""
+    """The identity of one source's inspection. See the module docstring.
+
+    ``stage_config_hash`` is the ``inspection`` projection of the resolved configuration,
+    not the whole of it (ADR-0016): a mix or activity threshold cannot change what FFprobe
+    reports about a file, and re-probing every source because one was tuned is cost with no
+    corresponding risk. The projection is deliberately generous — placement, roster, and
+    recovery all reach inspection — and `tests/test_config.py` proves it changes for every
+    section it includes.
+    """
     identity = {
         "cache_record_version": _CACHE_RECORD_VERSION,
-        "config_hash": config_hash,
+        "config_hash": stage_config_hash,
         "ffmpeg_version": tools.ffmpeg,
         "ffprobe_args": list(ffprobe_args),
         "ffprobe_version": tools.ffprobe,

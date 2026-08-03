@@ -2,14 +2,23 @@
   "$defs": {
     "ActivityConfig": {
       "additionalProperties": false,
-      "description": "Pre-ASR activity and bleed-gate parameters. M3 extends this.",
+      "description": "Pre-ASR activity and bleed-gate parameters.",
       "properties": {
+        "bleed": {
+          "$ref": "#/$defs/BleedConfig"
+        },
         "correlation_max_lag_ms": {
           "default": 30,
           "exclusiveMinimum": 0,
           "maximum": 1000,
           "title": "Correlation Max Lag Ms",
           "type": "integer"
+        },
+        "scoring": {
+          "$ref": "#/$defs/ScoringConfig"
+        },
+        "vad": {
+          "$ref": "#/$defs/VadConfig"
         }
       },
       "title": "ActivityConfig",
@@ -104,6 +113,49 @@
       "title": "AsrConfig",
       "type": "object"
     },
+    "BleedConfig": {
+      "additionalProperties": false,
+      "description": "When one track's candidate is really another track's voice (ADR-0014).\n\nSuppression requires all three of a score margin, a correlation, and a level below the\nveto. Any one of them failing keeps the candidate, because losing real overlapped\nspeech is worse than spending more ASR compute.",
+      "properties": {
+        "correlation_window_ms": {
+          "default": 2000,
+          "exclusiveMinimum": 0,
+          "maximum": 30000,
+          "title": "Correlation Window Ms",
+          "type": "integer"
+        },
+        "min_correlation": {
+          "default": 0.5,
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "Min Correlation",
+          "type": "number"
+        },
+        "min_reference_candidates": {
+          "default": 3,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Min Reference Candidates",
+          "type": "integer"
+        },
+        "min_score_margin": {
+          "default": 0.15,
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "Min Score Margin",
+          "type": "number"
+        },
+        "veto_db": {
+          "default": 12.0,
+          "exclusiveMinimum": 0.0,
+          "maximum": 60.0,
+          "title": "Veto Db",
+          "type": "number"
+        }
+      },
+      "title": "BleedConfig",
+      "type": "object"
+    },
     "MixConfig": {
       "additionalProperties": false,
       "description": "Automix and encode targets. M5 extends this.",
@@ -149,6 +201,56 @@
         }
       },
       "title": "RecoveryConfig",
+      "type": "object"
+    },
+    "ScoringConfig": {
+      "additionalProperties": false,
+      "description": "How four pieces of evidence become one source score.\n\nWeights are relative and normalized by their sum, so doubling all four changes\nnothing. The spans are the dynamic ranges each term is mapped over; a term is clamped\nat both ends rather than allowed to dominate the total from one outlier.",
+      "properties": {
+        "confidence_weight": {
+          "default": 0.25,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence Weight",
+          "type": "number"
+        },
+        "correlation_weight": {
+          "default": 0.15,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Correlation Weight",
+          "type": "number"
+        },
+        "dominance_span_db": {
+          "default": 20.0,
+          "exclusiveMinimum": 0.0,
+          "maximum": 120.0,
+          "title": "Dominance Span Db",
+          "type": "number"
+        },
+        "dominance_weight": {
+          "default": 0.25,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Dominance Weight",
+          "type": "number"
+        },
+        "level_span_db": {
+          "default": 30.0,
+          "exclusiveMinimum": 0.0,
+          "maximum": 120.0,
+          "title": "Level Span Db",
+          "type": "number"
+        },
+        "level_weight": {
+          "default": 0.35,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Level Weight",
+          "type": "number"
+        }
+      },
+      "title": "ScoringConfig",
       "type": "object"
     },
     "SourceTimeOverride": {
@@ -374,6 +476,56 @@
         "input"
       ],
       "title": "TrackConfig",
+      "type": "object"
+    },
+    "VadConfig": {
+      "additionalProperties": false,
+      "description": "Where speech starts and stops on one track.\n\nEvery default here is a number chosen against synthetic audio and **OQ-017** is the\nrecord of that: a real session is what will move them.",
+      "properties": {
+        "merge_gap_ms": {
+          "default": 200,
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Merge Gap Ms",
+          "type": "integer"
+        },
+        "min_silence_ms": {
+          "default": 100,
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Min Silence Ms",
+          "type": "integer"
+        },
+        "min_speech_ms": {
+          "default": 250,
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Min Speech Ms",
+          "type": "integer"
+        },
+        "pad_ms": {
+          "default": 30,
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Pad Ms",
+          "type": "integer"
+        },
+        "silence_threshold": {
+          "default": 0.35,
+          "exclusiveMaximum": 1.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Silence Threshold",
+          "type": "number"
+        },
+        "speech_threshold": {
+          "default": 0.5,
+          "exclusiveMaximum": 1.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Speech Threshold",
+          "type": "number"
+        }
+      },
+      "title": "VadConfig",
       "type": "object"
     }
   },

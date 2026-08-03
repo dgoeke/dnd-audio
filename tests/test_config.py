@@ -5,17 +5,25 @@ from __future__ import annotations
 import copy
 import datetime as dt
 from pathlib import Path
-from typing import Any
+from typing import Any, Final, get_args
 
 import pytest
 import yaml
+from pydantic import BaseModel
 
 from dnd_audio.config import (
+    _FIELD_SCOPES,
     CONFIG_SCHEMA_VERSION,
+    BleedConfig,
+    ScoringConfig,
     SessionConfig,
+    StageScope,
+    VadConfig,
     config_hash,
     load_session_config,
     resolved_config,
+    stage_config,
+    stage_config_hash,
 )
 from dnd_audio.errors import ConfigError
 
@@ -455,3 +463,320 @@ class TestResolvedConfigHash:
         first = config_hash(load_session_config(valid_session_yaml))
         second = config_hash(load_session_config(valid_session_yaml))
         assert first == second
+
+
+_STAGES: Final[tuple[StageScope, ...]] = get_args(StageScope)
+
+#: Where in a session payload to write a value, as a path of mapping keys and list indices.
+_Path = tuple[str | int, ...]
+
+#: A different but legal value for every field :data:`_FIELD_SCOPES` classifies, keyed by the
+#: same paths. ``None`` means the field has exactly one legal value and therefore cannot move
+#: a hash at all. A test asserts this table covers the projection table, so a new
+#: configuration section cannot be classified without also being exercised in both directions.
+_ALTERNATIVES: Final[dict[str, tuple[_Path, Any] | None]] = {
+    "schema_version": None,  # Literal[1]: there is no other value to try.
+    "session_id": (("session_id",), "2026-09-19"),
+    "tracks": (("tracks", 0, "speaker_name"), "Alice Liddell"),
+    "active_tracks": (("active_tracks",), ["tx-a", "tx-b"]),
+    "timecode": (("timecode", "frame_rate"), "25F"),
+    "recovery": (("recovery", "allow_processed_audio"), True),
+    "activity.vad": (("activity", "vad", "speech_threshold"), 0.6),
+    "activity.bleed": (("activity", "bleed", "min_correlation"), 0.75),
+    "activity.scoring": (("activity", "scoring", "level_weight"), 0.5),
+    "activity.correlation_max_lag_ms": (("activity", "correlation_max_lag_ms"), 45),
+    "title": (("title",), "Session 02"),
+    "language": (("language",), "German"),
+    "asr": (("asr", "max_new_tokens"), 512),
+    "sync_qa": (("sync_qa", "enabled"), True),
+    "mix": (("mix", "mp3_bitrate_kbps"), 192),
+}
+
+#: ADR-0016's table, transcribed from the decision rather than derived from the code. The
+#: parameterized tests below are generated *from* `_FIELD_SCOPES`, which proves the
+#: projections behave as the table says — and would happily follow the table anywhere,
+#: including into a stage that must not depend on a section. This is the fixed point that
+#: makes widening a projection a decision somebody has to record here as well as there.
+_ADR_0016_PROJECTIONS: Final[dict[StageScope, frozenset[str]]] = {
+    "inspection": frozenset(
+        {"schema_version", "session_id", "tracks", "active_tracks", "timecode", "recovery"}
+    ),
+    "derivative": frozenset(
+        {"schema_version", "session_id", "tracks", "active_tracks", "timecode", "recovery"}
+    ),
+    "detection": frozenset({"schema_version", "session_id", "tracks", "activity.vad"}),
+    "attribution": frozenset(
+        {
+            "schema_version",
+            "session_id",
+            "tracks",
+            "activity.vad",
+            "activity.bleed",
+            "activity.scoring",
+            "activity.correlation_max_lag_ms",
+        }
+    ),
+}
+
+_MOVABLE: Final[tuple[str, ...]] = tuple(
+    sorted(path for path, alternative in _ALTERNATIVES.items() if alternative is not None)
+)
+
+_INCLUDED: Final[list[tuple[StageScope, str]]] = [
+    (stage, path) for path in _MOVABLE for stage in _STAGES if stage in _FIELD_SCOPES[path]
+]
+
+_EXCLUDED: Final[list[tuple[StageScope, str]]] = [
+    (stage, path) for path in _MOVABLE for stage in _STAGES if stage not in _FIELD_SCOPES[path]
+]
+
+
+def _stage_hashes(config: SessionConfig) -> dict[StageScope, str]:
+    """Every stage's cache identity at once, so a test can compare them side by side."""
+    return {stage: stage_config_hash(config, stage) for stage in _STAGES}
+
+
+def _with_alternative(raw: dict[str, Any], path: str) -> SessionConfig:
+    """The same session with the field at ``path`` set to a different legal value."""
+    alternative = _ALTERNATIVES[path]
+    assert alternative is not None, f"{path} has no alternative value to write"
+    keys, value = alternative
+    payload = copy.deepcopy(raw)
+    target: Any = payload
+    for key in keys[:-1]:
+        target = target[key] if isinstance(key, int) else target.setdefault(key, {})
+    target[keys[-1]] = value
+    return SessionConfig.model_validate(payload)
+
+
+class TestActivityConfigAndStageScopes:
+    """M3's three new sections, and the per-stage cache projections of ADR-0016."""
+
+    def test_equal_vad_thresholds_are_rejected(self, raw: dict[str, Any]) -> None:
+        """Two identical thresholds are one threshold: no hysteresis at all.
+
+        A probability wobbling across a single threshold mid-syllable chops a word in half,
+        which is the whole reason there are two of them.
+        """
+        raw["activity"]["vad"] = {"speech_threshold": 0.5, "silence_threshold": 0.5}
+        _reject(raw, "must be below")
+
+    def test_inverted_vad_thresholds_are_rejected(self, raw: dict[str, Any]) -> None:
+        """Silence above speech would start a region where it ends."""
+        raw["activity"]["vad"] = {"speech_threshold": 0.4, "silence_threshold": 0.6}
+        _reject(raw, "must be below")
+
+    def test_scoring_weights_summing_to_zero_are_rejected(self, raw: dict[str, Any]) -> None:
+        """Every candidate would score the same, and the bleed gate could prefer nothing.
+
+        Rejected rather than defaulted, because a normalization by the sum would also
+        divide by zero — and a gate that silently never suppresses looks like a gate that
+        found no bleed.
+        """
+        raw["activity"]["scoring"] = {
+            "level_weight": 0.0,
+            "confidence_weight": 0.0,
+            "dominance_weight": 0.0,
+            "correlation_weight": 0.0,
+        }
+        _reject(raw, "sum to zero")
+
+    @pytest.mark.parametrize(
+        ("section", "field", "value", "match"),
+        [
+            ("vad", "speech_threshold", 1.0, "less than 1"),
+            ("vad", "pad_ms", 2000, "less than or equal to 1000"),
+            ("bleed", "min_correlation", 0.0, "greater than 0"),
+            ("bleed", "correlation_window_ms", 60_000, "less than or equal to 30000"),
+            ("scoring", "level_span_db", 0.0, "greater than 0"),
+            ("scoring", "correlation_weight", 1.5, "less than or equal to 1"),
+        ],
+    )
+    def test_out_of_range_activity_values_are_rejected(
+        self, raw: dict[str, Any], section: str, field: str, value: object, match: str
+    ) -> None:
+        """A representative bound per section, including the one holding an array (INV-07)."""
+        raw["activity"][section] = {field: value}
+        _reject(raw, match)
+
+    def test_an_omitted_activity_section_hashes_like_a_fully_stated_one(
+        self, raw: dict[str, Any]
+    ) -> None:
+        """INV-08, extended to M3's fields — and a pin on what the defaults are.
+
+        The stated values below are written out independently of the model. If a default
+        moves without this file moving with it, the two payloads stop agreeing and this
+        fails, which is the point: an operator who writes out the current defaults must not
+        thereby invalidate every cached artifact in the session.
+        """
+        stated_vad = {
+            "speech_threshold": 0.5,
+            "silence_threshold": 0.35,
+            "min_speech_ms": 250,
+            "min_silence_ms": 100,
+            "merge_gap_ms": 200,
+            "pad_ms": 30,
+        }
+        stated_bleed = {
+            "min_score_margin": 0.15,
+            "min_correlation": 0.5,
+            "veto_db": 12.0,
+            "correlation_window_ms": 2000,
+            "min_reference_candidates": 3,
+        }
+        stated_scoring = {
+            "level_weight": 0.35,
+            "confidence_weight": 0.25,
+            "dominance_weight": 0.25,
+            "correlation_weight": 0.15,
+            "level_span_db": 30.0,
+            "dominance_span_db": 20.0,
+        }
+        # Stating *every* default, not merely some: a field missing here would make the
+        # comparison below prove nothing about it.
+        assert set(stated_vad) == set(VadConfig.model_fields)
+        assert set(stated_bleed) == set(BleedConfig.model_fields)
+        assert set(stated_scoring) == set(ScoringConfig.model_fields)
+
+        omitted = copy.deepcopy(raw)
+        del omitted["activity"]
+        stated = copy.deepcopy(raw)
+        stated["activity"] = {
+            "correlation_max_lag_ms": 30,
+            "vad": stated_vad,
+            "bleed": stated_bleed,
+            "scoring": stated_scoring,
+        }
+
+        assert config_hash(SessionConfig.model_validate(omitted)) == config_hash(
+            SessionConfig.model_validate(stated)
+        )
+
+    def test_every_classified_field_has_an_alternative_value_to_try(self) -> None:
+        """Both projection tests below are parameterized from this table, not by hand.
+
+        A new section added to `_FIELD_SCOPES` and forgotten here would silently be tested
+        in neither direction.
+        """
+        assert set(_ALTERNATIVES) == set(_FIELD_SCOPES)
+
+    def test_every_configuration_field_is_classified(self) -> None:
+        """ADR-0016: a new section must be classified deliberately, not default to nothing.
+
+        Derived from the model rather than a hand-written list, so adding a field to
+        `SessionConfig` without deciding which stages it can change fails here.
+        """
+        for name, field in SessionConfig.model_fields.items():
+            if name in _FIELD_SCOPES:
+                continue
+            nested = field.annotation
+            unclassified = f"{name} is classified neither as a whole nor field by field"
+            assert isinstance(nested, type), unclassified
+            assert issubclass(nested, BaseModel), unclassified
+            classified = {
+                path.partition(".")[2] for path in _FIELD_SCOPES if path.startswith(f"{name}.")
+            }
+            assert classified == set(nested.model_fields), (
+                f"{name} is classified field by field, but {classified} does not cover it"
+            )
+
+    def test_the_table_classifies_nothing_that_does_not_exist(self) -> None:
+        for path in _FIELD_SCOPES:
+            head, _, tail = path.partition(".")
+            assert head in SessionConfig.model_fields, f"{path} names no field of SessionConfig"
+            if not tail:
+                continue
+            nested = SessionConfig.model_fields[head].annotation
+            assert isinstance(nested, type)
+            assert issubclass(nested, BaseModel)
+            assert tail in nested.model_fields, f"{path} names no field of {head}"
+
+    @pytest.mark.parametrize("stage", _STAGES)
+    def test_each_projection_is_the_one_the_decision_records(self, stage: StageScope) -> None:
+        """The tests below follow `_FIELD_SCOPES`; this one holds `_FIELD_SCOPES` to ADR-0016.
+
+        Everything else here is generated from the table, so a section quietly *added* to a
+        projection makes the generated tests agree with it and stay green. Widening is the
+        cheap direction to get wrong — it costs only recomputation — but it is still a
+        change to a recorded decision, and it should not be possible to make one without
+        this failing.
+        """
+        recorded = {path for path, stages in _FIELD_SCOPES.items() if stage in stages}
+
+        assert recorded == set(_ADR_0016_PROJECTIONS[stage])
+
+    @pytest.mark.parametrize(("stage", "path"), _INCLUDED)
+    def test_changing_an_included_section_changes_that_stages_hash(
+        self, raw: dict[str, Any], stage: StageScope, path: str
+    ) -> None:
+        baseline = stage_config_hash(SessionConfig.model_validate(raw), stage)
+
+        assert stage_config_hash(_with_alternative(raw, path), stage) != baseline
+
+    @pytest.mark.parametrize(("stage", "path"), _EXCLUDED)
+    def test_changing_an_excluded_section_leaves_that_stages_hash_alone(
+        self, raw: dict[str, Any], stage: StageScope, path: str
+    ) -> None:
+        """The half that usually goes untested, and the half a projection dies of.
+
+        Testing only that included sections move the hash lets a projection quietly narrow:
+        the key still changes for every reason somebody thought to assert, and stops
+        changing for one nobody did — which serves a stale artifact as current, silently.
+        Asserted here for every excluded section rather than for the few that seemed
+        interesting.
+        """
+        baseline = stage_config_hash(SessionConfig.model_validate(raw), stage)
+
+        assert stage_config_hash(_with_alternative(raw, path), stage) == baseline
+
+    def test_tuning_the_bleed_gate_rebuilds_neither_pcm_nor_inference(
+        self, raw: dict[str, Any]
+    ) -> None:
+        """ADR-0016's reason for existing, stated as the operator experiences it.
+
+        OQ-017 guarantees `min_correlation` gets tuned repeatedly against real sessions.
+        Under whole-configuration hashing — which `config_hash` still does, as asserted
+        here — every hundredth of a change would rebuild gigabytes of 16 kHz PCM that
+        provably cannot depend on it, and re-run every VAD pass.
+        """
+        baseline = SessionConfig.model_validate(raw)
+        tuned = _with_alternative(raw, "activity.bleed")
+        before, after = _stage_hashes(baseline), _stage_hashes(tuned)
+
+        assert after["derivative"] == before["derivative"]
+        assert after["detection"] == before["detection"]
+        assert after["attribution"] != before["attribution"]
+        assert config_hash(tuned) != config_hash(baseline)
+
+    def test_tuning_the_vad_rebuilds_detection_but_not_the_derivative(
+        self, raw: dict[str, Any]
+    ) -> None:
+        """Detection is inference over the derivative, and attribution consumes detections.
+
+        So a VAD change must reach both of those and neither of the placement stages.
+        """
+        baseline = SessionConfig.model_validate(raw)
+        tuned = _with_alternative(raw, "activity.vad")
+        before, after = _stage_hashes(baseline), _stage_hashes(tuned)
+
+        assert after["detection"] != before["detection"]
+        assert after["attribution"] != before["attribution"]
+        assert after["derivative"] == before["derivative"]
+        assert after["inspection"] == before["inspection"]
+
+    @pytest.mark.parametrize("stage", _STAGES)
+    def test_a_projection_carries_no_key_the_table_does_not_grant_it(
+        self, raw: dict[str, Any], stage: StageScope
+    ) -> None:
+        """What the hash covers is exactly what the table says, in both directions."""
+        granted = {path for path, stages in _FIELD_SCOPES.items() if stage in stages}
+        projection = stage_config(SessionConfig.model_validate(raw), stage)
+
+        assert projection["stage"] == stage
+        assert projection["config_schema_version"] == CONFIG_SCHEMA_VERSION
+        for head, value in projection["session"].items():
+            if head in granted:
+                continue
+            assert isinstance(value, dict), f"{stage} carries ungranted {head}"
+            for tail in value:
+                assert f"{head}.{tail}" in granted, f"{stage} carries ungranted {head}.{tail}"

@@ -125,7 +125,27 @@ the advertised five-minute model limit is not trusted.
 a recorded revision, running on CPU or ONNX.
 **Why it matters:** INV-05 (offline default suite) and cache-key identity (INV-08).
 **Evidence:** A working offline load path in M3.
-**Needs:** M3 · **Blocks:** M3 · **Status:** open
+**Needs:** M3 · **Blocks:** M3 · **Status:** **answered** (M3)
+
+**Answer — the artifact, not the package.** The `silero-vad` distribution hard-depends on
+`torch` and `torchaudio`, which is unacceptable in the environment the default suite runs in
+(INV-05) and would pre-empt M6a's AMD wheel index and per-package sourcing. Its **ONNX**
+protocol needs neither: inputs are `input` (1, 64 context + 512 samples), `state` (2, 1, 128),
+and `sr` (int64); outputs are a probability and the next state. So the pin is a commit-pinned
+model *file* driven by `onnxruntime` on CPU from a plain NumPy loop, never the package.
+
+Pinned by upstream release `v6.2.1`, commit `7e30209a3e901f9842f81b225f3e93d8199902b1`,
+and sha256 `1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3` — verified
+against **two independent sources of the same file**, the repository at that commit and the
+published 6.2.1 wheel's copy, which are byte-identical. That equality is what makes "we did
+not install the package" a packaging decision rather than a change of artifact.
+
+The runtime and the *calling interface* are pinned too (frame size, context size, state
+shape, input names, rate) and all of it enters the detection cache key: a runtime upgrade
+that changed a kernel's rounding must re-run the work. `models fetch` verifies the digest
+before moving the file into place and is the only command permitted to touch the network
+(INV-06). Answering this required amending the spec as well as M3's charter — see
+[ADR-0013](decisions/0013-silero-through-onnx-runtime.md).
 
 ## OQ-011 — Does `ffprobe` expose an exact PCM sample count for these files?
 **Assumption:** `duration_ts` plus time base is exact for PCM; a decode pass is the
@@ -216,3 +236,33 @@ timecode day *is* 86 400 seconds and the question does not arise.
 **Evidence:** The displayed timecode on all three receivers after the LTC jam, recorded
 against wall-clock time, cross-checked with the `bext` origination time in the files.
 **Needs:** H1 · **Blocks:** nothing directly · **Status:** open
+
+## OQ-017 — What separates real speech from lav bleed at a real table?
+**Assumption:** Bleed arriving at another wearer's lav is both *much quieter* than that
+wearer's own voice and *strongly correlated* with the speaker's own track, so a candidate is
+obvious bleed only when a competing track's source score exceeds it by
+`activity.bleed.min_score_margin` **and** their normalized speech-band cross-correlation
+reaches `activity.bleed.min_correlation` within `activity.correlation_max_lag_ms` — with a
+veto: a candidate whose band-limited level is within `activity.bleed.veto_db` of its own
+track's speech reference is never suppressed, because a lav hearing its wearer at the
+wearer's normal level is not hearing someone else.
+It also covers **how a track's speech reference is estimated** — the 75th percentile of that
+track's own candidate levels (`activity/bleed.py::REFERENCE_PERCENTILE`), rather than the
+median ADR-0014 first specified. Including a track's bleed candidates drags that reference
+down and the upper quartile pushes it up; which effect dominates is a property of a real
+room, and the veto's usefulness depends on the answer.
+**Why it matters:** Every default in `activity.vad`, `activity.bleed`, and
+`activity.scoring` is a number chosen against synthetic audio whose bleed is a delayed,
+attenuated copy of the same signal — which is the *easy* case. Real bleed crosses a room,
+reflects, and arrives filtered, so its correlation against the source track is lower and its
+level depends on where two people are sitting. Set the thresholds too aggressively and real
+overlapped speech disappears, which the spec says is worse than extra ASR compute; set them
+too leniently and every utterance is transcribed six times.
+**Evidence:** Measured, on a real recording: the distribution of band-limited level
+difference between a speaker's own lav and the others during solo speech, and the
+distribution of peak normalized correlation and its lag for those same intervals. The
+pipeline already records exactly these numbers for every candidate pair in
+`work/activity.json` and in the report, so answering this is reading one real session's
+graph rather than running an experiment.
+**Needs:** H2 or the first real session · **Blocks:** nothing (threshold tuning) ·
+**Status:** open

@@ -56,7 +56,37 @@ cached records alone.
 - Confidence values. Never manufacture one the model does not expose; keep
   signal-quality scores separate from model confidence.
 
+## What M3 already provides (read before starting)
+
+- **`work/activity.json` is frozen at schema version 1** (ADR-0012) — additive optional
+  fields only, and every property name is held by a hardcoded allowlist in
+  `tests/test_activity_artifact.py`. Adding a field is an ADR-0005 decision, and adding a
+  **text-derived** one is an INV-09 violation that fails a test rather than changing a
+  contract quietly.
+- **Build requests from `decision == "retained"` candidates**, in `candidates` order — the
+  document is already sorted by `(start_sample, track_id)` and its ids sort lexically in the
+  same order. `test_activity_artifact.py::TestTheConsumerReads` is the worked example of both
+  M4's and M5's access patterns, written before either milestone existed.
+- **`ambiguous` does not mean "uncertain detection".** It means the numeric evidence said
+  bleed — margin *and* correlation both satisfied — and the track-level veto overrode it
+  (ADR-0014). Those are the candidates most likely to be a second copy of another track's
+  utterance, so they are exactly the ones M4's duplicate collapse should look hardest at.
+  It is *not* a reason to drop a candidate before ASR.
+- **Every interval appears on both grids** — `start_sample`/`end_sample` at 48 kHz and
+  `derivative_*` at 16 kHz — and there are no floats anywhere in the document. Integer
+  per-mille and millibels throughout; `public_seconds` is still the only float-producing
+  conversion in the project (INV-04).
+- **INV-09 runs the other way here.** Nothing M4 decides may flow back into the graph, and
+  the mix must produce identical samples whether or not ASR ran at all.
+
 ## Known risks and open questions
+
+- **The field allowlist freezes names, not prose.** `ActivityDecision.detail` and
+  `ActivityNote.message` are unrestricted strings on that allowlist, so a later stage could
+  place text-derived content in either without adding a property, changing the activity
+  package's imports, or failing any INV-09 test. Nothing may write ASR-derived text into
+  them. Raised by independent review in M3's verify phase and deferred there; see
+  `../reviews/M3-code-20260802-1708.md`.
 
 - Depends on **OQ-009** for the eventual real segment limits, but M4 must be
   correct under the configured limit regardless. `config.py` caps `max_segment_s` at 120
