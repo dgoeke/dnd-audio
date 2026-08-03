@@ -18,11 +18,13 @@ import pytest
 from typer.testing import CliRunner
 
 from dnd_audio import cli, models
+from dnd_audio import doctor as doctor_module
 from dnd_audio.cli import app
 from dnd_audio.determinism import sha256_bytes
 from dnd_audio.errors import ExitCode
 from dnd_audio.fixtures import FixtureTruth
 from dnd_audio.models import ModelDescriptor
+from dnd_audio.runtime import RuntimeProbe
 
 runner = CliRunner()
 
@@ -92,6 +94,28 @@ class TestCommandSurface:
 
 
 class TestDoctorCommand:
+    """The command wiring, with the hardware measurement substituted.
+
+    `doctor` genuinely probes the GPU — that is its job, and it is the one command allowed
+    to. But these tests run it *in process*, so an unsubstituted probe would import Torch
+    and launch kernels inside the default suite, which INV-05 forbids. On the project
+    environment that is invisible, because there is no Torch to import; on the ROCm
+    environment it is real, and it first showed up as an unrelated failure in
+    `test_silero.py` that depended on run order. `conftest.py`'s `no_torch_import` fixture
+    is the general guard; this is the local fix.
+
+    What is under test here is the CLI: exit codes, output shape, argument handling. The
+    checks themselves are `test_doctor.py`'s, and the real device is `host_smoke`'s.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _bare_machine(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            doctor_module,
+            "probe_runtime",
+            lambda: RuntimeProbe(installed=False, error="No module named 'torch'"),
+        )
+
     def test_runs_and_reports(self, tmp_path: Path) -> None:
         result = runner.invoke(app, ["doctor", str(tmp_path)])
         assert result.exit_code == ExitCode.OK

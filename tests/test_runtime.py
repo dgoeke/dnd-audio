@@ -477,14 +477,28 @@ class TestLazyImport:
         assert completed.returncode == 0, completed.stderr
 
     def test_probing_a_machine_reports_rather_than_raising(self) -> None:
-        """Deliberately does not assert `installed is False`: on the ROCm environment
-        Torch *is* importable and this must still not raise. What is under test is that a
-        probe always returns a probe."""
-        probe = probe_runtime()
-        assert isinstance(probe, RuntimeProbe)
-        if not probe.installed:
-            assert probe.error is not None
-            assert not probe.device_usable
+        """The real probe, in a subprocess, on whatever machine this is.
+
+        A subprocess for the same reason `conftest.py`'s `no_torch_import` fixture exists:
+        on the ROCm environment `probe_runtime()` imports Torch and launches kernels, and
+        doing that in-process would leave Torch resident for every test that follows —
+        which is exactly the INV-05 breach that fixture now catches. In-process, this test
+        would have been the thing it caught.
+
+        Deliberately does not assert `installed is False`: on the ROCm environment Torch
+        *is* importable and this must still not raise. What is under test is that a probe
+        always comes back as a probe, on a machine of any description.
+        """
+        source = (
+            "from dnd_audio.runtime import RuntimeProbe, probe_runtime; "
+            "p = probe_runtime(); "
+            "assert isinstance(p, RuntimeProbe); "
+            "assert p.installed or (p.error is not None and not p.device_usable), p"
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", source], capture_output=True, text=True, check=False
+        )
+        assert completed.returncode == 0, completed.stderr
 
 
 # --- the real device ------------------------------------------------------------
