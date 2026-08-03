@@ -34,6 +34,15 @@ confirmed step — let the owner reclaim the large local WAVs.
 - **Verify remote integrity** by reading back and hashing, then recording the
   result.
 - **Reclaim local disk** — manual, separate, and only after verification passes.
+- **Sweep `work/cache/mix/`, or decide deliberately not to.** M5 added the largest cache
+  entry in the project — one mono float32 file at the session's full duration, 2.8 GiB for
+  four hours — and nothing prunes it. It is content-addressed on the graph's
+  `attribution_cache_key`, so a session mixed under two detectors (real Silero once,
+  `--fake-models` once) keeps **two** of them side by side; that is the design working, and
+  it is also 5.6 GiB. The sidecar-plus-audio layout makes an LRU or a
+  drop-everything-but-the-current-identity sweep straightforward, and `MixCache.get` already
+  treats a missing entry as a miss rather than an error, so deleting one only costs a re-mix.
+  Reclaiming local disk without addressing this leaves the biggest single consumer untouched.
 
 ## Safety properties to preserve
 

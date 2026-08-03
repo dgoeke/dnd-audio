@@ -7,11 +7,18 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 
 ## Right now
 
-- **Current milestone:** M5 — Automix (verified, awaiting close)
-- **Branch:** `milestone/M5-automix`
-- **Last closed milestone:** M4 — Fake transcript
+- **Current milestone:** M6a — ROCm environment (not started)
+- **Branch:** `main`
+- **Last closed milestone:** M5 — Automix
 - **Gate status at HEAD:** passes, zero skips (8 checks, 2028 tests)
-- **Blocked on:** nothing for M5. **H1 is still the oldest outstanding item**, but it is no
+- **Blocked on:** nothing for M6a — it is environment work whose dependencies are all closed.
+  **The spec changed in M5** and this is the one place it is easy to miss: the true-peak
+  ceiling now outranks the `-16 LUFS` loudness target where the two are mutually unreachable
+  (acceptance criterion 8, ADR-0023). The code already behaved that way and the spec did not
+  say so. On the canonical fixture through real Silero this is not hypothetical — the mix
+  measures ~40 LUFS below target and the run says so and exits zero.
+
+  **H1 is still the oldest outstanding item**, but it is no
   longer the whole of the problem it was. A 2026-08-02 sample probe — four real DJI Mic 3
   transmitters, ~47 s, not the H1 fixture — answered **OQ-001, OQ-002, OQ-004 and OQ-005** from
   metadata alone, and the design that made that cheap is M1's: the manifest names the strategy,
@@ -70,7 +77,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | M2  | Timeline                   | closed      | `f33ad6d` |
 | M3  | Activity                   | closed      | `38bc989` |
 | M4  | Fake transcript            | closed      | `8556f43` |
-| M5  | Automix                    | verified    | —         |
+| M5  | Automix                    | closed      | `PENDING` |
 | M6a | ROCm environment           | not started | —         |
 | M6b | Qwen adapter               | not started | —         |
 | H1  | Hardware fixture (2 min)   | not started | —         |
@@ -89,7 +96,48 @@ idea but the work is deliberately unplanned.
 
 ## What works end to end
 
-`uv run dnd-audio transcribe /path/to/session --fake-models` — the whole left branch of the
+`uv run dnd-audio process /path/to/session --fake-models` — **every applicable stage**, which
+is the whole of the spec's stage DAG on synthetic input.
+
+One snapshot of `raw/`, activity performed once, then the mix branch and the transcript branch
+attempted **independently** — each in its own handler, so a failure in either collects an
+error rather than short-circuiting the other — then one unconditional `verify_unchanged`
+before the report is finalized. On the canonical fixture: six stages complete, four transcript
+segments, `session.mp3`, both transcript deliverables, 18 cache hits and 12 misses. A
+transcription failure still yields the MP3 and the report with `transcribe` and `render`
+marked failed and exit 4; a *mix* failure still yields the transcript, because independence is
+a property of the control flow rather than of the ordering.
+
+Without `--fake-models` it raises the `DEFERRED: M6b` `NotImplementedError` **before any
+work** (ADR-0005). An operator who wants the audio branch on such a host runs `mix`, which
+needs no ASR adapter at all.
+
+`uv run dnd-audio mix /path/to/session` — the right branch of the DAG, and the one that must
+survive a transcription failure (INV-09, whose enforcement M5 owns).
+
+It does everything `activity` does, then estimates a per-track voice-level correction from
+each track's own `speech_reference_mbfs` — median target, clamped, a missing reference
+corrected by **zero** and warned about — turns the graph's **retained** candidates into a gain
+per track per 1 kHz control frame (two weight floors, a slew-limited linear ramp, a
+Dugan-style normalized share), interpolates that onto samples, steps six `TrackReader`s and
+the envelope over one window range into a streamed mono float32 intermediate under
+`work/cache/mix/`, verifies INV-01 a second time, commits the mix cache, then measures,
+encodes at 128 kbps mono, decodes, measures again, and retries within a bounded budget.
+
+On the canonical fixture through the **real** Silero release: 10.500 s, mono, 128 kbps,
+−39.7 LUFS, −3.0 dBTP, one encode attempt, exit 0 — with
+`mix_loudness_target_unreachable` warning that reaching −16 LUFS would need +24.5 dB and the
+ceiling allows +1.6. That is the correct answer: Silero finds no candidates in synthetic noise
+(INV-10), so every track sits at the room-tone share and the mix is a quiet six-way blend. The
+intermediate is byte-identical on rerun and reused from cache; the MP3 is regenerated every
+run and is not claimed to be byte-stable.
+
+The mixer imports nothing from the transcript layer, proved over the **transitive** import
+closure in a subprocess; the intermediate's bytes do not move when `transcribe` runs, and do
+not move when every `ActivityDecision.detail` and `ActivityNote.message` in the graph is
+rewritten.
+
+`uv run dnd-audio transcribe /path/to/session --fake-models` — the left branch of the
 spec's stage DAG: inspection, the timeline, who was speaking, what they said, and both
 transcript deliverables.
 
@@ -160,8 +208,8 @@ midnight rollover, 29.97 drop-frame, drift, bleed delayed 25 ms, and two genuine
 simultaneous speakers at unequal levels each carrying the other's bleed. No audio binaries
 are in the repository.
 
-`transcribe`, `mix`, `render`, and `process` remain registered stubs that exit 3 naming the
-milestone they land in.
+**No command is a stub any more.** The only remaining exit-3 path is the missing ASR adapter
+that `transcribe` and `process` need without `--fake-models`, and it names M6b.
 
 Underneath, from M0: validated `session.yaml` models, checked-in JSON Schema artifacts
 with a drift test, exact rational frame rates, model seams with scripted fakes, a report
@@ -169,21 +217,32 @@ writer that cannot lose a stage, and a test suite that is provably offline.
 
 ## Next smallest step
 
-Begin M5 — Automix. It depends on M3 only, never on M4: the mix must produce identical samples
-whether or not ASR ran, and the graph M4 consumed is unchanged by anything M4 decided. Start
-with the gain envelopes, because the envelope-level assertions are the real gate and the
-loudness work is meaningless without them — a mix that picks the wrong speaker passes every
-loudness test there is. (Claude Code: `/ms-start 5`.)
+Begin **M6a — ROCm environment**. It is the only milestone whose dependencies are all closed,
+and it is pure environment work: the AMD `gfx1151` Torch wheel index wired into uv with
+per-package sourcing, the separate FHS shell for the `rocm[libraries]` sdist (ADR-0002),
+locked versions, and `doctor` device checks. Nothing in M0–M5 depends on it and M6b cannot
+start without it. (Claude Code: `/ms-start 6a`.)
 
-Read M5's new "What M4 already provides" section first. It is not about data; it is three
-runner patterns and one obligation. The obligation:
-`tests/test_raw_guard.py::TestCleanupNeverWritesIntoRaw` needs a `mix` parameter the moment
-`run_mix` exists, and the reason it is parametrized over every composed command is that M2, M3
-and M4 each tested only the runner that milestone added, and all three carried the same INV-01
-bug for five milestones.
+Start with `doctor`'s device checks rather than with the wheel index. The checks are what tell
+you whether the index worked, and writing them second means debugging two unknowns at once.
+They must **open** `/dev/kfd` and the render node rather than testing that the paths exist —
+the charter says so and it is the whole difference between a check and a guess.
+
+Read M6b's new "What M5 already provides" section when you get there. The short version:
+`process` composes the transcript branch through `perform_transcript`/`resolve_models` rather
+than reimplementing it, so replacing the `DEFERRED: M6b` raise site reaches both commands
+through one seam — and `dnd-audio mix` needs no adapter at all, so an adapter regression can
+never cost a session its audio deliverable.
 
 **Real DJI metadata has still not been validated.** Acquiring the H1 fixture is the oldest
-outstanding item in the project. M2 added OQ-015 to what it must settle; M3 added **OQ-017**
-and M4 added **OQ-018**, neither of which H1 can answer — a two-minute metadata fixture cannot
-tune a bleed threshold or a text-similarity threshold. OQ-017 waits for H2 or a first real
-session; OQ-018's first three parts are M6b's smoke test.
+outstanding item in the project, and five milestones have now been built on assumptions it
+would settle. M2 added OQ-015 to what it must settle; M3 added **OQ-017**, M4 added
+**OQ-018**, and M5 added **OQ-019** and **OQ-020** — none of which H1 can answer. A two-minute
+metadata fixture cannot tune a bleed threshold, a text-similarity threshold, an automix
+constant, or an encoder's real overshoot. OQ-017 and OQ-019 wait for H2 or a first real
+session; OQ-018's first three parts are M6b's smoke test; OQ-020 is answered by encoding one
+real session once, because every attempt's measurements are already retained in the report.
+
+**Nothing in the pipeline is blocked on any of them.** Every default is conservative by
+construction, two configuration validators refuse a combination the gain rule cannot deliver,
+and the encode stage fails rather than claiming a compliance it did not measure.

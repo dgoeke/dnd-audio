@@ -92,6 +92,26 @@ complete cache identity — dropped in behind the interface M4 already exercises
   that the survivor is the best source score rather than writing the resolution pass. See
   M4's closeout.
 
+## What M5 already provides (read before starting)
+
+- **`process` composes the transcript branch rather than reimplementing it.** M4's
+  `_transcribe`, `_models` and `_write_deliverables` became public `perform_transcript`,
+  `resolve_models` and `write_transcript_deliverables`, and `orchestrate.py` calls them. So
+  replacing `_default_transcriber`'s `DEFERRED: M6b` raise reaches **both** `transcribe` and
+  `process` through one seam — there is no second construction site to keep in step.
+- **Both commands raise before any work, not partway.** `resolve_models` runs before the
+  snapshot is acted on, so a host without the adapter gets ADR-0005's "this pipeline has not
+  built that yet" rather than a half-finished run. Keep that ordering when the adapter lands:
+  a model that fails to *load* should still fail before the first cache is written.
+- **The audio branch no longer depends on you at all.** `dnd-audio mix` runs the whole
+  right-hand branch with no ASR adapter and no `--fake-models`, so a host where M6b is broken
+  still produces `session.mp3`. That is INV-09 enforced rather than intended (M5's closeout),
+  and it means an adapter regression can never cost a session its audio deliverable.
+- **`process --fake-models` is a second regression harness**, alongside `transcribe
+  --fake-models`. It exercises the adapter seam with both branches running and one shared
+  snapshot, which is where a model that holds a file descriptor or mutates a shared path
+  shows up and a single-branch run does not.
+
 ## Known risks and open questions
 
 - Depends on **OQ-008, OQ-009, OQ-018**.
