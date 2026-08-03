@@ -78,7 +78,10 @@ without any Qwen code yet.
 
 ## Working plan
 
-_Scratch section, written during the start phase and replaced by the Closeout._
+_Scratch section, written during the start phase and replaced by the Closeout. Names
+and test identifiers were corrected in the verify phase after the probe was restructured —
+until then this section named three functions that no longer existed, which is the kind of
+repository memory a future implementor would have trusted._
 
 ### Order of work
 
@@ -100,16 +103,17 @@ _Scratch section, written during the start phase and replaced by the Closeout._
 7. **Tests**, written alongside each of 4–6 rather than after.
 8. **ADR-0025, ADR-0026, OQ-008's answer, OQ-021**, and M6b's inherited section.
 
-The target is `torch 2.9.1+rocm7.13.0` (cp312, linux_x86_64) — the newest build on the
-index *and* the ROCm generation the host's own gfx1151 service already runs, so "newest"
-and "proven on this GPU" happen to coincide. If it does not work, OQ-008's fallback is an
-older `+rocm7.12.0`/`+rocm7.11.0` build from the same index, recorded in ADR-0025 rather
-than left in shell history.
+The target is `torch 2.9.1+rocm7.13.0` (cp312, linux_x86_64). **Not the newest build on
+the index** — 2.10.0 and 2.11.0 are also published for cp312, and the first draft of this
+plan wrongly said otherwise. ROCm 7.13 is the generation this host already runs a GPU
+workload on, which is evidence about the *runtime* and none about a torch version; among
+three candidates with no host evidence a patch release beats two `x.y.0` releases. Tested
+beats newest (ADR-0025).
 
 ### The one design decision worth stating up front
 
-**Probing is impure; resolution is pure.** `probe_torch()` and `probe_cpu_bf16()` import
-torch lazily, run the BF16 operation, and return a frozen `TorchProbe`.
+**Probing is impure; resolution is pure.** `probe_runtime()` imports torch lazily, opens
+the device nodes, runs the smoke operations, and returns one frozen `RuntimeProbe`.
 `resolve_runtime(device, dtype, *, probe)` is then a total function of that probe, so every
 rule the spec states — `cuda` requested and failing is fatal, `auto` falls back to CPU with
 a warning, `dtype: auto` follows the final device, BF16 on CPU only behind its own smoke
@@ -135,7 +139,7 @@ The render node is **discovered** by globbing `/dev/dri/renderD*` rather than ha
 | `torch.cuda`, `torch.version.hip`, device name, BF16 op | `test_doctor.py::TestGpuChecks` with injected probes; the real path under `host_smoke` |
 | `cuda` requested and failing is fatal; `auto` warns and falls back | `test_runtime.py::TestDeviceResolution` |
 | `dtype: auto` follows the device; explicit failing combination rejected | `test_runtime.py::TestDtypeResolution`, over the whole matrix |
-| BF16 op on the real device | `test_runtime.py::TestRealDevice`, `host_smoke`, quoted in verify |
+| BF16 op on the real device | `test_runtime.py::test_bf16_runs_on_the_real_gfx1151_device`, `host_smoke`, quoted in verify |
 | Python in the report; the runtime envelope | `test_report.py`, `test_inspect_report.py`, `test_schema_drift.py` |
 | Env vars documented and applied by the dev shell | `flake.nix` comments, `doctor`'s `rocm env` check, ADR-0025 |
 

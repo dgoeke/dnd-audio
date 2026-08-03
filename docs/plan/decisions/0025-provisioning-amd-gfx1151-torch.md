@@ -129,6 +129,15 @@ mode this ADR is mostly about.
 - **`host_smoke` tests only pass from `.venv-rocm`.** They are excluded from the gate
   anyway (INV-05), but a run from the wrong environment reports "torch is not installed"
   rather than a GPU failure, and the assertion messages say so.
+- **The lock pins versions, not bytes.** The AMD index publishes no hashes, so every one
+  of its eight artifacts is recorded in `uv.lock` with a URL and no `hash` — where every
+  PyPI artifact in the same lock carries a sha256. A re-upload at the same version would
+  be invisible to `uv lock --check` and to us. That is a property of AMD's index rather
+  than a choice made here, and there is no mitigation short of vendoring the wheels, which
+  is 3 GB of binaries this repository must not contain. Recorded so nobody reads "locked"
+  as "byte-reproducible"; `test_packaging.py` asserts the asymmetry, so the day AMD starts
+  publishing hashes the test fails and this paragraph gets rewritten. Found by the code
+  review in M6a's verify phase.
 - **The pins will need deliberate bumping.** Exact versions mean a ROCm or torch upgrade is
   an explicit edit with its own gate run — which is the intent, since the alternative is a
   GPU stack moving underneath a session nobody was watching.

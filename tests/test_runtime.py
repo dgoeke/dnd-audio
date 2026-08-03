@@ -417,6 +417,25 @@ class TestProvenance:
         provenance = resolve_runtime(device="auto", dtype="auto", probe=absent()).provenance()
         assert provenance.python == ".".join(str(part) for part in sys.version_info[:3])
 
+    def test_a_deliberate_cpu_run_on_a_gpu_host_records_no_device_name(self) -> None:
+        """The probe knows the GPU's name whenever the machine has one, so copying it
+        unconditionally made `device: cpu` on this host record
+        `device='cpu', device_name='Radeon 8060S Graphics'` — provenance that is false,
+        and that reaches M6b's cache key under INV-08.
+
+        Distinct from the CPU-*fallback* case below, which has no Torch at all and so
+        could never have exposed this. Found by the verify phase's independent review; the
+        fix shipped without this test and a mutation run caught that too.
+        """
+        provenance = resolve_runtime(device="cpu", dtype="auto", probe=working()).provenance()
+
+        assert provenance.device == "cpu"
+        assert provenance.device_name is None
+        # The *build* is still real and still belongs in provenance — only the device does
+        # not. Asserting the absence alone would pass against dropping the whole probe.
+        assert provenance.torch == "2.9.1+rocm7.13.0"
+        assert provenance.hip == "7.13.99004-3309c6114a"
+
     def test_a_cpu_fallback_records_no_torch_rather_than_a_guess(self) -> None:
         provenance = resolve_runtime(device="auto", dtype="auto", probe=absent()).provenance()
         assert provenance.torch is None
