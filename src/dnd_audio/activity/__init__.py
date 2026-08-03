@@ -27,6 +27,9 @@ from __future__ import annotations
 
 from typing import Final
 
+import numpy as np
+import numpy.typing as npt
+
 __all__ = [
     "ACTIVITY_CACHE_DIRNAME",
     "ACTIVITY_RELATIVE_PATH",
@@ -35,7 +38,15 @@ __all__ = [
     "DETECTION_DIRNAME",
     "DETECTOR_CONTEXT_SAMPLES",
     "DETECTOR_FRAME_SAMPLES",
+    "PERMILLE",
+    "to_permille",
+    "to_permille_array",
 ]
+
+#: Full scale for every probability, score, and correlation in this package. Integers,
+#: because they reach a byte-stable artifact and a float that is the quotient of two
+#: reductions is not reliably identical across a library upgrade (INV-02).
+PERMILLE: Final = 1000
 
 #: Session-relative. The activity graph, and the only artifact this stage publishes.
 ACTIVITY_RELATIVE_PATH: Final = "work/activity.json"
@@ -64,3 +75,31 @@ DETECTOR_CONTEXT_SAMPLES: Final = 64
 #: varied one module's version but not another's keeps serving the answer a fixed bug
 #: produced.
 ACTIVITY_SEMANTICS_VERSION: Final = 1
+
+
+def to_permille(value: float) -> int:
+    """Quantize a ratio in [0, 1] to per-mille, halves away from zero, clamped.
+
+    **One rule for the whole package.** Four modules produce per-mille values — the
+    rasterizer, the Silero adapter, the scorer, and the bleed gate — and NumPy's ``rint`` and
+    Python's ``round`` are both half-to-*even*, so mixing them with an away-from-zero rule
+    would make two quantities a thousandth apart order differently depending on which module
+    computed them. INV-04 states that argument for *time* and names a second quantizer as how
+    the rule dies; the same reasoning applies here, to a different unit, which is why this is
+    one function rather than four call sites that happen to agree today.
+
+    Deliberately not :mod:`dnd_audio.determinism`'s: that one takes an exact
+    :class:`~fractions.Fraction` and a rate, because time must never accumulate in floats. A
+    ratio of two measured energies is a float already, and pretending otherwise by routing it
+    through a rational would be a lie about where the precision went.
+    """
+    return max(0, min(PERMILLE, int(abs(value) + 0.5) if value >= 0 else -int(-value + 0.5)))
+
+
+def to_permille_array(values: npt.NDArray[np.float64]) -> npt.NDArray[np.uint16]:
+    """:func:`to_permille` over an array of non-negative ratios.
+
+    ``floor(x + 0.5)`` rather than ``rint``: identical for every value except an exact half,
+    and an exact half is the whole reason this function exists.
+    """
+    return np.clip(np.floor(values + 0.5), 0, PERMILLE).astype(np.uint16)

@@ -712,11 +712,13 @@ def test_the_pinned_model_runs_on_real_inference() -> None:
     from dnd_audio.models import SILERO_VAD, find_model
 
     path = find_model(SILERO_VAD)
-    if path is None:
-        pytest.skip(
-            reason="OQ-010: the pinned VAD model is not on this machine. "
-            "Run `dnd-audio models fetch`."
-        )
+    assert path is not None, (
+        "the pinned VAD model is not on this machine. Run `dnd-audio models fetch`.\n"
+        "This fails rather than skipping on purpose: `host_smoke` already means "
+        "'needs the target host', and a host test that quietly skips when the host is not "
+        "set up is a check that verifies nothing — which is the failure M1's closeout "
+        "records finding in its own suite."
+    )
 
     session = load_silero_session(path, expected_sha256=SILERO_VAD.sha256)
     factory = silero_factory(

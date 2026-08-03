@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from dnd_audio.activity.detect import PERMILLE
+from dnd_audio.activity import PERMILLE, to_permille
 from dnd_audio.config import ScoringConfig
 
 __all__ = ["NEUTRAL_PERMILLE", "ScoreTerms", "score_candidate"]
@@ -116,7 +116,7 @@ def score_candidate(
         confidence_permille=confidence,
         dominance_permille=dominance,
         correlation_permille=independence,
-        total_permille=_clamp(_round_half_up(total)),
+        total_permille=to_permille(total),
     )
 
 
@@ -125,20 +125,8 @@ def _ramp(value: float, low: float, high: float) -> int:
     if high <= low:  # pragma: no cover - the configuration's bounds forbid it
         message = f"a ramp needs low < high, got [{low}, {high}]"
         raise ValueError(message)
-    return _clamp(_round_half_up((value - low) / (high - low) * PERMILLE))
+    return to_permille((value - low) / (high - low) * PERMILLE)
 
 
 def _clamp(value: int) -> int:
     return max(0, min(PERMILLE, value))
-
-
-def _round_half_up(value: float) -> int:
-    """Halves away from zero, matching the project's one rounding rule.
-
-    Python's :func:`round` is banker's rounding, so 0.5 and 1.5 would disagree about which
-    way a half goes and two scores a thousandth apart could order differently on different
-    inputs. :mod:`dnd_audio.determinism` owns this rule for *time*; this is the same rule
-    applied to a dimensionless ratio, which is deliberately not a second time quantizer.
-    """
-    magnitude = int(abs(value) + 0.5)
-    return -magnitude if value < 0 else magnitude

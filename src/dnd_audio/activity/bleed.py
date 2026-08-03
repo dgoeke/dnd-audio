@@ -42,8 +42,8 @@ from typing import Literal
 import numpy as np
 import numpy.typing as npt
 
+from dnd_audio.activity import PERMILLE, to_permille
 from dnd_audio.activity.band import band_limited, rms_millibels
-from dnd_audio.activity.detect import PERMILLE
 from dnd_audio.activity.scoring import ScoreTerms, score_candidate
 from dnd_audio.artifacts.activity import EvidenceOutcome
 from dnd_audio.config import ActivityConfig
@@ -307,7 +307,7 @@ def compare_pairs(
                 overlap_start_sample=overlap_start,
                 overlap_end_sample=overlap_end,
                 compared_derivative_samples=length,
-                correlation_permille=min(PERMILLE, max(0, round(correlation * PERMILLE))),
+                correlation_permille=to_permille(correlation * PERMILLE),
                 lag_derivative_samples=lag,
                 left_level_mb=rms_millibels(left_audio),
                 right_level_mb=rms_millibels(right_audio),

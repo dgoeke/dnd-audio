@@ -46,8 +46,12 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Protocol, runtime_checka
 import numpy as np
 import numpy.typing as npt
 
-from dnd_audio.activity import DETECTOR_CONTEXT_SAMPLES, DETECTOR_FRAME_SAMPLES
-from dnd_audio.activity.detect import PERMILLE
+from dnd_audio.activity import (
+    DETECTOR_CONTEXT_SAMPLES,
+    DETECTOR_FRAME_SAMPLES,
+    PERMILLE,
+    to_permille,
+)
 from dnd_audio.artifacts.activity import DetectorIdentity, DetectorInterface
 from dnd_audio.determinism import sha256_file
 from dnd_audio.errors import DndAudioError
@@ -535,7 +539,7 @@ class SileroActivityDetector:
         )
         # `rint`, matching `rasterize_spans`: one rounding rule for every per-mille in this
         # package, so a measured probability and a rasterized one round the same way.
-        return int(np.clip(np.rint(probability * PERMILLE), 0, PERMILLE))
+        return to_permille(probability * PERMILLE)
 
     def _spans(
         self, values: Sequence[int], *, window_start: int, window_end: int

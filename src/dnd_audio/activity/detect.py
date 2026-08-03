@@ -43,7 +43,12 @@ from typing import Protocol, runtime_checkable
 import numpy as np
 import numpy.typing as npt
 
-from dnd_audio.activity import DETECTOR_FRAME_SAMPLES
+from dnd_audio.activity import (
+    DETECTOR_FRAME_SAMPLES,
+    PERMILLE,
+    to_permille,
+    to_permille_array,
+)
 from dnd_audio.config import VadConfig
 from dnd_audio.interfaces import ActivityDetector, AudioWindow, SpeechSpan
 from dnd_audio.timeline import DERIVATIVE_SAMPLE_RATE
@@ -59,11 +64,6 @@ __all__ = [
     "frame_count",
     "rasterize_spans",
 ]
-
-#: Full scale for every probability in this package. Integers, because these reach a
-#: byte-stable artifact and a float that is the quotient of two reductions is not reliably
-#: identical across a library upgrade (INV-02).
-PERMILLE = 1000
 
 
 @runtime_checkable
@@ -150,8 +150,7 @@ def rasterize_spans(
             edge = frame * DETECTOR_FRAME_SAMPLES
             overlap = min(end, edge + DETECTOR_FRAME_SAMPLES) - max(start, edge)
             covered[frame] += span.probability * overlap / DETECTOR_FRAME_SAMPLES
-    scaled = np.clip(np.rint(covered * PERMILLE), 0, PERMILLE)
-    return scaled.astype(np.uint16)
+    return to_permille_array(covered * PERMILLE)
 
 
 def detect_track(
@@ -311,7 +310,7 @@ def _summarize(start: int, end: int, probabilities: npt.NDArray[np.uint16]) -> S
     return SpeechRegion(
         start_sample=start,
         end_sample=end,
-        probability_permille=round(float(values.mean())),
+        probability_permille=to_permille(float(values.mean())),
         peak_probability_permille=int(values.max()),
     )
 

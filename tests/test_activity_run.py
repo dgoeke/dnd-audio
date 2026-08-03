@@ -407,6 +407,49 @@ class TestTheReport:
         assert bundle.identity.variant_digest is not None
         assert result.report.provenance.model_identity["vad"] == bundle.identity.variant_digest
 
+    def test_the_scoring_diagnostics_reach_the_report(
+        self, canonical_fixture: FixtureTruth
+    ) -> None:
+        """The gate asks for the scoring function's diagnostics in `ingest-report.json`.
+
+        Prose is not a diagnostic. An operator asking why a speaker disappeared needs the
+        four terms and the three measurements that decided it, in the artifact they open
+        first — and they must equal the graph's own values, not a second rounding of them.
+        """
+        result = run_activity(canonical_fixture.session_dir, detector=leaky(canonical_fixture))
+        graph = graph_of(result)
+        suppressed = next(c for c in graph.candidates if c.decision == "suppressed")
+        decision = next(
+            item for item in result.report.decisions if item.subject == suppressed.candidate_id
+        )
+
+        assert decision.details["score_permille"] == str(suppressed.score_permille)
+        assert decision.details["score_level_permille"] == str(suppressed.score_level_permille)
+        assert decision.details["score_confidence_permille"] == str(
+            suppressed.score_confidence_permille
+        )
+        assert decision.details["score_dominance_permille"] == str(
+            suppressed.score_dominance_permille
+        )
+        assert decision.details["score_correlation_permille"] == str(
+            suppressed.score_correlation_permille
+        )
+        assert decision.details["against_candidate_id"] == suppressed.suppressed_by_candidate_id
+        assert decision.details["outcome"] == "suppresses"
+        assert decision.details["lag_derivative_samples"] == str(CANONICAL_BLEED_LAG)
+
+    def test_a_veto_records_the_evidence_it_overrode(
+        self, a_session: Callable[[FixtureSession], FixtureTruth]
+    ) -> None:
+        """A retained candidate has no suppressor, so the near-miss is what needs showing."""
+        truth = a_session(mutual_bleed_session())
+        result = run_activity(truth.session_dir, detector=leaky(truth))
+        vetoed = next(item for item in result.report.decisions if item.code == "bleed_vetoed")
+        assert vetoed.details["outcome"] == "vetoed_by_track_level"
+        assert int(vetoed.details["score_margin_permille"]) >= 150
+        assert int(vetoed.details["correlation_permille"]) >= 500
+        assert vetoed.details["relative_level_mb"] != "unknown"
+
     def test_every_suppression_is_an_auditable_decision(
         self, canonical_fixture: FixtureTruth
     ) -> None:

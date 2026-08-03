@@ -668,10 +668,74 @@ def _record_detector(builder: ReportBuilder, bundle: DetectorBundle) -> None:
 
 
 def _record_decisions(builder: ReportBuilder, graph: ActivityGraph) -> None:
+    """Copy the graph's decisions into the report, with the numbers behind them.
+
+    The gate requires the scoring function's diagnostics to be visible in
+    `ingest-report.json`, and prose is not a diagnostic: an operator asking why a speaker
+    vanished needs the four terms, the correlation, the lag, and the level difference — the
+    same values the graph carries, in the artifact a human opens first.
+    """
+    scored = {candidate.candidate_id: candidate for candidate in graph.candidates}
     for decision in graph.decisions:
+        candidate = scored.get(decision.subject)
         builder.record_decision(
-            Decision(code=decision.code, subject=decision.subject, detail=decision.detail)
+            Decision(
+                code=decision.code,
+                subject=decision.subject,
+                detail=decision.detail,
+                details={} if candidate is None else _diagnostics(candidate),
+            )
         )
+
+
+def _first_vetoed(candidate: ActivityCandidate) -> CandidateEvidence | None:
+    """The comparison the veto overrode, for a candidate nothing suppressed."""
+    return next(
+        (item for item in candidate.evidence if item.outcome == "vetoed_by_track_level"), None
+    )
+
+
+def _diagnostics(candidate: ActivityCandidate) -> dict[str, str]:
+    """Every number that produced one attribution, as report details.
+
+    Strings because that is what the report's `details` is: a consumer reads them, and
+    keeping them integral in the graph while rendering them here means the two cannot drift
+    into disagreeing about a rounding.
+    """
+    details = {
+        "score_permille": str(candidate.score_permille),
+        "score_level_permille": str(candidate.score_level_permille),
+        "score_confidence_permille": str(candidate.score_confidence_permille),
+        "score_dominance_permille": str(candidate.score_dominance_permille),
+        "score_correlation_permille": str(candidate.score_correlation_permille),
+        "band_level_mbfs": str(candidate.band_level_mbfs),
+        "relative_level_mb": (
+            "unknown" if candidate.relative_level_mb is None else str(candidate.relative_level_mb)
+        ),
+        "track_id": candidate.track_id,
+    }
+    decisive = next(
+        (
+            item
+            for item in candidate.evidence
+            if item.other_candidate_id == candidate.suppressed_by_candidate_id
+        ),
+        # A retained-but-ambiguous candidate has no suppressor; the record that nearly was
+        # one is the one worth showing, and it is the only vetoed pair by construction.
+        _first_vetoed(candidate),
+    )
+    if decisive is not None:
+        details.update(
+            {
+                "against_candidate_id": decisive.other_candidate_id,
+                "correlation_permille": str(decisive.correlation_permille),
+                "lag_derivative_samples": str(decisive.lag_derivative_samples),
+                "score_margin_permille": str(decisive.score_margin_permille),
+                "level_delta_mb": str(decisive.level_delta_mb),
+                "outcome": decisive.outcome,
+            }
+        )
+    return details
 
 
 def _builder(session_id: str, hash_: str | None, started_at: dt.datetime) -> ReportBuilder:
