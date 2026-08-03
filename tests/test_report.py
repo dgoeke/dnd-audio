@@ -397,21 +397,28 @@ class TestProvenanceTelemetrySplit:
         assert (runtime.device, runtime.dtype) == ("cuda:0", "bfloat16")
         assert runtime.hip == "7.13.99004-3309c6114a"
 
-    def test_recording_a_runtime_twice_replaces_rather_than_merges(
-        self, instant: dt.datetime
-    ) -> None:
-        """One run resolves one device. Two stages disagreeing would be a bug worth
-        failing on, not a pair of facts worth averaging."""
+    def test_recording_the_same_runtime_twice_is_fine(self, instant: dt.datetime) -> None:
+        """Two stages agreeing is not a conflict, and M6b may well record from both."""
+        runtime = RuntimeProvenance(python="3.12.13", device="cuda:0", dtype="bfloat16")
+        builder = _builder(instant)
+        builder.record_runtime(runtime)
+        builder.record_runtime(runtime)
+        _fill_remaining(builder, recorded=set())
+
+        assert builder.build(instant).provenance.runtime == runtime
+
+    def test_recording_a_conflicting_runtime_fails(self, instant: dt.datetime) -> None:
+        """One run resolves one device. This used to overwrite silently, which would have
+        left M6b's report authoritative-looking and carrying only whichever stage recorded
+        last — with the disagreement, the thing worth knowing, gone. Found in M6a's verify
+        phase by a reviewer reading the docstring against the body."""
         builder = _builder(instant)
         builder.record_runtime(RuntimeProvenance(python="3.12.13", device="cpu", dtype="float32"))
-        builder.record_runtime(
-            RuntimeProvenance(python="3.12.13", device="cuda:0", dtype="bfloat16")
-        )
-        _fill_remaining(builder, recorded=set())
-        runtime = builder.build(instant).provenance.runtime
 
-        assert runtime is not None
-        assert runtime.device == "cuda:0"
+        with pytest.raises(ValueError, match="different compute runtimes"):
+            builder.record_runtime(
+                RuntimeProvenance(python="3.12.13", device="cuda:0", dtype="bfloat16")
+            )
 
     def test_telemetry_is_where_the_clock_lives(self, instant: dt.datetime) -> None:
         assert {"started_at", "finished_at"} <= set(Telemetry.model_fields)

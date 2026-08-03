@@ -18,6 +18,7 @@ They are the only ones that need the target host, and they run from the ROCm env
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from collections.abc import Callable
@@ -30,6 +31,7 @@ from dnd_audio.runtime import (
     ROCM_ENV_VARS,
     SMOKE_DTYPES,
     ComputeError,
+    DeviceNode,
     RuntimeProbe,
     missing_rocm_env_vars,
     open_device_nodes,
@@ -37,6 +39,36 @@ from dnd_audio.runtime import (
     render_nodes,
     resolve_runtime,
 )
+
+# --- keeping a subprocess off the GPU ------------------------------------------
+#
+# `conftest.py`'s `no_torch_import` fixture watches the *parent* process, so a subprocess
+# is the one place it cannot see — and tests here spawn them. On the project environment
+# nothing happens, because there is no Torch to import; on the ROCm environment an
+# unguarded child would launch GPU kernels inside the suite the gate calls CPU-only, and
+# nothing would notice. Found by the verify phase's independent review.
+#
+# Shadowing Torch on `PYTHONPATH` fixes both halves at once: the child cannot reach a GPU,
+# and the failure it *does* see is chosen rather than inherited from whichever environment
+# happens to be running the suite.
+
+
+def shadow(directory: Path, body: str = "raise ImportError('No module named torch')") -> Path:
+    """Write a `torch.py` that fails on import, for `PYTHONPATH` to find before the real one."""
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "torch.py").write_text(body + "\n", encoding="utf-8")
+    return directory
+
+
+def run_shadowed(shadow_dir: Path, source: str) -> subprocess.CompletedProcess[str]:
+    """Run `source` in a child whose `import torch` hits `shadow_dir` first."""
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = str(shadow_dir) + (os.pathsep + existing if existing else "")
+    return subprocess.run(
+        [sys.executable, "-c", source], capture_output=True, text=True, check=False, env=env
+    )
+
 
 # --- probes standing in for machines this one is not ---------------------------
 
@@ -223,16 +255,12 @@ class TestProbeInterpretation:
 
     def test_a_blocked_node_is_offered_as_the_likely_cause(self) -> None:
         """The diagnostic that turns "no device" into something to go and fix."""
-        blocked = open_device_nodes(kfd=Path("/dev/kfd"), nodes=())
         probe = RuntimeProbe(
             installed=True,
             version="2.9.1+rocm7.13.0",
             hip_version="7.13.0",
             cuda_available=False,
-            nodes=tuple(
-                node.__class__(path=node.path, exists=True, openable=False, error="EACCES")
-                for node in blocked
-            ),
+            nodes=(DeviceNode(path=KFD_NODE, exists=True, openable=False, error="EACCES"),),
         )
         assert "could not be opened" in probe.unavailability()
 
@@ -422,6 +450,20 @@ class TestRocmEnvironment:
         monkeypatch.setenv("HSA_ENABLE_SDMA", "1")
         assert "HSA_ENABLE_SDMA" in missing_rocm_env_vars()
 
+    def test_the_fhs_shell_still_carries_the_build_toolchain(self, repo_root: Path) -> None:
+        """Finding 12's partial answer: the sdist build itself cannot be gate-tested.
+
+        `rocm[libraries]` compiles at install time and needs a compiler, and proving that
+        end to end means a network install taking minutes — not something the offline gate
+        can do. What *can* be asserted is the concrete regression: that nobody quietly
+        removed the toolchain from the FHS shell the build depends on. Verified once by
+        the install transcript in M6a's closeout; protected from here on by this.
+        """
+        flake = (repo_root / "flake.nix").read_text(encoding="utf-8")
+        fhs = flake[flake.index("buildFHSEnv") : flake.index("runScript")]
+        for package in ("gcc", "cmake", "gnumake", "ninja", "pkg-config", "python312", "uv"):
+            assert package in fhs, package
+
     def test_the_flake_sets_exactly_these(self, repo_root: Path) -> None:
         """The `doctor` check and the shell that satisfies it, kept in step.
 
@@ -476,27 +518,37 @@ class TestLazyImport:
         )
         assert completed.returncode == 0, completed.stderr
 
-    def test_probing_a_machine_reports_rather_than_raising(self) -> None:
-        """The real probe, in a subprocess, on whatever machine this is.
+    @pytest.mark.parametrize(
+        ("body", "expected"),
+        [
+            ("raise ImportError('No module named torch')", "ImportError"),
+            ("raise OSError('libtorch_hip.so: undefined symbol: hipGetDeviceCount')", "OSError"),
+            ("raise RuntimeError('the C extension exploded')", "RuntimeError"),
+        ],
+    )
+    def test_a_torch_that_cannot_be_imported_is_reported_not_raised(
+        self, tmp_path: Path, body: str, expected: str
+    ) -> None:
+        """`probe_runtime` promises never to raise. It caught only `ImportError`.
 
-        A subprocess for the same reason `conftest.py`'s `no_torch_import` fixture exists:
-        on the ROCm environment `probe_runtime()` imports Torch and launches kernels, and
-        doing that in-process would leave Torch resident for every test that follows —
-        which is exactly the INV-05 breach that fixture now catches. In-process, this test
-        would have been the thing it caught.
+        A ROCm build with a missing or mismatched shared library raises `OSError` from the
+        dynamic loader — which is precisely the environment failure this milestone exists
+        to diagnose, and the one state where an uncaught traceback would replace the
+        actionable diagnostic the charter asks for. Found in the verify phase by injecting
+        one; it escaped.
 
-        Deliberately does not assert `installed is False`: on the ROCm environment Torch
-        *is* importable and this must still not raise. What is under test is that a probe
-        always comes back as a probe, on a machine of any description.
+        Each case shadows `torch` with a module that fails on import, which is both
+        deterministic and independent of whether the machine running this has a GPU.
         """
-        source = (
-            "from dnd_audio.runtime import RuntimeProbe, probe_runtime; "
+        shadow(tmp_path, body)
+        completed = run_shadowed(
+            tmp_path,
+            "from dnd_audio.runtime import probe_runtime; "
             "p = probe_runtime(); "
-            "assert isinstance(p, RuntimeProbe); "
-            "assert p.installed or (p.error is not None and not p.device_usable), p"
-        )
-        completed = subprocess.run(
-            [sys.executable, "-c", source], capture_output=True, text=True, check=False
+            "assert p.installed is False, p; "
+            "assert p.error is not None; "
+            f"assert {expected!r} in p.error, p.error; "
+            "assert not p.device_usable",
         )
         assert completed.returncode == 0, completed.stderr
 
@@ -518,6 +570,7 @@ def test_bf16_runs_on_the_real_gfx1151_device() -> None:
     """
     probe = probe_runtime()
 
+    assert isinstance(probe, RuntimeProbe)
     assert probe.installed, (
         "run this from the ROCm environment: "
         "nix run .#fhs -- -c 'UV_PROJECT_ENVIRONMENT=.venv-rocm uv run pytest -m host_smoke'"

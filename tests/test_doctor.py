@@ -55,6 +55,25 @@ def _no_rocm_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(name, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _never_measure_the_machine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make `probe_runtime` fail loudly if any test here forgets to inject a probe.
+
+    `run_checks`'s default is to measure this machine — correct for production, wrong for
+    every test in this file. Without this, a forgotten `probe=` silently starts importing
+    Torch and launching kernels on the ROCm environment while passing everywhere else,
+    which is the shape of INV-05 breach M6a already shipped once.
+    """
+
+    def refuse() -> RuntimeProbe:
+        raise AssertionError(
+            "a test called run_checks() without injecting a probe, so it would measure "
+            "the real machine (INV-05). Pass probe=NO_GPU, or one of test_runtime.py's."
+        )
+
+    monkeypatch.setattr(doctor_module, "probe_runtime", refuse)
+
+
 def node(path: str, *, exists: bool = True, openable: bool = True) -> DeviceNode:
     return DeviceNode(
         path=Path(path),
@@ -348,6 +367,38 @@ class TestRequestedResolution:
         assert "dtype: float32" in detail.detail
 
 
+class TestSeverityRegressions:
+    """Two cases where `doctor` reported the wrong severity, found in M6a's verify phase.
+
+    Both had the same shape: the code one level down was right, and the line an operator
+    reads was not. Neither changed `overall_status`, which is why neither was noticed —
+    a consumer reading a *specific* check out of `--json` got the wrong answer.
+    """
+
+    def test_a_cuda_build_fails_the_gpu_check_too_not_only_the_torch_check(
+        self, tmp_path: Path
+    ) -> None:
+        """It used to print "the routing is not being applied" at severity `warn`.
+
+        `_check_gpu` decided warn-versus-fail on `cuda_available` and never on
+        `hip_version`, so a CUDA build — which reports no device on this host — read as an
+        incomplete machine while its own text said the build was wrong.
+        """
+        results = run_checks(tmp_path, probe=cuda_build())
+        assert _named(results, "torch").status is CheckStatus.FAIL
+        assert _named(results, "gpu").status is CheckStatus.FAIL
+
+    def test_a_degraded_gpu_surfaces_the_resolver_warning(self, tmp_path: Path) -> None:
+        """`RuntimeResolution.warnings` is documented as "not decoration" and was dropped.
+
+        On a GPU whose BF16 fails and whose float32 works, `auto` resolves to
+        `cuda:0 / float32` *with a warning*, and this line reported a clean `ok`.
+        """
+        result = _named(run_checks(tmp_path, probe=bf16_broken()), "device/dtype")
+        assert result.status is CheckStatus.WARN
+        assert "BF16" in result.detail
+
+
 class TestRocmEnvCheck:
     def test_unset_variables_warn_and_name_the_shell(self, results: list[CheckResult]) -> None:
         result = _named(results, "rocm env")
@@ -362,22 +413,24 @@ class TestRocmEnvCheck:
 
 
 class TestBoundaries:
-    def test_no_default_check_measures_the_real_machine(self, tmp_path: Path) -> None:
-        """INV-05, asserted rather than trusted: `run_checks` must accept a probe, and
-        every test in this file must pass one. A default that measured would make this
-        suite depend on the hardware of whoever ran it."""
+    def test_no_test_in_this_file_measures_the_real_machine(self, tmp_path: Path) -> None:
+        """INV-05, enforced behaviourally rather than textually.
+
+        The first version scanned this file's own source for `run_checks(` calls without
+        `probe=` — defeated by a call split across lines, and silent about every other
+        file. `_never_measure_the_machine` above is the real guard: it makes
+        `probe_runtime` raise, so a forgotten injection fails on every environment rather
+        than only on the one with a GPU. This asserts the guard is in force and that the
+        production default is still "measure this machine".
+        """
         import inspect
 
         signature = inspect.signature(run_checks)
         assert "probe" in signature.parameters
         assert signature.parameters["probe"].default is None
 
-        source = Path(__file__).read_text(encoding="utf-8")
-        calls = [
-            line for line in source.splitlines() if "run_checks(" in line and "def " not in line
-        ]
-        unprobed = [line for line in calls if "probe=" not in line]
-        assert not unprobed, unprobed
+        with pytest.raises(AssertionError, match="without injecting a probe"):
+            run_checks(tmp_path)
 
     def test_no_asr_model_checks_yet(self, tmp_path: Path) -> None:
         """M6b owns those. Only the VAD model is fetchable today."""

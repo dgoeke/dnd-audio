@@ -10,6 +10,7 @@ exist. The subprocess tests cover that, and they are what the spec's user contra
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -25,6 +26,7 @@ from dnd_audio.errors import ExitCode
 from dnd_audio.fixtures import FixtureTruth
 from dnd_audio.models import ModelDescriptor
 from dnd_audio.runtime import RuntimeProbe
+from tests.test_runtime import shadow
 
 runner = CliRunner()
 
@@ -244,9 +246,31 @@ class TestInstalledConsoleScript:
         assert "dnd-audio" in completed.stdout
 
     def test_doctor_works(self, tmp_path: Path) -> None:
-        completed = self._run("doctor", str(tmp_path), "--json")
-        assert completed.returncode == 0
-        assert json.loads(completed.stdout)["checks"]
+        """The installed script really runs — with Torch shadowed out of the child.
+
+        `doctor` probes the GPU, which is its job. But this is the default suite, and a
+        subprocess is exactly where `conftest.py`'s `no_torch_import` fixture cannot look:
+        it watches the parent's `sys.modules`. Unshadowed, this test launched real HIP
+        kernels whenever it ran from the ROCm environment, and nothing noticed. Found by
+        the verify phase's independent review; `test_runtime.py` owns the helper.
+        """
+        shadow(tmp_path / "shadow")
+        env = dict(os.environ)
+        existing = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = str(tmp_path / "shadow") + (os.pathsep + existing if existing else "")
+        completed = subprocess.run(
+            [str(CONSOLE_SCRIPT), "doctor", str(tmp_path), "--json"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=120,
+            env=env,
+        )
+
+        assert completed.returncode == 0, completed.stderr
+        checks = {check["name"]: check for check in json.loads(completed.stdout)["checks"]}
+        assert checks
+        assert "not installed" in checks["torch"]["detail"], "the shadow did not take"
 
     def test_an_unbuilt_adapter_exits_with_the_not_implemented_code(
         self, canonical_fixture: FixtureTruth

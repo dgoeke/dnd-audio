@@ -510,11 +510,24 @@ class ReportBuilder:
     def record_runtime(self, runtime: RuntimeProvenance) -> None:
         """Record the compute runtime a stage resolved.
 
-        Replaces rather than merges. One run resolves one device and one dtype — two
-        stages disagreeing about which would be a bug worth failing on, not a pair of
-        facts worth averaging, and a partial merge would describe a machine that does not
-        exist.
+        One run resolves one device and one dtype, so recording the same answer twice is
+        fine and recording a *different* one is a bug. This used to say exactly that and
+        then overwrite silently, which would have left M6b's report authoritative-looking
+        and carrying only whichever stage recorded last — with the disagreement, the thing
+        worth knowing, gone. Now it fails, because a partial merge would describe a machine
+        that does not exist and a silent overwrite describes one that might not.
+
+        Raises:
+            ValueError: if a different runtime was already recorded.
         """
+        if self._runtime is not None and self._runtime != runtime:
+            message = (
+                f"two stages resolved different compute runtimes in one run: "
+                f"{self._runtime.device}/{self._runtime.dtype} then "
+                f"{runtime.device}/{runtime.dtype}. One run resolves one runtime; a "
+                f"disagreement is a bug, not something to overwrite."
+            )
+            raise ValueError(message)
         self._runtime = runtime
 
     def record_model_identity(self, name: str, revision: str) -> None:

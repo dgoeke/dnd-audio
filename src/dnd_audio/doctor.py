@@ -348,6 +348,13 @@ def _check_gpu(probe: RuntimeProbe) -> CheckResult:
         return CheckResult(
             name="gpu", status=CheckStatus.WARN, detail="not checked — torch is not installed"
         )
+    if probe.hip_version is None:
+        # Before the `cuda_available` branch below, and deliberately. A CUDA or CPU-only
+        # build reports no device on this host, so severity decided on `cuda_available`
+        # alone called a *routing failure* an incomplete machine — while printing text
+        # that said the routing was broken. Same priority `_check_torch` already uses;
+        # they disagreed until M6a's verify phase.
+        return CheckResult(name="gpu", status=CheckStatus.FAIL, detail=probe.unavailability())
     if probe.device_usable:
         target = f", {probe.gfx_target}" if probe.gfx_target else ""
         verified = ", ".join(sorted(probe.gpu_dtypes))
@@ -395,6 +402,16 @@ def _check_resolution(
             name="device/dtype",
             status=CheckStatus.WARN,
             detail=f"{detail} — GPU inference is unavailable, so a session will be slow",
+        )
+    if resolution.warnings:
+        # `RuntimeResolution.warnings` is documented as "not decoration"; reporting `ok`
+        # over a non-empty one made this line — the one an operator most wants — say
+        # nothing about a GPU that had silently lost BF16. Nothing outside this function
+        # read the field at all until M6a's verify phase.
+        return CheckResult(
+            name="device/dtype",
+            status=CheckStatus.WARN,
+            detail=f"{detail} — {' '.join(resolution.warnings)}",
         )
     return CheckResult(name="device/dtype", status=CheckStatus.OK, detail=detail)
 

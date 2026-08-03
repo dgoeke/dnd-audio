@@ -92,7 +92,8 @@ ROCM_ENV_VARS: Final[tuple[tuple[str, str], ...]] = (
     ("HSA_ENABLE_SDMA", "0"),
 )
 
-#: The dtypes a smoke test is run for, in preference order for ``auto``.
+#: The dtypes a smoke test is run for, most-preferred first. ``_resolve_dtype``
+#: iterates this for ``auto``, so adding one here changes what ``auto`` may pick.
 SMOKE_DTYPES: Final[tuple[str, ...]] = ("bfloat16", "float32")
 
 #: Operands for the smoke test, chosen so every input **and** every product is exactly
@@ -268,7 +269,12 @@ class RuntimeResolution:
             torch=probe.version if probe is not None else None,
             hip=probe.hip_version if probe is not None else None,
             device=self.device,
-            device_name=probe.device_name if probe is not None else None,
+            # Only when the GPU is the device actually being used. The probe knows the
+            # name whenever the machine *has* a GPU, so copying it unconditionally made a
+            # deliberate `device: cpu` run on this host record
+            # `device='cpu', device_name='Radeon 8060S Graphics'` — provenance that is
+            # false, and that reaches M6b's cache key under INV-08.
+            device_name=probe.device_name if probe is not None and self.device != "cpu" else None,
             dtype=self.dtype,
         )
 
@@ -326,8 +332,13 @@ def probe_runtime() -> RuntimeProbe:
 
     try:
         import torch
-    except ImportError as exc:
-        return RuntimeProbe(installed=False, nodes=nodes, error=str(exc))
+    except Exception as exc:
+        # `except Exception`, not `except ImportError`. A ROCm build with a missing or
+        # mismatched shared library raises `OSError` from the dynamic loader — which is
+        # exactly the environment failure this milestone exists to diagnose, and the one
+        # state in which an uncaught traceback would replace the actionable diagnostic the
+        # charter asks for. Found in M6a's verify phase by injecting one; it escaped.
+        return RuntimeProbe(installed=False, nodes=nodes, error=f"{type(exc).__name__}: {exc}")
 
     version = str(torch.__version__)
     hip_version = None if torch.version.hip is None else str(torch.version.hip)
@@ -495,13 +506,31 @@ def _resolve_dtype(
         # a default to be handed over because a smoke test happened to pass.
         return "float32", []
 
-    if "bfloat16" in probe.gpu_dtypes:
-        return "bfloat16", []
-    return "float32", [
-        "BF16 did not produce the expected result on this GPU, so `auto` resolved to "
-        "float32 on it rather than falling back to CPU. The device works; this precision "
-        "does not."
-    ]
+    # Iterate the preference order rather than hardcoding it, and take only a dtype this
+    # device actually proved. Hardcoding `bfloat16 else float32` gave the right answer for
+    # today's two-entry SMOKE_DTYPES and would quietly return *unproven* float32 the day a
+    # third dtype is added and a device passes only that one — a trap laid for M6b rather
+    # than a bug today. It also made SMOKE_DTYPES' "preference order" comment a claim the
+    # body did not honour.
+    for candidate in SMOKE_DTYPES:
+        if candidate not in probe.gpu_dtypes:
+            continue
+        if candidate == "bfloat16":
+            return "bfloat16", []
+        return candidate, [  # type: ignore[return-value]
+            f"BF16 did not produce the expected result on this GPU, so `auto` resolved to "
+            f"{candidate} on it rather than falling back to CPU. The device works; that "
+            f"precision does not."
+        ]
+
+    # Unreachable while the device is usable, since `device_usable` requires a non-empty
+    # `gpu_dtypes` drawn from SMOKE_DTYPES. Stated rather than assumed, because the thing
+    # that makes it unreachable lives in another function.
+    message = (
+        f"asr.dtype: auto on {device}, but no dtype produced the expected result there. "
+        f"Set asr.device: cpu to run without the GPU."
+    )
+    raise ComputeError(message, code="asr_dtype_unavailable")
 
 
 def missing_rocm_env_vars() -> tuple[str, ...]:

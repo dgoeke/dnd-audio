@@ -236,6 +236,60 @@ class TestTheLockIsWhatWeAskedFor:
         }
         assert strays == {}
 
+    def test_the_locked_versions_are_the_ones_pyproject_pins(
+        self, pyproject: dict[str, object], lock: dict[str, object]
+    ) -> None:
+        """Ties two independently-edited files, and de-circularises the allowlist above.
+
+        Three of the five expected versions were *discovered* by the resolver rather than
+        chosen by hand, so asserting the lock against a constant copied out of the lock
+        would only prove the lock equals itself. The group's `==` pins are the independent
+        statement of intent; this checks the lock honours them.
+        """
+        pins = {
+            str(item).split("==")[0].split("[")[0].strip(): str(item).split("==")[1].strip()
+            for item in _rows(_table(pyproject["dependency-groups"])["asr-qwen"])
+            if "==" in str(item)
+        }
+        packages = _packages(lock)
+        for name, pinned in pins.items():
+            assert str(packages[name]["version"]) == pinned, name
+        for name in EXPECTED_AMD_PACKAGES:
+            assert pins[name] == EXPECTED_AMD_PACKAGES[name], name
+
+    def test_the_amd_index_publishes_no_hashes_so_the_lock_pins_versions_not_bytes(
+        self, lock: dict[str, object]
+    ) -> None:
+        """A property of the supply chain, asserted so it stops being a surprise.
+
+        Every PyPI artifact in this lock carries a sha256; not one AMD artifact does,
+        because the index publishes none. So "locked" here means the exact *version* is
+        pinned, and the *bytes* are not — a re-upload at the same version would be
+        invisible. Recorded in ADR-0025's consequences; this test is what makes the
+        statement true rather than remembered, and it will fail loudly on the good day AMD
+        starts publishing hashes, which is a change worth noticing.
+        """
+        amd_artifacts, hashed = [], []
+        for name, package in _packages(lock).items():
+            if _registry(package) != AMD_INDEX:
+                continue
+            entries = list(package.get("wheels") or [])
+            if package.get("sdist"):
+                entries.append(package["sdist"])
+            amd_artifacts += [(name, entry) for entry in entries]
+            hashed += [(name, entry) for entry in entries if "hash" in entry]
+
+        assert amd_artifacts, "no AMD artifacts in the lock at all"
+        assert hashed == [], hashed
+
+        pypi_hashed = any(
+            "hash" in entry
+            for package in _packages(lock).values()
+            if _registry(package) == "https://pypi.org/simple"
+            for entry in (package.get("wheels") or [])
+        )
+        assert pypi_hashed, "PyPI artifacts should carry hashes; the contrast is the point"
+
     def test_torch_is_a_rocm_build_and_not_a_cuda_one(self, lock: dict[str, object]) -> None:
         torch = _packages(lock)["torch"]
         assert "+rocm" in str(torch["version"])
