@@ -23,6 +23,7 @@ from dnd_audio.determinism import sha256_file
 from dnd_audio.errors import ExitCode
 from dnd_audio.fixtures import FixtureTruth
 from dnd_audio.interfaces import TranscriptionResult
+from dnd_audio.models import SNAPSHOT_FETCH_COMMAND
 from dnd_audio.transcript import (
     ASR_DIRNAME,
     RECORDS_RELATIVE_PATH,
@@ -30,6 +31,7 @@ from dnd_audio.transcript import (
     TRANSCRIPT_MARKDOWN_RELATIVE_PATH,
 )
 from dnd_audio.transcript.runner import TranscriberBundle, run_render, run_transcribe
+from tests.conftest import UNINSTALLED_REVISION
 
 
 @pytest.fixture
@@ -288,8 +290,8 @@ class TestTheCapHoldsOnARealSession:
 
 
 class TestFailureBehaviour:
-    def test_without_the_asr_runtime_the_run_fails_with_a_report(
-        self, canonical_fixture: FixtureTruth
+    def test_without_the_asr_models_the_run_fails_with_a_report(
+        self, session_without_asr_models: FixtureTruth
     ) -> None:
         """`transcribe` has only one branch, so here a model failure *is* the run failing.
 
@@ -297,30 +299,29 @@ class TestFailureBehaviour:
         a transcript. What INV-13 requires is that it fail visibly: a failed stage, a
         structured error, a written report, and a nonzero exit — never a traceback.
         """
-        result = run_transcribe(canonical_fixture.session_dir)
+        result = run_transcribe(session_without_asr_models.session_dir)
 
         assert result.exit_code is not ExitCode.OK
         assert result.records is None
         assert result.report_written
         assert result.report_path.is_file()
 
-    def test_that_failure_names_the_group_and_the_way_around_it(
-        self, canonical_fixture: FixtureTruth
+    def test_that_failure_names_the_command_that_installs_the_models(
+        self, session_without_asr_models: FixtureTruth
     ) -> None:
-        """Two actionable routes: install the runtime, or transcribe a synthetic session
-        from its own declared script. An operator hitting this needs to be told both."""
-        result = run_transcribe(canonical_fixture.session_dir)
+        """A structured error nobody can act on is a worse artifact than none."""
+        result = run_transcribe(session_without_asr_models.session_dir)
         errors = " ".join(error.message for stage in result.report.stages for error in stage.errors)
 
-        assert "asr-qwen" in errors
-        assert "--fake-models" in errors
+        assert SNAPSHOT_FETCH_COMMAND in errors
+        assert UNINSTALLED_REVISION in errors
 
     def test_the_transcript_stage_is_the_one_marked_failed(
-        self, canonical_fixture: FixtureTruth
+        self, session_without_asr_models: FixtureTruth
     ) -> None:
         """Model resolution happens before the snapshot is acted on, so the stages upstream
         of it never ran — but the report must still account for every one of them (INV-13)."""
-        result = run_transcribe(canonical_fixture.session_dir)
+        result = run_transcribe(session_without_asr_models.session_dir)
         stages = {stage.stage: stage.status for stage in result.report.stages}
 
         assert stages[StageName.TRANSCRIBE] == "failed"

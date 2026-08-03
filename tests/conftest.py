@@ -41,9 +41,10 @@ import sys
 from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import pytest
+import yaml
 
 from dnd_audio.artifacts.activity import ActivityGraph
 from dnd_audio.fixtures import FixtureTruth, build_session, canonical_session
@@ -199,6 +200,37 @@ def canonical_fixture(_canonical_build: FixtureTruth, tmp_path: Path) -> Fixture
     session_dir = tmp_path / "session"
     shutil.copytree(_canonical_build.session_dir, session_dir)
     return replace(_canonical_build, session_dir=session_dir)
+
+
+#: A commit that is valid in shape and installed nowhere. `asr.model_revision` is
+#: validated as a 40-character hex sha (ADR-0027), so this is an *accepted* configuration
+#: whose weights cannot be found — which is the point.
+UNINSTALLED_REVISION: Final = "0" * 40
+
+
+@pytest.fixture
+def session_without_asr_models(canonical_fixture: FixtureTruth) -> FixtureTruth:
+    """The canonical fixture, configured to want an ASR revision nothing has installed.
+
+    **Every test about "a host that cannot transcribe" must use this rather than relying on
+    the ambient environment**, and that is not a style preference — it is the lesson M6a's
+    closeout records and that M6b then repeated. The first version of those tests simply ran
+    `transcribe` and expected it to fail, which is true on `.venv` (no Torch, deliberately)
+    and false on `.venv-rocm`, where the runtime and six gigabytes of weights are present and
+    the run succeeds. They passed the gate and failed the moment the suite was run from the
+    other environment — an assertion about the *machine* wearing the clothes of an assertion
+    about the code.
+
+    Pinning an uninstalled revision makes the failure a property of the configuration:
+    `require_snapshot` refuses it identically on both environments, at the same point, with
+    the same code. Silero is untouched, so the detector still loads and the mix branch still
+    runs — which is what lets these tests check INV-09 rather than merely a total failure.
+    """
+    path = canonical_fixture.session_dir / "session.yaml"
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    document.setdefault("asr", {})["model_revision"] = UNINSTALLED_REVISION
+    path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+    return canonical_fixture
 
 
 @pytest.fixture(scope="session")

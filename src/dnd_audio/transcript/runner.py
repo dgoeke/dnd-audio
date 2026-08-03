@@ -494,14 +494,22 @@ def _default_transcriber(
         qwen_asr_version,
     )
 
-    resolution = resolve_runtime(
-        device=config.asr.device, dtype=config.asr.dtype, probe=probe_runtime()
-    )
-
+    # **Weights before hardware, and the order is load-bearing.** A session whose model is
+    # not installed cannot run on any device, so probing one first would spin up HIP to
+    # discover something a `stat` already knew. It also keeps the default suite honest: this
+    # is the path a test for "the models are missing" takes, and probing imports Torch —
+    # which INV-05 forbids that suite to do. Reversed, the offline test passes on the project
+    # environment (no Torch to import) and trips the `no_torch_import` guard on the ROCm one,
+    # which is precisely the environment-dependent failure M6a's closeout warns about. Found
+    # by running the default suite from `.venv-rocm`, which no gate does.
     asr_revision = config.asr.model_revision or QWEN3_ASR.revision
     aligner_revision = config.asr.aligner_revision or QWEN3_ALIGNER.revision
     asr_dir = require_snapshot(QWEN3_ASR, revision=asr_revision)
     aligner_dir = require_snapshot(QWEN3_ALIGNER, revision=aligner_revision)
+
+    resolution = resolve_runtime(
+        device=config.asr.device, dtype=config.asr.dtype, probe=probe_runtime()
+    )
 
     backend = load_qwen_backend(
         asr_dir=asr_dir,

@@ -36,7 +36,14 @@ from dnd_audio.doctor import (
     overall_status,
     run_checks,
 )
-from dnd_audio.models import ModelDescriptor
+from dnd_audio.models import (
+    SNAPSHOT_FETCH_COMMAND,
+    ModelDescriptor,
+    SnapshotDescriptor,
+    SnapshotFile,
+    find_snapshot,
+    snapshot_dir,
+)
 from dnd_audio.runtime import ROCM_ENV_VARS, DeviceNode, RuntimeProbe
 from tests.test_runtime import bad_arithmetic, bf16_broken, cuda_build, working
 
@@ -229,6 +236,99 @@ class TestModelCheck:
         result = _named(run_checks(tmp_path, models_directory=directory, probe=NO_GPU), "vad model")
 
         assert result.status is CheckStatus.WARN
+
+
+class TestAsrSnapshotCheck:
+    """The Qwen half, added in M6b. Same "warning, not failure" rule as the VAD check."""
+
+    def test_absent_snapshots_warn_and_name_the_fix(self, results: list[CheckResult]) -> None:
+        result = _named(results, "asr models")
+        assert result.status is CheckStatus.WARN
+        assert SNAPSHOT_FETCH_COMMAND in result.detail
+
+    def test_absent_snapshots_do_not_condemn_the_host(self, results: list[CheckResult]) -> None:
+        """`dnd-audio mix` runs the whole audio branch with no ASR adapter at all, which is
+        INV-09 as a supported way to use this pipeline rather than only as a failure mode.
+        Six gigabytes of absent weights is an incomplete machine, not a broken one."""
+        assert overall_status(results) is not CheckStatus.FAIL
+
+    def test_it_says_how_large_the_download_is(self, results: list[CheckResult]) -> None:
+        """An operator deciding whether to run this now deserves to know it is not seconds."""
+        assert "GB" in _named(results, "asr models").detail
+
+    def test_present_snapshots_are_reported_with_their_commits(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Substituted for the same reason the VAD check substitutes: the real pins are six
+        gigabytes and are not committed. What is under test is the check, not Qwen."""
+        directory = tmp_path / "snapshots"
+        stand_in = SnapshotDescriptor(
+            key="fake-asr",
+            repository="example/fake-asr",
+            revision="a" * 40,
+            files=(SnapshotFile("config.json", 2, "00" * 32),),
+        )
+        target = snapshot_dir(stand_in, directory=directory)
+        target.mkdir(parents=True)
+        (target / "config.json").write_bytes(b"{}")
+        monkeypatch.setattr(doctor_module, "QWEN_SNAPSHOTS", (stand_in,))
+
+        result = _named(
+            run_checks(tmp_path, models_directory=directory, probe=NO_GPU), "asr models"
+        )
+
+        assert result.status is CheckStatus.OK
+        assert "fake-asr" in result.detail
+        assert stand_in.revision[:12] in result.detail
+
+    def test_a_wrong_sized_file_reports_absent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The cheap check still catches a truncated download, which is the common one."""
+        directory = tmp_path / "truncated"
+        stand_in = SnapshotDescriptor(
+            key="fake-asr",
+            repository="example/fake-asr",
+            revision="a" * 40,
+            files=(SnapshotFile("config.json", 2, "00" * 32),),
+        )
+        target = snapshot_dir(stand_in, directory=directory)
+        target.mkdir(parents=True)
+        (target / "config.json").write_bytes(b"{")
+        monkeypatch.setattr(doctor_module, "QWEN_SNAPSHOTS", (stand_in,))
+
+        result = _named(
+            run_checks(tmp_path, models_directory=directory, probe=NO_GPU), "asr models"
+        )
+        assert result.status is CheckStatus.WARN
+
+    def test_it_does_not_hash_and_says_so_by_accepting_substituted_bytes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The behaviour that makes this fast, asserted rather than described.
+
+        A right-sized file with the wrong contents is reported *present* here and refused by
+        `find_snapshot`, which is what every loading path uses. Hashing six gigabytes is a
+        minute `doctor` must not spend and an ASR run must (ADR-0027).
+        """
+        directory = tmp_path / "substituted"
+        stand_in = SnapshotDescriptor(
+            key="fake-asr",
+            repository="example/fake-asr",
+            revision="a" * 40,
+            files=(SnapshotFile("config.json", 2, "ff" * 32),),
+        )
+        target = snapshot_dir(stand_in, directory=directory)
+        target.mkdir(parents=True)
+        (target / "config.json").write_bytes(b"{}")
+        monkeypatch.setattr(doctor_module, "QWEN_SNAPSHOTS", (stand_in,))
+
+        result = _named(
+            run_checks(tmp_path, models_directory=directory, probe=NO_GPU), "asr models"
+        )
+
+        assert result.status is CheckStatus.OK
+        assert find_snapshot(stand_in, directory=directory) is None
 
 
 def _fake_model(payload: bytes) -> ModelDescriptor:

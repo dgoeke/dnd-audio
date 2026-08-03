@@ -33,7 +33,10 @@ Openability is tested by **opening** the nodes. The spec says so in as many word
 inferring it from group membership would report no access on the target host, where
 access plainly works. See :mod:`dnd_audio.runtime`, which owns the probing.
 
-ASR model checks land in M6b.
+The ASR snapshot check (M6b) is **presence and size, never digests**. Verifying the two
+Qwen snapshots properly means hashing six gigabytes, and this command exists to be run
+*before* a session rather than to become part of one. `find_snapshot` is the verifying
+form and every path that loads a model goes through it (ADR-0027).
 """
 
 from __future__ import annotations
@@ -48,7 +51,14 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Final, Literal
 
-from dnd_audio.models import SILERO_VAD, find_model, models_dir
+from dnd_audio.models import (
+    QWEN_SNAPSHOTS,
+    SILERO_VAD,
+    SNAPSHOT_FETCH_COMMAND,
+    find_model,
+    models_dir,
+    snapshot_present,
+)
 from dnd_audio.runtime import (
     KFD_NODE,
     ROCM_ENV_VARS,
@@ -136,6 +146,7 @@ def run_checks(
     results.append(_check_writable(path))
     results.append(_check_free_space(path, min_free_gib))
     results.append(_check_vad_model(models_directory))
+    results.append(_check_asr_models(models_directory))
     results.append(_check_kfd(measured))
     results.append(_check_render_node(measured))
     results.append(_check_torch(measured))
@@ -260,6 +271,43 @@ def _check_vad_model(models_directory: Path | None) -> CheckResult:
         name="vad model",
         status=CheckStatus.OK,
         detail=f"{SILERO_VAD.key} {SILERO_VAD.release} at {path}",
+    )
+
+
+def _check_asr_models(models_directory: Path | None) -> CheckResult:
+    """Are both Qwen snapshots installed?
+
+    **Presence and size, not digests.** Verifying the two snapshots properly means hashing
+    six gigabytes, which is a minute `doctor` has no business spending — this command exists
+    to answer "is this machine ready" quickly, before a four-hour session rather than during
+    one. `find_snapshot` is the verifying form and every path that *loads* a model goes
+    through it (ADR-0027), so nothing is trusted on the strength of this check.
+
+    A `WARN` rather than a `FAIL` when they are absent, matching the VAD check: a host that
+    only ever runs `mix` needs neither, and `dnd-audio mix` is a supported way to use this
+    pipeline on a machine with no ASR at all (INV-09).
+    """
+    directory = models_dir() if models_directory is None else models_directory
+    missing = [
+        snapshot.key
+        for snapshot in QWEN_SNAPSHOTS
+        if not snapshot_present(snapshot, directory=directory)
+    ]
+    if missing:
+        return CheckResult(
+            name="asr models",
+            status=CheckStatus.WARN,
+            detail=(
+                f"{', '.join(missing)} not installed in {directory} — run "
+                f"`{SNAPSHOT_FETCH_COMMAND}` (about 6 GB). `mix` needs neither."
+            ),
+        )
+    return CheckResult(
+        name="asr models",
+        status=CheckStatus.OK,
+        detail=", ".join(
+            f"{snapshot.key} at {snapshot.revision[:12]}" for snapshot in QWEN_SNAPSHOTS
+        ),
     )
 
 

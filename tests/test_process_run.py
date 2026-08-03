@@ -31,6 +31,7 @@ from dnd_audio.fixtures import FixtureTruth
 from dnd_audio.inspection import OUTPUT_DIRNAME
 from dnd_audio.interfaces import TranscriptionResult
 from dnd_audio.mix import MP3_RELATIVE_PATH
+from dnd_audio.models import SNAPSHOT_FETCH_COMMAND
 from dnd_audio.orchestrate import ProcessResult, process_outputs, run_process
 from dnd_audio.transcript import (
     RECORDS_RELATIVE_PATH,
@@ -349,8 +350,8 @@ class TestTheReportIsAlwaysFinalized:
         assert {e.code for e in stages[StageName.TRANSCRIBE].errors} == {"raw_sources_modified"}
         assert result.exit_code is not ExitCode.OK
 
-    def test_an_unavailable_asr_runtime_costs_the_transcript_and_not_the_mix(
-        self, canonical_fixture: FixtureTruth
+    def test_unavailable_asr_models_cost_the_transcript_and_not_the_mix(
+        self, session_without_asr_models: FixtureTruth
     ) -> None:
         """INV-09, in the case that stopped being hypothetical when M6b landed.
 
@@ -362,10 +363,11 @@ class TestTheReportIsAlwaysFinalized:
         what changed is that its failure belongs to the transcript branch rather than to the
         run.
 
-        This test runs on the project environment, which deliberately carries no Torch
-        (INV-05), so the failure is the real one rather than a simulated one.
+        The absence is configured rather than ambient — `session_without_asr_models` pins a
+        revision nothing has installed — so this asserts a property of the code on every
+        environment instead of a property of whichever one happens to be running it.
         """
-        result = run_process(canonical_fixture.session_dir)
+        result = run_process(session_without_asr_models.session_dir)
 
         assert result.exit_code is not ExitCode.OK
         assert result.records is None
@@ -376,12 +378,13 @@ class TestTheReportIsAlwaysFinalized:
         assert stages[StageName.MIX] == "complete"
         assert stages[StageName.TRANSCRIBE] == "failed"
 
-    def test_that_failure_names_what_to_do_about_it(self, canonical_fixture: FixtureTruth) -> None:
+    def test_that_failure_names_what_to_do_about_it(
+        self, session_without_asr_models: FixtureTruth
+    ) -> None:
         """A structured error nobody can act on is a worse artifact than none."""
-        result = run_process(canonical_fixture.session_dir)
+        result = run_process(session_without_asr_models.session_dir)
         errors = " ".join(error.message for stage in result.report.stages for error in stage.errors)
-        assert "asr-qwen" in errors
-        assert "--fake-models" in errors
+        assert SNAPSHOT_FETCH_COMMAND in errors
 
 
 class TestTheOutputSet:
