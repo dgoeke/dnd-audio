@@ -284,18 +284,25 @@ def probe_mp3(path: Path) -> Mp3Facts:
 def _initial_gain(
     source: Measurement, *, target_mb: int, ceiling_mb: int, settings: MixConfig
 ) -> tuple[int, list[MixNote], bool]:
-    """The gain the first encode uses, whether it normalized at all, and what to warn about.
+    """The gain the first encode uses, whether it aimed at the target, and what to warn about.
 
-    Two guards, and neither is hypothetical. A mix nobody spoke in measures near silence, and
-    normalizing that to -16 LUFS is fifty decibels of amplified noise floor; and a session
-    that is merely very quiet should not be lifted past the clamp on the strength of one
-    measurement.
+    The third return value is load-bearing rather than informational: **a run that did not aim
+    at the loudness target must not then be failed for missing it.** Without it a perfectly
+    good mix becomes a failed stage, and `process` exits nonzero on a session that produced
+    exactly the MP3 it should have. Three ways that happens, none of them hypothetical:
 
-    The third return value is load-bearing rather than informational: **a run that declined to
-    normalize must not then be failed for missing the target it declined to reach.** Without
-    it, every silent session becomes a failed mix stage instead of a warned one — and since
-    FFmpeg reports its -70 LUFS gating floor for digital silence rather than `-inf`, that is
-    not a hypothetical path either.
+    * **The mix is below the silence floor.** A session where the detector found no speech has
+      every track at the room-tone share, and normalizing that to -16 LUFS is fifty decibels of
+      amplified noise floor. FFmpeg reports its -70 LUFS gating floor rather than `-inf` for
+      digital silence, so this is a threshold rather than a null check.
+    * **The gain the target wants exceeds the clamp.** A very quiet session should not be
+      lifted by forty decibels on the strength of one measurement.
+    * **The true-peak ceiling forbids it.** This is the one the canonical fixture actually
+      produces: peaky material 31 dB down wants +15.6 dB and the ceiling allows +1.6, so the
+      MP3 lands 14 LU below target. The ceiling is a hard limit on clipping and the loudness
+      figure is a target; honouring the first and warning about the second is the only reading
+      that does not throw away a good mix. Real speech has a lower crest factor than shaped
+      noise, but a session with a loud clap in it has this shape too (OQ-020).
     """
     warnings: list[MixNote] = []
     floor_mb = round(settings.encode.silence_floor_lufs * MILLIBELS_PER_DB)
@@ -336,12 +343,31 @@ def _initial_gain(
             )
         )
         wanted = clamped
+        return wanted, warnings, False
 
-    # Aim at the ceiling before the first encode rather than after the first failure. The
-    # intermediate's peak is a sample peak, so this is an approximation of a true-peak
-    # headroom — which is why the retry loop exists at all (OQ-020).
-    if source.true_peak_dbtp_mb is not None:
-        wanted = min(wanted, ceiling_mb - source.true_peak_dbtp_mb)
+    # Aim at the ceiling before the first encode rather than after the first failure — the
+    # spec's "reduce the pre-encode gain or true-peak target", applied before the first
+    # attempt rather than after it (OQ-020).
+    peak_mb = source.true_peak_dbtp_mb
+    headroom = None if peak_mb is None else ceiling_mb - peak_mb
+    if peak_mb is not None and headroom is not None and headroom < wanted:
+        warnings.append(
+            MixNote(
+                code="mix_loudness_target_unreachable",
+                message=(
+                    f"reaching {settings.integrated_lufs:.1f} LUFS needs "
+                    f"{wanted / MILLIBELS_PER_DB:+.1f} dB, but the "
+                    f"{settings.true_peak_dbtp:.1f} dBTP ceiling allows only "
+                    f"{headroom / MILLIBELS_PER_DB:+.1f} dB above this mix's true peak of "
+                    f"{peak_mb / MILLIBELS_PER_DB:.1f} dBTP. The ceiling "
+                    f"wins: it is a limit on clipping, and the loudness figure is a target. "
+                    f"The MP3 will be about "
+                    f"{(wanted - headroom) / MILLIBELS_PER_DB:.1f} LU quieter than asked for "
+                    f"(OQ-020)."
+                ),
+            )
+        )
+        return headroom, warnings, False
     return wanted, warnings, True
 
 
@@ -356,10 +382,13 @@ def _failures(
 ) -> list[str]:
     """Every configured tolerance this decode is outside, as a closed vocabulary.
 
-    ``normalized`` is False when the mix was below the silence floor and was deliberately left
-    alone. The loudness check is then skipped, because failing a run for missing a target it
-    was told not to aim at would turn every silent session into a failed stage. The true-peak
-    and duration checks still apply: those are claims about the file, not about the target.
+    ``normalized`` is False when this run deliberately did not aim at the loudness target —
+    the mix was below the silence floor, the gain the target wanted exceeded the clamp, or the
+    true-peak ceiling forbade it. The loudness check is then skipped, because failing a run
+    for missing a target it was told not to aim at throws away a good MP3 and makes `process`
+    exit nonzero on a session that produced exactly what it should have. The true-peak and
+    duration checks still apply either way: those are claims about the file rather than about
+    a target.
     """
     encode = settings.encode
     found: list[str] = []

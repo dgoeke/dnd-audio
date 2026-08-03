@@ -62,6 +62,15 @@ def a_measurement(**overrides: object) -> Measurement:
     return replace(base, **overrides)  # type: ignore[arg-type]
 
 
+def _headroom() -> Measurement:
+    """An intermediate quiet enough to normalize and peaky enough not to be ceiling-limited.
+
+    Stated explicitly because the alternative is a default that is *itself* a ceiling-limited
+    case, which would silently switch off the loudness assertions in every test below it.
+    """
+    return a_measurement(integrated_lufs_mb=-1760, true_peak_dbtp_mb=-3000)
+
+
 class Scripted:
     """A measurer that answers from a list, and records how often it was asked."""
 
@@ -88,7 +97,7 @@ def _encode(
         settings=settings or MixConfig(),
         session_id="2026-08-15",
         title="Session 01",
-        source_measurement=source or a_measurement(integrated_lufs_mb=-1760),
+        source_measurement=source or _headroom(),
         expected_samples=SAMPLES,
         measurer=measurer,
     )
@@ -314,6 +323,47 @@ class TestTheMasterGain:
             source=a_measurement(integrated_lufs_mb=-7000, true_peak_dbtp_mb=-7000),
         )
         assert result.accepted.compliant  # type: ignore[attr-defined]
+
+    def test_a_target_the_true_peak_ceiling_forbids_is_warned_about_not_failed(
+        self, intermediate: Path, tmp_path: Path
+    ) -> None:
+        """The case the canonical fixture actually produces, and it must not fail the stage.
+
+        Peaky material 31 dB down wants +15.6 dB and the ceiling allows +1.6. The ceiling is a
+        hard limit on clipping; the loudness figure is a target. Honouring the first and
+        warning about the second is the only reading that does not throw away a good mix and
+        make `process` exit nonzero on a session that produced exactly the MP3 it should have.
+        """
+        settings = MixConfig()
+        ceiling_mb = round(settings.true_peak_dbtp * 100)
+        measurer = Scripted(a_measurement(integrated_lufs_mb=-3000, true_peak_dbtp_mb=ceiling_mb))
+        result = _encode(
+            intermediate,
+            tmp_path,
+            measurer,
+            settings=settings,
+            source=a_measurement(integrated_lufs_mb=-3160, true_peak_dbtp_mb=-310),
+        )
+        assert result.attempts[0].gain_mb == 160  # type: ignore[attr-defined]
+        assert result.accepted.compliant  # type: ignore[attr-defined]
+        assert [n.code for n in result.warnings] == ["mix_loudness_target_unreachable"]  # type: ignore[attr-defined]
+        assert "14.0 LU quieter" in result.warnings[0].message  # type: ignore[attr-defined]
+
+    def test_the_ceiling_is_still_enforced_on_the_decode(
+        self, intermediate: Path, tmp_path: Path
+    ) -> None:
+        """Declining to chase the loudness target does not suspend the true-peak check: that
+        one is a claim about the file rather than about a target."""
+        settings = MixConfig(encode=EncodeConfig(max_retries=0))
+        measurer = Scripted(a_measurement(integrated_lufs_mb=-3000, true_peak_dbtp_mb=500))
+        with pytest.raises(EncodeError, match="true_peak"):
+            _encode(
+                intermediate,
+                tmp_path,
+                measurer,
+                settings=settings,
+                source=a_measurement(integrated_lufs_mb=-3160, true_peak_dbtp_mb=-310),
+            )
 
     def test_a_gain_beyond_the_clamp_is_clamped_and_says_so(
         self, intermediate: Path, tmp_path: Path
