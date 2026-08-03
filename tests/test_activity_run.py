@@ -515,9 +515,16 @@ class TestFailuresStillProduceAReport:
         A run that reads a source, builds work from those bytes, and then discovers the file
         changed must leave *nothing* behind — otherwise restoring the original file makes the
         poisoned entry a valid hit forever.
+
+        Asserted over **every** cache directory rather than over detection alone. Checking
+        only the cache this milestone added is how the same defect survived one layer up:
+        `_inspect` published its sidecars itself, three lines below a docstring promising it
+        did not, and a test naming `DETECTION_DIRNAME` could never have seen it (M3's verify
+        phase). A glob has no such blind spot, including for whatever M5 caches next.
         """
-        stale_artifacts(canonical_fixture.session_dir)
-        target = canonical_fixture.session_dir / canonical_fixture.chunks[0].relative_path
+        session_dir = canonical_fixture.session_dir
+        stale_artifacts(session_dir)
+        target = session_dir / canonical_fixture.chunks[0].relative_path
         original = target.read_bytes()
 
         from dnd_audio.activity.bleed import attribute
@@ -529,12 +536,56 @@ class TestFailuresStillProduceAReport:
         # Patched by name on the *runner*, which imported it directly: patching the defining
         # module would leave the runner holding the original reference.
         monkeypatch.setattr("dnd_audio.activity.runner.attribute", corrupting)
-        result = run_activity(canonical_fixture.session_dir, detector=leaky(canonical_fixture))
+        result = run_activity(session_dir, detector=leaky(canonical_fixture))
 
         assert result.exit_code is not ExitCode.OK
-        assert not (canonical_fixture.session_dir / ACTIVITY_RELATIVE_PATH).exists()
-        entries = list((canonical_fixture.session_dir / DETECTION_DIRNAME).glob("*.json"))
-        assert entries == [], "a run that failed INV-01 must commit no cache sidecar"
+        assert not (session_dir / ACTIVITY_RELATIVE_PATH).exists()
+        sidecars = sorted(
+            path.relative_to(session_dir).as_posix()
+            for path in (session_dir / "work" / "cache").rglob("*.json")
+        )
+        assert sidecars == [], (
+            f"a run that failed INV-01 committed {len(sidecars)} cache sidecar(s): {sidecars}. "
+            f"Restoring the source makes every one of them a valid hit forever (INV-08)."
+        )
+
+    def test_a_failed_run_leaves_no_timeline_the_report_disowns(
+        self, canonical_fixture: FixtureTruth
+    ) -> None:
+        """INV-13: nothing survives a run that the report calls failed.
+
+        `timeline.json` is written *before* attribution here, because the attribution cache
+        key is keyed on its hash. So a run that fails during detection has already overwritten
+        it, and leaving it there published a file the same report calls `reconstruct: failed`
+        and does not list among its deliverable hashes. M4 and M5 read that file; a timeline
+        no run vouches for is exactly the artifact INV-13 exists to prevent.
+
+        Started from a *valid* timeline rather than an empty directory, so the test
+        distinguishes "removed it" from "never got that far".
+        """
+        session_dir = canonical_fixture.session_dir
+        timeline_path = session_dir / TIMELINE_RELATIVE_PATH
+        assert run_activity(session_dir, detector=leaky(canonical_fixture)).exit_code is ExitCode.OK
+        assert timeline_path.exists(), "precondition: a good run wrote one"
+
+        class Exploding(ScriptedActivityDetector):
+            def detect(self, window: AudioWindow) -> tuple[SpeechSpan, ...]:
+                message = "the detector fell over"
+                raise RuntimeError(message)
+
+        detector = Exploding({})
+        result = run_activity(
+            session_dir,
+            detector=DetectorBundle(identity=detector.identity(), make=lambda _t: detector),
+        )
+
+        assert result.exit_code is not ExitCode.OK
+        assert not timeline_path.exists(), (
+            "a failed run left a timeline behind that its own report calls failed and does "
+            "not hash as a deliverable"
+        )
+        produced = {item.relative_path for item in result.report.provenance.deliverables}
+        assert TIMELINE_RELATIVE_PATH not in produced
 
     def test_a_report_that_would_land_inside_raw_is_not_written(
         self, canonical_fixture: FixtureTruth

@@ -319,6 +319,57 @@ class TestTheVeto:
         assert decided.evidence[0].outcome == "vetoed_by_track_level"
 
 
+class TestTheEvidenceSaysWhatActuallyHappened:
+    """`vetoed_by_track_level` is a claim about a comparison, not about the candidate.
+
+    The evidence is per compared *pair*, and it is what an operator reads to find out why a
+    speaker survived or vanished. The veto is a candidate-level fact, so reporting it on
+    every pair the moment it applied labelled comparisons the veto had nothing to do with —
+    including ones where the competitor was quieter or unrelated and suppression was never
+    on the table. That reads as "this was nearly suppressed and the veto saved it", which is
+    false, and on the most dangerous decision in the pipeline a false diagnostic is worse
+    than none (M3's verify phase).
+    """
+
+    def test_an_unrelated_competitor_is_not_reported_as_a_veto(self) -> None:
+        """Same audio, same vetoed candidate — only the correlation threshold moves.
+
+        `tx-b`'s wearer is genuinely talking, so the veto still applies and the candidate is
+        still retained. But with the correlation bar above what the pair measured, nothing
+        was overridden: the two signals simply were not related, and that is what the record
+        has to say.
+        """
+        veto = TestTheVeto()
+        room, candidates = veto.room(overlap_gain=0.03)
+
+        _, vetoed = veto.overlap(room, candidates, settings())
+        assert vetoed.decision == "retained"
+        assert vetoed.evidence[0].outcome == "vetoed_by_track_level"
+        measured = vetoed.evidence[0].correlation_permille
+
+        _, decided = veto.overlap(room, candidates, settings(min_correlation=0.999))
+
+        assert measured < 999, "precondition: the pair must fall below the raised bar"
+        assert decided.relative_level_mb is not None
+        assert decided.relative_level_mb > -1200, "precondition: the veto still applies"
+        assert decided.decision == "retained"
+        assert decided.evidence[0].outcome == "insufficient_correlation"
+        assert decided.ambiguous is False, (
+            "nothing was overridden, so this is an ordinary retention rather than a "
+            "candidate the numbers condemned and the veto saved"
+        )
+
+    def test_an_undominant_competitor_is_not_reported_as_a_veto(self) -> None:
+        """The other half: correlated, vetoed, but the competitor never out-scored it."""
+        veto = TestTheVeto()
+        room, candidates = veto.room(overlap_gain=0.03)
+        _, decided = veto.overlap(room, candidates, settings(min_score_margin=0.99))
+
+        assert decided.decision == "retained"
+        assert decided.evidence[0].outcome == "insufficient_margin"
+        assert decided.ambiguous is False
+
+
 class TestSpeechReferences:
     def test_a_track_below_the_minimum_has_no_reference(self) -> None:
         """Recorded as absent rather than defaulted: a reference estimated from one region is

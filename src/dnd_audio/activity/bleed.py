@@ -64,13 +64,20 @@ __all__ = [
     "speech_references",
 ]
 
-#: Which percentile of a track's candidate levels becomes its speech reference.
+#: Which percentile of a track's candidate levels becomes its speech reference (**OQ-017**).
 #:
-#: Not the median: a track whose wearer spoke twice and heard four other people has more
-#: bleed candidates than speech ones, and the median of that is a bleed level — which would
-#: set the veto at bleed and disable the protection exactly where it is needed. The upper
-#: quartile is dominated by real speech under any plausible mix, and `nearest` interpolation
-#: makes the result one of the measured integers rather than an average of two (INV-02).
+#: Not the median, which ADR-0014 originally specified: a track whose wearer spoke twice and
+#: heard four other people has more bleed candidates than speech ones, and the median of that
+#: is a bleed level — which would set the veto at bleed and disable the protection exactly
+#: where it is needed. `nearest` interpolation makes the result one of the measured integers
+#: rather than an average of two (INV-02).
+#:
+#: This is a guess about a real room, and it is registered as one. Two effects fight here and
+#: only a real session says which wins: including bleed candidates drags the reference *down*
+#: (the veto fires more often — conservative, the direction the spec asks for), while taking
+#: the upper quartile pushes it *up* (a few unusually loud utterances weaken the veto for that
+#: wearer's quieter speech). The graph records every candidate's level and its track's
+#: reference, so answering this is reading one real session rather than running an experiment.
 REFERENCE_PERCENTILE = 75
 
 #: Returns ``[start, start + n)`` derivative samples of one track, in the session's own
@@ -250,6 +257,9 @@ def speech_references(
 ) -> dict[str, int | None]:
     """What each wearer sounds like when they are the one talking.
 
+    :data:`REFERENCE_PERCENTILE` of that track's own candidate levels — see its note for why
+    that rather than the median, and for the open question it rests on (**OQ-017**).
+
     ``None`` for a track with fewer than `min_reference_candidates` candidates: a reference
     estimated from one or two regions is as likely to be measuring bleed as speech, and a
     veto built on it would fire in the wrong direction. Recording the absence keeps that
@@ -368,6 +378,11 @@ def _gate(
         decision="suppressed" if best is not None else "retained",
         # Ambiguous means the numbers said bleed and the veto kept it anyway. Flagging every
         # merely-overlapping candidate would make this mean nothing.
+        #
+        # The margin and correlation are still checked here rather than inferred from the
+        # outcome label. `_outcome` now only returns `vetoed_by_track_level` once both have
+        # passed, so the three agree — but the flag is what a downstream milestone reads, and
+        # it should not silently change meaning if that precedence is ever revisited.
         ambiguous=best is None
         and vetoed
         and any(
@@ -384,15 +399,23 @@ def _gate(
 def _outcome(*, vetoed: bool, correlated: bool, dominated: bool) -> EvidenceOutcome:
     """Why this comparison did not suppress — or that it did.
 
-    The veto is reported first when it applies, because it is the reason that overrides the
-    other two rather than merely joining them.
+    The veto is reported **last**, for a comparison the other two conditions had already
+    satisfied, because that is the only case where the veto is what changed the answer.
+
+    Reporting it first — whenever it merely *applied* — labelled every pair on a vetoed
+    candidate `vetoed_by_track_level`, including pairs whose competitor was quieter or
+    unrelated and where nothing was overridden at all. An operator auditing why a speaker
+    survived then read "the veto saved this" against a competitor that never threatened it,
+    which is worse than no diagnostic (M3's verify phase). The candidate-level `ambiguous`
+    flag was always computed from the margin and correlation directly, so this changes what
+    the evidence *says*, never what the gate decides.
     """
-    if vetoed:
-        return "vetoed_by_track_level"
     if not correlated:
         return "insufficient_correlation"
     if not dominated:
         return "insufficient_margin"
+    if vetoed:
+        return "vetoed_by_track_level"
     return "suppresses"
 
 

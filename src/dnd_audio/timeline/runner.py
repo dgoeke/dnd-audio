@@ -362,6 +362,14 @@ def _inspect(
     has been re-verified, so a run that discovers a source changed under it cannot leave a
     record describing bytes that are gone.
 
+    That sentence was here before the code did it: this function called `cache.commit()`
+    itself, three lines after saying it did not, so every inspection sidecar published
+    before the caller had verified anything. A run that correctly failed on a changed source
+    still left twelve entries keyed on the bytes it read, and restoring the original file
+    made them valid hits forever — the precise failure INV-08 names, one layer above the
+    derivative cache where M2 found and fixed it (M3's verify phase). Both callers already
+    commit after `verify_unchanged`.
+
     Unconditional, and cheap when warm. See the module docstring's second step for why a
     configuration-hash match is not sufficient evidence that a manifest still describes
     what is on disk.
@@ -370,7 +378,6 @@ def _inspect(
     manifest = inspect_session(session_dir, config, cache=cache, builder=builder, verify_raw=False)
     manifest_path = session_dir / MANIFEST_RELATIVE_PATH
     write_json_atomic(manifest_path, manifest.model_dump(mode="json"))
-    cache.commit()
 
     builder.stage_complete(
         StageName.INSPECT,

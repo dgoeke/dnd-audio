@@ -95,6 +95,7 @@ from dnd_audio.raw_guard import raw_roots, reject_outputs_inside_raw, snapshot, 
 from dnd_audio.timeline import DERIVATIVE_SAMPLE_RATE, TIMELINE_RELATIVE_PATH
 from dnd_audio.timeline.pcm import PcmReader, open_pcm
 from dnd_audio.timeline.reader import DEFAULT_WINDOW_SAMPLES
+from dnd_audio.timeline.resample import to_derivative_interval, to_source_sample
 from dnd_audio.timeline.runner import build_timeline, ingest_outputs
 
 __all__ = [
@@ -233,7 +234,15 @@ def run_activity(
     except Exception as exc:
         # Every failure, not only the ones raised on purpose: an operator whose run died on
         # an OSError needs a report more than anyone.
+        #
+        # Both artifacts, not only the graph. `timeline.json` is written *before* attribution
+        # here — the attribution cache key is keyed on its hash, so it has to exist first —
+        # which means a failed run had already overwritten it. Leaving it behind published a
+        # timeline that the report simultaneously calls `reconstruct: failed` and does not
+        # hash as a deliverable, and M4 and M5 read that file (INV-13). `run_ingest` writes
+        # it only after verification and removes it on failure; this is the same contract.
         _remove_stale(graph_path)
+        _remove_stale(timeline_path)
         error = StructuredError(code=_code_of(exc), message=str(exc) or type(exc).__name__)
         for stage in (StageName.INSPECT, StageName.RECONSTRUCT, StageName.ACTIVITY):
             if not builder.recorded(stage):
@@ -398,22 +407,29 @@ def _candidates(
     A region is clamped to the session's aligned duration: the derivative is `ceil`-padded
     to a whole number of output samples, so its last frame can reach past the audio it
     describes, and a candidate that did would fail the artifact's own bounds check.
+
+    Both directions go through M2's helpers rather than being spelled out again here. They
+    agreed when this was written, which is exactly why a second copy is dangerous: the
+    floor/ceil asymmetry on the way back is the documented trap (rounding both ends the same
+    way costs a word its first phoneme), and INV-04 names a second conversion as how that
+    rule dies.
     """
     decimation = timeline.sample_rate // DERIVATIVE_SAMPLE_RATE
     found: list[CandidateInput] = []
     for track_id, regions in sorted(detections.items()):
         for region in regions:
-            start = region.start_sample * decimation
-            end = min(region.end_sample * decimation, timeline.duration_samples)
+            start = to_source_sample(region.start_sample, decimation)
+            end = min(to_source_sample(region.end_sample, decimation), timeline.duration_samples)
             if end <= start:
                 continue
+            derivative_start, derivative_end = to_derivative_interval(start, end, decimation)
             found.append(
                 CandidateInput(
                     track_id=track_id,
                     start_sample=start,
                     end_sample=end,
-                    derivative_start_sample=start // decimation,
-                    derivative_end_sample=-(-end // decimation),
+                    derivative_start_sample=derivative_start,
+                    derivative_end_sample=derivative_end,
                     probability_permille=region.probability_permille,
                     peak_probability_permille=max(
                         region.peak_probability_permille, region.probability_permille

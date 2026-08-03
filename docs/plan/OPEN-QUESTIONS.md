@@ -226,6 +226,11 @@ reaches `activity.bleed.min_correlation` within `activity.correlation_max_lag_ms
 veto: a candidate whose band-limited level is within `activity.bleed.veto_db` of its own
 track's speech reference is never suppressed, because a lav hearing its wearer at the
 wearer's normal level is not hearing someone else.
+It also covers **how a track's speech reference is estimated** — the 75th percentile of that
+track's own candidate levels (`activity/bleed.py::REFERENCE_PERCENTILE`), rather than the
+median ADR-0014 first specified. Including a track's bleed candidates drags that reference
+down and the upper quartile pushes it up; which effect dominates is a property of a real
+room, and the veto's usefulness depends on the answer.
 **Why it matters:** Every default in `activity.vad`, `activity.bleed`, and
 `activity.scoring` is a number chosen against synthetic audio whose bleed is a delayed,
 attenuated copy of the same signal — which is the *easy* case. Real bleed crosses a room,

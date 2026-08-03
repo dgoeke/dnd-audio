@@ -61,15 +61,55 @@ A candidate is suppressed **only** when, against some competing candidate on ano
    its own track's speech reference**.
 
 The third is the veto, and it is what the reviewer's case needs. A track's speech reference
-is the robust (median) band-limited level of that track's own high-confidence candidates —
-what this wearer sounds like when this wearer is talking. A lav hearing its wearer at the
-wearer's normal level is not hearing bleed, however loud and however correlated the other
-track is. That is the whole content of the spec's word *track-relative*, and without the veto
-the phrase is decoration.
+is a robust band-limited level of that track's own candidates — what this wearer sounds like
+when this wearer is talking. A lav hearing its wearer at the wearer's normal level is not
+hearing bleed, however loud and however correlated the other track is. That is the whole
+content of the spec's word *track-relative*, and without the veto the phrase is decoration.
 
-Everything else is retained. A candidate satisfying some but not all of the conditions is
-retained **and marked `ambiguous`**, which is the spec's "default to keeping ambiguous
-candidates" made visible rather than implicit.
+Everything else is retained. A candidate the numbers condemned — margin **and** correlation
+both satisfied — and the veto saved is retained **and marked `ambiguous`**, which is the
+spec's "default to keeping ambiguous candidates" made visible rather than implicit.
+
+#### Amended after implementation (M3's verify phase)
+
+Two sentences above originally said something the code does not do. Both are corrected in
+place; this section records what changed and why, because an ADR that quietly disagrees with
+its implementation is worse than no ADR.
+
+**The reference is the 75th percentile of all of a track's candidates, not the median of its
+high-confidence ones.** Two changes, one deliberate and one a simplification worth being
+honest about:
+
+* *Percentile.* A track whose wearer spoke twice and heard four other people has more bleed
+  candidates than speech ones, and the median of that set **is a bleed level** — which would
+  anchor the veto at bleed and disable the protection exactly where it is needed. The upper
+  quartile is dominated by real speech under a wider range of mixes. `nearest` interpolation
+  keeps the result one of the measured integers rather than an average of two (INV-02).
+* *No confidence filter.* The percentile is doing the work a confidence threshold would have
+  done, and adding a second knob that selects the same candidates twice is a threshold nobody
+  can tune independently. `activity.bleed.min_reference_candidates` remains the guard against
+  estimating a reference from one or two regions.
+
+These push the reference in **opposite** directions — including bleed candidates drags it
+down, taking the upper quartile pushes it up — and which dominates depends on a real room.
+That is exactly **OQ-017**, which the estimator now cites from the code. Both failure modes
+are worth stating: a reference set too low fires the veto too often (conservative, and the
+direction the spec prefers), and one set too high by a few unusually loud utterances weakens
+the veto for that wearer's quieter speech. Neither can be settled against synthetic audio
+whose bleed is a delayed copy of its source, so this is tuned on the first real session and
+not before.
+
+**`ambiguous` marks the veto case only, not "some but not all conditions".** The original
+wording would have flagged every candidate that merely overlapped something and failed one
+threshold, which is most of them; a flag that fires on the ordinary case carries no
+information. It now means the one thing a human can act on: the numeric evidence said bleed
+and the pipeline overrode it.
+
+Relatedly, the per-pair evidence outcome `vetoed_by_track_level` is reported **only for a
+comparison that satisfied margin and correlation**. Reporting it for every pair on a vetoed
+candidate labelled comparisons the veto had nothing to do with — a competitor that was
+quieter or unrelated — which reads as a suppression narrowly averted. The gate's decision
+never depended on that label; the audit trail did.
 
 ### The decision runs on the score, so the score cannot be decorative
 
