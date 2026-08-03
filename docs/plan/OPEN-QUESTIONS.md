@@ -266,3 +266,46 @@ pipeline already records exactly these numbers for every candidate pair in
 graph rather than running an experiment.
 **Needs:** H2 or the first real session · **Blocks:** nothing (threshold tuning) ·
 **Status:** open
+
+## OQ-018 — What do Qwen3-ASR and its aligner need at a request boundary?
+**Assumption:** Four guesses, each of which M4 has to make a number out of before any model
+exists to check it against:
+
+1. **Padding.** `transcript.pad_ms` of audio on each side of an ownership interval is enough
+   context for the model to recover the first and last word intact. A word clipped by the
+   segment boundary is the failure this pays for.
+2. **Timestamp stability.** Two overlapping requests covering the same audio return that
+   audio's words at *close enough* times that a duplicate at a stitch boundary can be
+   recognized by text equality plus interval overlap. If the model's times wander by more
+   than a word's length between requests, the stitch rule stops recognizing the duplicate and
+   emits it twice.
+3. **Truncation.** A response that stopped at the generation ceiling is worth retrying as two
+   halves split at the quietest interior point, and `transcript.max_truncation_retries`
+   additional submissions are enough to resolve one. Both halves of that are guesses: that a
+   low-energy point is a better split than the midpoint at all, and that the recursion
+   terminates in practice rather than at the budget.
+4. **Duplicate text.** `transcript.duplicate.min_text_similarity` and the minimum-length
+   floors below which similarity is ignored are calibrated against *Qwen's* error
+   distribution — how differently it transcribes the same utterance heard on two lavs. Set
+   too high, real duplicates survive; too low, two people who happened to say the same thing
+   are collapsed into one.
+
+**Why it matters:** Every one of these is a property of a model this milestone deliberately
+does not have. They shape what is submitted, what is stitched, and what is deleted — and (4)
+is the one that can silently destroy speech, which the spec says is the worse failure. M4 is
+correct under whatever the configured values are; nothing here changes that. What is unknown
+is whether the *defaults* are sensible.
+**Evidence:** M6b's smoke test against the real adapter answers (1), (2) and (3) directly:
+submit overlapping requests over the same audio and compare returned word times; force a
+truncated response and observe both the finish signal and whether a split resolves it. (4)
+needs a real session, or at minimum a real recording of one utterance heard on two
+transmitters — the same evidence OQ-017 waits on, from the text side rather than the acoustic
+one.
+**Needs:** M6b (1–3), M6b or the first real session (4) · **Blocks:** nothing — M4 is correct
+under the configured values · **Status:** open
+
+**Raised before the constants landed, by M4's plan review.** The plan promised that every
+default would cite an open question and then had none to cite for any of these: OQ-009 covers
+only the package's segment limit and OQ-017 only the acoustic side of bleed. Every
+request-shaping and text-similarity default in `TranscriptConfig` cites this entry, so
+`rg 'OQ-018'` finds all of them at once.
