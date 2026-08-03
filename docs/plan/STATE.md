@@ -7,52 +7,68 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 
 ## Right now
 
-- **Current milestone:** M6b — Qwen adapter (verified, awaiting close)
-- **Branch:** `milestone/M6b-qwen-adapter`
-- **Last closed milestone:** M6a — ROCm environment
+- **Current milestone:** H1 — real DJI hardware fixture (not started)
+- **Branch:** `main`
+- **Last closed milestone:** M6b — Qwen adapter
 - **Gate status at HEAD:** passes, zero skips (8 checks, 2294 tests)
-- **Blocked on:** nothing for M6b — its environment is built, locked, and proved on the
-  real device. **OQ-008 is answered:** `torch 2.9.1+rocm7.13.0` (HIP `7.13.99004-3309c6114a`)
-  on `Radeon 8060S Graphics` / `gfx1151`, bfloat16 and float32 both exact, and the
-  `rocm[libraries]` sdist built first time in the FHS shell with no additions to the package
-  list M0 guessed.
+- **Blocked on:** **real recordings, and nothing else.** Every remaining open question that
+  blocks anything needs audio rather than code. The MVP's code path is complete: `inspect`,
+  `ingest`, `activity`, `mix`, `transcribe` and `process` all run end to end, and
+  `transcribe` now produces a real transcript from real speech with no `--fake-models`.
 
-  **The one thing most likely to cost M6b an afternoon** is not the adapter: it is that
-  `[tool.uv.sources]` only routes packages that are also **direct** members of a dependency
-  list, and ignores a transitive-only requirement *silently* — no warning, no error, just
-  the wrong registry in the lock. `qwen-asr` pulls Gradio, Flask, `nagisa`, `soynlp` and
-  Python SoX; if any brings an AMD-only requirement, it must go in the group **and** the
-  sources table. `transformers==4.57.6` and `accelerate==1.12.0` are already locked at
-  `qwen-asr` 0.0.6's exact pins, so adding it should not relock — if it wants to, something
-  moved and that is worth understanding before accepting it.
+  **What works, in one line each.** `dnd-audio models fetch` installs Silero (~2 MB);
+  `./scripts/fetch-models.sh` installs the Qwen ASR model and forced aligner (~6 GB, one
+  time, pinned by commit and verified file by file); `dnd-audio doctor` reports tools, disk,
+  every model, the GPU, and what your configured device/dtype resolves to; `dnd-audio
+  process <session>` runs both branches and produces `session.mp3`, `transcript.json`,
+  `transcript.md` and an ingest report naming every model, revision and package version that
+  produced them.
 
-  **There are two environments now**, and it is load-bearing: `.venv` never contains torch,
-  `.venv-rocm` is where the `asr-qwen` group installs from inside the FHS shell. The gate
-  runs against `.venv`, which is what keeps INV-05's group-absent case continuously proved.
-  **Run the default suite from `.venv-rocm` occasionally — no gate does**, and that is
-  exactly where M6a found a real INV-05 breach that was invisible everywhere else.
+  **Two environments, and it is load-bearing.** `.venv` never contains Torch; `.venv-rocm`
+  is where the `asr-qwen` group installs, from inside the FHS shell. The gate runs against
+  `.venv`, which keeps INV-05's group-absent case continuously *proved* rather than proved
+  once. **Run the default suite from `.venv-rocm` occasionally — no gate does.** M6a found a
+  real INV-05 breach there, and M6b found six tests asserting a property of the machine
+  instead of the code, plus an adapter that started HIP before checking for weights. It is
+  the single highest-yield thing to do that no automation does for you.
 
-  **H1 is still the oldest outstanding item.** M6a neither needed nor touched real DJI
-  metadata. The 2026-08-02 sample probe answered **OQ-001, OQ-002, OQ-004 and OQ-005**;
-  **OQ-004's assumption is false on both halves** — DJI's `bext.time_reference` is not
-  samples since midnight and is frame-quantized to 33.3 ms — and **reworking the timing
-  model remains the largest known piece of outstanding work in the project**, deliberately
-  unscheduled. `rg 'OQ-004'` finds every site. **OQ-007** (`ingest` refuses real 24-bit
-  `_orig` files, with a reason that is wrong for 24-bit specifically) is likewise recorded
-  and not fixed.
+  **H1 is the oldest outstanding item and is now the only thing gating progress.** The
+  2026-08-02 sample probe answered **OQ-001, OQ-002, OQ-004 and OQ-005**; **OQ-004's
+  assumption is false on both halves** — DJI's `bext.time_reference` is not samples since
+  midnight and is frame-quantized to 33.3 ms — and **reworking the timing model remains the
+  largest known piece of outstanding work in the project**, deliberately unscheduled. `rg
+  'OQ-004'` finds every site. **OQ-007** (`ingest` refuses real 24-bit `_orig` files, with a
+  reason that is wrong for 24-bit specifically) is likewise recorded and not fixed.
 
   What H1 still owes: OQ-003's counter across a power cycle, OQ-007's `orig`/`edit` pairing,
-  **OQ-012 and OQ-015**, and a second recording from one power-on cycle to confirm OQ-004's
-  epoch reading.
+  **OQ-012 and OQ-015** (receiver displays read against wall clock — unrecoverable
+  afterwards), and a second recording from one power-on cycle to confirm OQ-004's epoch
+  reading.
 
-  **OQ-017** (what separates real speech from lav bleed at a real table) waits on H2 or a
-  first real session; the sample probe took the first real measurements and found level
-  separates by an order of magnitude while **correlation does not discriminate at all**.
-  **OQ-018** (what Qwen needs at a request boundary) is now **M6b's to answer** — its smoke
-  test settles padding, timestamp stability across overlapping requests, and whether a
-  low-energy split beats the midpoint. **OQ-019** and **OQ-020** wait on a real session.
-  **OQ-021**, new in M6a, asks which render node backs the compute device on a multi-GPU
-  host; nothing is blocked on it.
+  **M6b added a defect to H1's list that only a real model could have found.** The model
+  hears an utterance's first word and the transcript does not contain it: the aligner places
+  it a few tens of milliseconds before the VAD candidate's ownership interval begins, and
+  M4's rule correctly drops it. Five of eleven segments lost their opening word on the sample
+  capture. `activity.vad.pad_ms` = 30 is M3's number chosen against synthetic audio,
+  registered under **OQ-017**, and a real table is what should move it. **Nothing raises or
+  warns** — the symptom is prose that reads fine and is missing a word.
+
+  **OQ-008 answered** (M6a): `torch 2.9.1+rocm7.13.0` (HIP `7.13.99004-3309c6114a`) on
+  `Radeon 8060S Graphics` / `gfx1151`, bfloat16 and float32 both exact.
+  **OQ-009 answered** (M6b): the package chunks its timestamp path at 180 s, and that path
+  is one this project never calls.
+  **OQ-022 answered** (M6b): Qwen inference on this stack is reproducible in process and
+  across cold processes, so **INV-02 stands unamended**.
+  **OQ-018 items 1–3 answered** (M6b); item 4 and the low-energy-split half of item 3 need
+  a real session and are H2's.
+  **OQ-017**, **OQ-019**, **OQ-020** wait on H2 or a first real session. **OQ-021** asks
+  which render node backs the compute device on a multi-GPU host; nothing is blocked on it.
+
+  **Do not run a transcription alongside a heavy ComfyUI or large-LLM workload.** The host
+  has unified memory, so a GPU allocation and system RAM come from one pool and
+  `systemd-oomd` will kill a user process under sustained pressure — in the worst case an
+  hours-long session four hours in. The pipeline bounds its own footprint and cannot bound
+  anything else's.
 
 ## Milestone status
 
@@ -65,7 +81,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | M4  | Fake transcript            | closed      | `8556f43` |
 | M5  | Automix                    | closed      | `d282688` |
 | M6a | ROCm environment           | closed      | `f5c6632` |
-| M6b | Qwen adapter               | verified    | —         |
+| M6b | Qwen adapter               | closed      | `SHA`     |
 | H1  | Hardware fixture (2 min)   | not started | —         |
 | H2  | Drift soak / first session | not started | —         |
 | M7  | Archival (sketch)          | sketch      | —         |
@@ -165,8 +181,16 @@ alone — proved by deleting the graph, the timeline and the whole cache tree fi
 asserting no model is constructed. Absent records exit nonzero naming
 `transcript_records_missing`, and still write a report.
 
-Without `--fake-models`, `transcribe` raises the `DEFERRED: M6b` `NotImplementedError` naming
-the missing adapter rather than writing a report that says the session is broken (ADR-0005).
+**Without `--fake-models`, `transcribe` now transcribes.** `_default_transcriber` verifies
+both Qwen snapshots, resolves the runtime, loads the pair offline onto `cuda:0` in bfloat16
+with SDPA attention, and returns a real `Transcriber` (M6b). On a machine that has not run
+`./scripts/fetch-models.sh` it fails naming that command; on a machine without the
+`asr-qwen` group it fails naming the `uv sync` that installs it — and under `process`,
+either failure costs the transcript and **not** the mix (INV-09).
+
+Weights before hardware, in that order, and it is load-bearing: a session whose model is not
+installed cannot run on any device, so checking first avoids spinning up HIP to learn what a
+`stat` already knew — and keeps the default suite from importing Torch (INV-05).
 
 `uv run dnd-audio activity /path/to/session` — inspection, the timeline, then who was
 speaking.
@@ -222,11 +246,24 @@ writer that cannot lose a stage, and a test suite that is provably offline.
 
 ## Next smallest step
 
-Begin **M6b — Qwen adapter**. Read its "What M6a already provides" section first. The seam
-is finished and exercised: `transcript/runner.py::_default_transcriber` holds the only
-`DEFERRED: M6b` raise, and replacing it reaches **both** `transcribe` and `process` through
-one construction site (M5). `dnd-audio mix` needs no adapter at all, so an adapter
-regression can never cost a session its audio deliverable. (Claude Code: `/ms-start 6b`.)
+**H1 — the real DJI hardware fixture.** The MVP's code path is complete; every remaining
+question that blocks anything needs audio. Read `docs/plan/milestones/H1-hardware-fixture.md`
+— its recording recipe is written for the owner, and the items that cannot be recovered
+afterwards (**the receiver displays read against wall clock**, for OQ-012 and OQ-015) are
+called out as such. (Claude Code: `/ms-start H1`.)
+
+Nothing in H1 is a code task until the recordings exist. What the pipeline will do with them
+on arrival is already built: `inspect` names the strategy, the evidence and the assumption
+*by OQ id* in every manifest, so answering several of these is reading one manifest rather
+than writing an analysis. `tests/test_qwen_smoke.py` discovers `samples/*.wav` by glob, so
+dropping better recordings in re-runs every OQ-018 and OQ-022 measurement M6b took, without
+a code change.
+
+**If code is wanted before the recordings arrive**, the two known defects are both recorded
+and both deliberately unscheduled: **OQ-004's timing model** (the largest known piece of
+outstanding work in the project — `rg 'OQ-004'` finds every site) and **OQ-007** (`ingest`
+refuses real 24-bit `_orig` files with a reason that is wrong for 24-bit specifically).
+Neither should be attempted without deciding first what the real fixture is expected to say.
 
 **`pytest-xdist` parallelism is done** (2026-08-03), outside any milestone because it
 touches every milestone's tests. **The suite went from 120 s to ~30 s and the whole gate

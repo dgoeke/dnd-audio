@@ -53,8 +53,8 @@ Ledger effect — details and measurements live in each entry, not here:
 | **OQ-005** private/iXML chunks | **answered** — none; the iXML duplicates `bext` and adds only the 30/1 timecode rate |
 | **OQ-003** filename grammar | grammar confirmed; the `MIC###` counter's behaviour across a power cycle still open |
 | **OQ-007** dual-file `orig`/`edit` | `orig` is **not** always 32-bit float; `orig`/`edit` pairing untested |
-| **OQ-017** bleed thresholds | first real measurements, from a harder geometry than a table |
-| **OQ-012**, **OQ-015** | untouched — both need receiver displays read against wall clock |
+| **OQ-017** bleed thresholds | first real measurements, from a harder geometry than a table — and M6b added a second symptom, `vad.pad_ms` clipping utterance-opening words |
+| **OQ-012**, **OQ-015** | untouched — both need receiver displays read against wall clock. M6b's capture is *reported* to have had a failed jam between receivers, which is consistent with what OQ-012 records but is not the measurement |
 
 Two things the pipeline did on real files, worth knowing before the real fixture arrives:
 
@@ -76,6 +76,17 @@ they matter rather than merely that they were on a list:
 - **A power cycle**, for OQ-003's counter.
 - **All six transmitters confirmed on the same recording format**, per the recipe — and note
   that the pipeline should tolerate a mismatch rather than fail, which OQ-007 now records.
+- **Speech whose opening consonant a VAD can be late on** — added by M6b, which found the
+  first real defect only a real model on real speech could have surfaced. With the adapter
+  running, the model heard `'Testing a first transmitter…'` and the transcript recorded
+  `'a first transmitter…'`: the aligner places "Testing" 50 ms before the VAD candidate's
+  ownership interval begins, and M4's rule — a word belongs to the interval containing its
+  **start** — correctly drops it. Five of eleven retained segments lost their opening word
+  this way. `activity.vad.pad_ms` = 30 is M3's number, chosen against synthetic audio and
+  registered under **OQ-017**; 47 seconds of one operator testing microphones is not evidence
+  to retune a detector on, and a real table is. **The symptom to look for is a transcript
+  quietly missing the first word of an utterance** — nothing raises, nothing warns, and the
+  text reads as plausible prose.
 
 ## Completion gate
 

@@ -124,6 +124,17 @@ not a CUDA build from PyPI.
 Transformers adapter, forced aligner, token-limit truncation handling, full cache
 identity, and report provenance.
 
+Three things the original entry did not anticipate, all recorded in ADR-0027, ADR-0028 and
+M6b's closeout. The ~6 GB download is a **one-time setup step** driven by the `hf` CLI —
+but behind `models fetch --qwen` rather than beside it, so `models fetch` remains the only
+network authority and neither INV-06 nor the spec needed amending. Snapshot installation is
+keyed by `(repository, resolved commit)` and the installed tree is verified as an **exact
+allowlist in both directions**, because Transformers loads a directory and an unpinned file
+in one is a file a model may read. And `asr.model`/`asr.aligner` accept exactly one value
+each: this build carries snapshots for two repositories and no command can install a third,
+so a configured third would have run Qwen and recorded something else as having produced
+the transcript.
+
 **Gate:** A short real transcription + alignment smoke test passes on the target
 host; changing `max_new_tokens` invalidates the cache; the default (non-`host_smoke`)
 suite still passes without any of it installed.

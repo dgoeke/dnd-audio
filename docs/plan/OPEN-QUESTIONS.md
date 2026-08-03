@@ -586,8 +586,10 @@ truncated response and observe both the finish signal and whether a split resolv
 needs a real session, or at minimum a real recording of one utterance heard on two
 transmitters — the same evidence OQ-017 waits on, from the text side rather than the acoustic
 one.
-**Needs:** M6b (1–3), M6b or the first real session (4) · **Blocks:** nothing — M4 is correct
-under the configured values · **Status:** open
+**Needs:** H1/H2 or the first real session · **Blocks:** nothing — M4 is correct under the
+configured values · **Status:** **items 1–3 answered** (M6b, 2026-08-03, measured against the
+real model); **item 4 open**, and so is whether a low-energy split beats a midpoint — both
+need speech this capture does not contain
 
 **Raised before the constants landed, by M4's plan review.** The plan promised that every
 default would cite an open question and then had none to cite for any of these: OQ-009 covers

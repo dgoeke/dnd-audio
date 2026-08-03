@@ -1,6 +1,6 @@
 # M6b — Qwen ASR adapter and forced aligner
 
-**Status:** not started
+**Status:** closed
 **Depends on:** M4, M6a
 **Spec sections:** Milestone 4 (Qwen specifics); Target-host runtime; Tests and
 acceptance criteria 12, 14
@@ -13,36 +13,36 @@ complete cache identity — dropped in behind the interface M4 already exercises
 
 ## Completion gate
 
-- [ ] `models fetch` is the only command that touches the network for models. It
+- [x] `models fetch` is the only command that touches the network for models. It
       resolves mutable Hugging Face names to exact snapshot commit revisions and
       writes a local model lock. Caches live outside session directories and out of
       version control.
-- [ ] `process` uses that lock rather than re-resolving a moving branch, and
+- [x] `process` uses that lock rather than re-resolving a moving branch, and
       production processing runs under Hugging Face offline mode.
-- [ ] Explicit model/aligner revisions may be set in configuration.
-- [ ] Transformers backend, `torch.bfloat16`, `cuda:0`, SDPA attention.
-- [ ] Audio reaches the model only as local paths or arrays — never a URL or API
+- [x] Explicit model/aligner revisions may be set in configuration.
+- [x] Transformers backend, `torch.bfloat16`, `cuda:0`, SDPA attention.
+- [x] Audio reaches the model only as local paths or arrays — never a URL or API
       (INV-06).
-- [ ] English forced by default, language configurable. `glossary.txt` passed via
+- [x] English forced by default, language configurable. `glossary.txt` passed via
       Qwen's context parameter when present; its absence never blocks a run.
-- [ ] Forced aligner produces word times; per-segment alignment failure warns and
+- [x] Forced aligner produces word times; per-segment alignment failure warns and
       retains segment-level text.
-- [ ] Cache identity: exact segment-audio hash, model and aligner identifiers **and
+- [x] Cache identity: exact segment-audio hash, model and aligner identifiers **and
       resolved revisions**, context hash, language, backend, dtype, attention
       implementation, and every output-affecting generation/alignment parameter
       including `max_new_tokens` (INV-08). Atomic writes; incomplete entries never hit.
-- [ ] `max_new_tokens` defaults to 1024, not the upstream wrapper's 512. Changing
+- [x] `max_new_tokens` defaults to 1024, not the upstream wrapper's 512. Changing
       it invalidates the cache — tested.
-- [ ] Truncation detection uses public backend metadata or retokenized-length
+- [x] Truncation detection uses public backend metadata or retokenized-length
       heuristics, never a private Qwen finish-reason API. The split/retry machinery
       from M4 is reused unchanged.
-- [ ] Processing runs in bounded windows; documented that it must not run alongside
+- [x] Processing runs in bounded windows; documented that it must not run alongside
       a heavy ComfyUI or large-LLM workload on this UMA host (INV-07).
-- [ ] Report records Python, `qwen-asr`, Transformers, Torch, HIP runtime, device,
+- [x] Report records Python, `qwen-asr`, Transformers, Torch, HIP runtime, device,
       dtype, attention implementation, and resolved model revisions.
-- [ ] A `host_smoke` test performs a short **real** transcription and alignment on
+- [x] A `host_smoke` test performs a short **real** transcription and alignment on
       the target host and passes.
-- [ ] The default suite still passes with none of this installed (INV-05).
+- [x] The default suite still passes with none of this installed (INV-05).
 
 ## Explicitly not in this milestone
 
@@ -174,210 +174,258 @@ complete cache identity — dropped in behind the interface M4 already exercises
   All of it stays inside the `asr-qwen` group.
 - If real Qwen output differs structurally from the fake, the fake was wrong.
   Fix the fake and keep both in the default suite rather than weakening assertions.
+## Closeout
 
-## Working plan
+### What works end to end
 
-_Scratch. Replaced by the Closeout at the end of this milestone._
+**`dnd-audio transcribe <session>` produces a real transcript from real speech, with no
+`--fake-models`.** The last `DEFERRED: M6b` raise in the project is gone. On the target host:
 
-### How the weights arrive, and why no document needs amending
+```
+  11 segment(s) across 2 speaker(s), 3 collapsed as duplicates, 8 marked as overlap
+  warn  candidate_transcribed_to_nothing: 1 retained activity candidate(s) produced no text
 
-The owner directed that the ~6 GB download use the `hf` CLI and be a **one-time environment
-setup step** the pipeline depends on and cannot run without. The first draft of this plan
-made that a second network-capable entry point (`scripts/fetch-models.sh` calling `hf`
-directly) and proposed amending the gate criterion and INV-06 to permit it. The plan review
-was right to refuse that: the *spec itself* says "`models fetch` is the only command
-expected to require network access for model installation", so a second authority would have
-needed the spec amended too — three documents changed to avoid writing one subcommand.
+**[00:00:10.750] Operator (mic 2):** a first transmitter Hello One two three Here we go
+```
 
-**`dnd-audio models fetch --qwen` drives the `hf` CLI instead.** It is still one-time setup,
-it still uses `hf`, the pipeline still hard-fails without it, and there is still exactly one
-network authority. `scripts/fetch-models.sh` remains, but as a thin wrapper that runs that
-command inside the FHS shell — which it must, because `hf` ships with the `huggingface_hub`
-that lives in `.venv-rocm` and not in `.venv`. Nothing in the gate, INV-06, or the spec
-moves.
+and the report carries every component the gate's provenance list names, measured rather
+than declared:
 
-**Installation is keyed by `(repository, resolved commit)`, not by a fixed pair of
-snapshots.** A checked-in `SnapshotDescriptor` carries the default commit and every file's
-size and sha256 — `SILERO_VAD`'s treatment, and the strongest available pin. But
-`asr.model_revision` may name a different commit, and a manifest checked into source cannot
-describe one, so:
+```
+runtime         sdpa · cuda:0 · bfloat16 · Radeon 8060S Graphics
+                torch 2.9.1+rocm7.13.0 · HIP 7.13.99004-3309c6114a · python 3.12.13
+asr             Qwen/Qwen3-ASR-1.7B @ 7278e1e70fe206f11671096ffdd38061171dd6e5
+aligner         Qwen/Qwen3-ForcedAligner-0.6B @ c7cbfc2048c462b0d63a45797104fc9db3ad62b7
+asr_package_version 0.0.6 · transformers_version 4.57.6 · truncation_margin 16
+```
 
-- `asr.model_revision` / `asr.aligner_revision` are **validated as 40-character lowercase
-  hex commit SHAs**. A branch name is rejected at configuration load, which is what makes
-  "`process` must use the lock rather than re-resolving a moving branch" true by
-  construction rather than by convention.
-- The default commit verifies against the checked-in manifest. An overridden commit verifies
-  against the **lock**, whose per-file digests were recorded when `models fetch` installed
-  it. `read_lock`'s current "the lock is a convenience, `find_model` is the authority" holds
-  for Silero and is deliberately **not** true for snapshots: for a snapshot there is nothing
-  else that knows what an overridden revision should contain. That change of semantics is
-  stated in ADR-0027 and tested, rather than left for someone to infer.
+Every one of those reaches the ASR cache key through one `TranscriberIdentity`, so a Torch
+upgrade, a HIP upgrade, a `transformers` bump or a dtype change re-runs the work instead of
+serving a transcript produced under different arithmetic (INV-08).
 
-`hf download` writes into a staging directory and only the pinned files are moved into
-place, so the loadable tree is an exact allowlist. `hf`'s own `.cache/huggingface` metadata
-never reaches it, and an unpinned file that Transformers might load is a verification
-failure rather than an unnoticed extra.
+**Weights arrive once, by commit, and are verified in both directions.**
+`./scripts/fetch-models.sh` enters the FHS shell and runs `dnd-audio models fetch --qwen`,
+which drives the `hf` CLI. `dnd-audio models plan` prints the pin without touching anything.
+Installation is keyed by `(repository, resolved commit)`, staged outside the target, and the
+tree is checked to be **exactly** the manifest — every pinned file at its pinned size and
+sha256, and no unpinned file anywhere in it, because Transformers loads a *directory* and
+anything inside one is a file a model may read.
 
-### What the package actually does, read before planning
+**`process` still produces `session.mp3` when none of this is installed.** That stopped being
+hypothetical the moment the adapter existed: until M6b a missing ASR model meant "not built
+yet" and correctly stopped the run; now it means "this machine has no ASR", which is an
+ordinary transcription failure and exactly what INV-09 exists for.
 
-From `qwen_asr` 0.0.6's published wheel. Each of these shapes a decision below:
+**The default suite runs with none of it present**, on a machine with no GPU, no weights and
+no Torch — which is what keeps INV-05 continuously proved rather than proved once.
 
-- `Qwen3ASRModel.transcribe(audio, context, language, return_time_stamps)` returns
-  `[ASRTranscription(language, text, time_stamps)]`. `time_stamps` is a `ForcedAlignResult`
-  whose `.items` carry `text`, `start_time`, `end_time` **in seconds, rounded to 3 dp**.
-- `(np.ndarray, sr)` is a supported input, so audio reaches the model as an in-memory array
-  and never as a URL (INV-06). At `sr == 16000` no resampling happens, so ADR-0017's "do not
-  add a second resampler" holds.
-- **`MAX_FORCE_ALIGN_INPUT_SECONDS = 180`** in `inference/utils.py`, against
-  `MAX_ASR_INPUT_SECONDS = 1200` for the text-only path. Alignment is what this pipeline
-  always asks for, so 180 s is the limit that binds, exactly as **OQ-009** assumed. Source
-  inspection is half of OQ-009's stated evidence; the long-segment experiment is the other
-  half and is a `host_smoke` test rather than an amendment to the question.
-- **`transcribe(return_time_stamps=True)` runs ASR and then alignment, and only builds
-  `ASRTranscription` after alignment returns.** An aligner exception therefore destroys text
-  that was already generated — which makes the gate criterion "per-segment alignment failure
-  warns and retains segment-level text" *unimplementable* through that one call. The adapter
-  must drive the two public operations itself. Found by the plan review; it is the single
-  most valuable thing that review produced.
-- **There is no public finish reason.** `_infer_asr_transformers` decodes
-  `text_ids.sequences` and returns strings; nothing survives to say generation stopped at
-  the ceiling. Truncation detection is therefore the retokenized-length heuristic the spec
-  names as the alternative, not a choice between two available signals.
-- The aligner's `tokenize_space_lang` strips punctuation from word text, so aligned word
-  texts are not a substring partition of the segment text. M4's `comparison_key` already
-  tolerates that; the records must not pretend otherwise.
+### Tests and commands run, with results
 
-### Order of work
+```
+$ ./scripts/gate.sh
+  pass  system dependencies      pass  pytest (offline, cpu)    2294 tests
+  pass  ruff check               pass  lock is current
+  pass  ruff format              pass  placeholder scan         148 files
+  pass  type check               pass  plan consistency         11 milestones, 13 INV,
+GATE PASSED                                                     22 OQ, 29 ADR
+```
 
-1. **Packaging** — `pyproject.toml`, `tests/test_packaging.py`. Add `qwen-asr==0.0.6` to the
-   `asr-qwen` group; its requirements are the `transformers`/`accelerate` pins M6a already
-   locked plus `nagisa`, `soynlp`, `qwen-omni-utils`, `librosa`, `soundfile`, `sox`,
-   `gradio`, `flask`, `pytz` — all PyPI, none AMD-only, so no new `[tool.uv.sources]` entry
-   is expected. `uv lock` must not move torch, transformers or accelerate; if it wants to,
-   stop and understand why. `test_every_routed_package_is_also_a_direct_dependency` is the
-   guard M6a left for exactly this moment.
-2. **The snapshot store** — `src/dnd_audio/models.py`, `tests/test_models.py`.
-   `SnapshotDescriptor`, `snapshot_dir`, `find_snapshot`, `require_snapshot` (fatal, and the
-   message names `models fetch --qwen`), and snapshot entries merging into the existing
-   lock. `find_snapshot` is exact in **both** directions: every pinned file present at the
-   pinned size and digest, and **no unpinned file in the tree** — an extra `config.json` or
-   custom-code file is something Transformers would happily load, so its presence is a
-   verification failure, not an unnoticed extra. Descriptors `QWEN3_ASR` and
-   `QWEN3_ALIGNER`, at the default commits; an overridden commit verifies against the lock.
-3. **Fetching** — `dnd-audio models fetch --qwen`, plus `scripts/fetch-models.sh` as the
-   FHS-shell wrapper. `models fetch` stays the single network authority and shells out to
-   `hf download <repo> --revision <commit> --local-dir <staging>`; only the pinned files
-   move into place. `models plan` prints repository, commit and target with no network, so
-   the wrapper cannot drift from the pin.
-4. **The adapter** — `src/dnd_audio/transcript/qwen.py`, `tests/test_qwen_adapter.py`. The
-   `QwenBackend` protocol is the seam, one level below `Transcriber`, for the reason
-   `activity/silero.py::OnnxSession` is: the properties that matter here are properties of
-   *this module*, and a fake `Transcriber` would replace the code under test. **Three
-   operations, not two** — `transcribe_text`, `align`, `count_tokens` — because alignment
-   must be able to fail on its own without taking the text with it. Torch and `qwen_asr` are
-   imported lazily inside functions (INV-05).
+```
+$ nix run .#fhs -- -c 'UV_PROJECT_ENVIRONMENT=.venv-rocm uv run --no-sync \
+    pytest -m "not host_smoke and not allow_network" -q'
+2294 passed in 36.08s
 
-   The timestamp decoder is strict and is the one place seconds cross to samples:
-   `request.audio.start_sample + to_samples(Fraction(str(item.start_time)), 16_000)`.
-   `Fraction(str(...))` rather than `Fraction(float)` — the package rounds to 3 dp, so the
-   decimal string is the value it meant and the binary float is not (INV-04). Rebasing on
-   `audio.start_sample` is not a detail: a request starting at sample 1 600 000 whose words
-   came back at 0.5 s would otherwise land near session zero and be dropped by M4's
-   ownership rule. Non-finite, negative, `end < start`, non-monotonic, or out-of-window
-   items are a **recoverable per-segment alignment failure** — `segment_only` plus a warning
-   — never an exception that aborts a session's transcript. `end == start` is *not* in that
-   list: the aligner quantizes to 80 ms, so a shorter word comes back zero-length and is
-   widened to one sample rather than treated as corruption. This plan said `end <= start`
-   until the first real transcription proved it wrong; see ADR-0028.
-5. **Identity, runtime, report** — `TranscriberIdentity` gains a **nested
-   `runtime: RuntimeProvenance | None`** rather than a parallel row of scalars, so python,
-   torch, hip, device, device name and dtype all reach the cache key from the one place M6a
-   defined them (INV-08); a second flat vocabulary is exactly what M6a's closeout said not
-   to build. `RuntimeProvenance` gains `attention`, which that closeout records as having
-   had no home. The identity also gains `package_version`, `transformers_version` and
-   `truncation_margin_tokens`, which are the transcriber's and not the device's.
-   `AsrConfig` gains `truncation_margin_tokens` only — **attention is hard-coded to SDPA**,
-   because the spec asks for SDPA and a knob with no second value and no consumer is
-   interface the milestone's non-goals do not ask for.
+$ nix run .#fhs -- -c 'UV_PROJECT_ENVIRONMENT=.venv-rocm uv run --no-sync \
+    pytest -m host_smoke -n 0 -q -s'
+16 passed, 2296 deselected in 47.04s
 
-   `max_new_tokens` is **bound to the constructed backend** and every request is asserted
-   against it. `Qwen3ASRModel` takes the ceiling at construction while M4 puts it on each
-   request; a bundle whose identity says 512 over a backend still generating 1024 would key
-   a different cache entry for identical model behaviour.
+  OQ-018(1) identical: True
+  OQ-018(2) 20/22 shared word(s) paired by the rule; worst 0 ms
+  OQ-018(3) ceiling=8: truncated=True text='Testing a first transmitter. Hello, one'
+```
 
-   `resolve_models` gains `config` (both call sites — `run_transcribe` and `orchestrate.py`)
-   and `Models` gains `runtime`, so the resolver's warnings survive into the report. A
-   `device: auto` run that fell back to CPU must carry that warning prominently; dropping it
-   is how an operator discovers the fallback from a run that took nine hours.
-   `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` are set **before** `qwen_asr` or
-   `transformers` is imported, not around `from_pretrained` — the libraries read those at
-   import.
-6. **Host smoke test** — `tests/test_qwen_smoke.py`, marked `host_smoke`. Real weights, real
-   device. Beyond one transcription and alignment it must answer what it claims to:
-   - **OQ-018 (1), padding** — an utterance with known speech at both ownership boundaries,
-     submitted padded and clipped, compared. A generic short utterance shows nothing here.
-   - **OQ-018 (2), timestamp stability** — two overlapping requests over the same audio.
-   - **OQ-018 (3), truncation** — a deliberately low `max_new_tokens`, then whether the
-     low-energy split resolves it.
-   - **OQ-009** — a >180 s waveform through the backend directly, to observe the package
-     chunking rather than to quote its constant.
-   - **OQ-022 (new), determinism** — the same request twice with the cache bypassed, text
-     and word times compared **exactly**. `transcript.json` is a deterministic artifact
-     under INV-02; if ROCm SDPA is not reproducible across cold runs, that claim is false
-     the moment a cache is cleared. Sampling is disabled explicitly rather than inherited
-     from whatever generation config the snapshot ships.
-7. **Ledger** — ADR-0027 (snapshot pinning, the exact-tree rule, and why the lock is the
-   authority for an overridden revision), ADR-0028 (the adapter, its three-operation seam,
-   and truncation by retokenization). OQ-009 answered from source **and** experiment; OQ-018
-   items 1–3 answered; **OQ-022 raised** and cited from the adapter. No invariant, charter
-   criterion, or spec sentence needs amending. M4's deferred three-way collapse case
-   **stays deferred**: one single-track smoke utterance is not evidence about three lavs
-   agreeing, and that is the same real-session evidence OQ-017 is waiting on.
+**Running the default suite from `.venv-rocm` is not optional and no gate does it.** It is
+where six tests that asserted a property of the *machine* rather than of the code were found,
+and where the adapter was caught starting HIP before checking whether the weights existed.
 
-### Completion gate → named proof
+**Mutation-tested rather than assumed.** Every fix from the verify phase was reverted and the
+suite re-run: the zero-length widening, the INV-09 soft failure, the lock repair, the symlink
+guard, the repository guard, `re.fullmatch`, the `align_failure` flag, `verify_tree`'s size
+check and unpinned-file scan, and `_to_sample`'s window clamp. All were caught. One was not
+on the first attempt — see *Notes*.
 
-**Reconciled in the verify phase**, where several of the names below turned out to be tests
-this plan had imagined rather than written. The table now names what exists and was executed;
-where a planned proof was dropped rather than renamed, the row says so and why.
+New test files: `tests/test_snapshots.py` (63), `tests/test_qwen_adapter.py` (71),
+`tests/test_qwen_smoke.py` (16, `host_smoke`).
 
-| Criterion | Proof |
-| --- | --- |
-| Network only at fetch; snapshot commits; local lock; caches outside sessions | `TestThePinnedDescriptors`, `TestTheDirectoryLayout`, `TestTheLock`, `tests/test_network_blocked.py` |
-| `process` uses the lock, not a moving branch | `TestAConfiguredRevisionVerifiesAgainstTheLock`, `test_a_revision_that_is_not_a_full_commit_is_rejected`. **No `test_absent_lock_is_fatal_even_with_valid_bytes`**: ADR-0027 makes the *checked-in* manifest authoritative for the pinned revision, which is strictly stronger than a local lock — see the verify phase's rejected findings |
-| Offline execution | `TestOfflineMode`, `test_offline_mode_is_set_before_the_backend_is_imported` |
-| Explicit model/aligner revisions configurable | `TestAConfiguredRevisionVerifiesAgainstTheLock`, `test_a_configured_revision_can_actually_be_installed` |
-| Transformers backend, bfloat16, `cuda:0`, SDPA | `TestAttentionIsFixed`; `test_the_loaded_models_really_are_bf16_sdpa_on_the_gpu` (`host_smoke`, read off the loaded modules rather than off this project's constants) |
-| Audio never a URL or path (INV-06) | `TestAudioNeverLeavesAsAPathOrUrl` |
-| English forced, configurable; glossary via context; absence never blocks | `TestLanguageAndContext` |
-| Aligner word times; per-segment failure warns and keeps text | `TestTimestampDecoding`, `TestAlignmentFailureKeepsTheText`, `TestMalformedAlignmentIsRecoverable`, `test_the_segment_survives_the_run_warns_and_the_exit_is_clean` |
-| Cache identity complete; atomic; incomplete never hits | `test_the_document_names_every_component`, `test_every_part_of_the_runtime_moves_the_key`, `test_the_package_versions_move_the_key`, `test_the_truncation_margin_moves_the_key`; existing `AsrCache` tests |
-| `max_new_tokens` 1024; changing it invalidates the cache | `test_max_new_tokens_moves_the_key`, `TestTheBoundCeiling` |
-| Truncation from public metadata or retokenization, never a private API | `TestTruncationHeuristic`, `test_no_private_finish_reason_or_generation_path_is_used` |
-| Bounded windows; UMA caveat documented | `TestBoundedMemory`, `tests/test_memory.py`; `README.md` |
-| Report records python, qwen-asr, transformers, torch, HIP, device, dtype, attention, revisions | `test_report_records_the_whole_asr_stack` — planned, missing from the first pass, written in the verify phase after both reviewers found the hole |
-| A real transcription and alignment on the target host | `tests/test_qwen_smoke.py` (`host_smoke`), 16 passed on the device |
-| The default suite still passes with none of it installed | `./scripts/gate.sh` from `.venv`, **and** the whole suite from `.venv-rocm` |
+### Decisions made (→ ADRs)
 
-### Invariants at risk, and what stops it
+- **[ADR-0027](../decisions/0027-pinning-hugging-face-snapshots.md) — pinning Hugging Face
+  snapshots.** `models fetch --qwen` drives `hf`; installation is keyed by
+  `(repository, resolved commit)`; only 40-hex revisions are accepted anywhere; the lock is
+  authoritative for an overridden revision while the checked-in manifest is authoritative for
+  the pinned one; the installed tree is an exact allowlist in both directions.
+- **[ADR-0028](../decisions/0028-the-qwen-adapter-seam.md) — the Qwen adapter seam.** A
+  three-operation backend protocol below `Transcriber`; one strict timestamp decoder through
+  `determinism.to_samples`; truncation by retokenization because 0.0.6 exposes no finish
+  reason; attention hard-coded to SDPA; `RuntimeProvenance` nested in the identity rather than
+  flattened beside it. Amended during the verify phase — see *Notes*.
 
-- **INV-05** — `qwen.py` must not import torch at module scope, and a subprocess test must
-  shadow `torch` on `PYTHONPATH`: neither autouse fixture can see across a process boundary
-  (M6a). The suite is run from `.venv-rocm` as well as `.venv`, which is the only place a
-  breach shows.
-- **INV-06** — the adapter is the enforcement point; the backend fake refuses anything that
-  is not an array. `models fetch` stays the only thing that opens a socket.
-- **INV-07** — one request's audio in memory at a time already holds in `asr.py`; the
-  adapter must not accumulate, and it is proved over the composed path rather than over one
-  function.
-- **INV-08** — every identity component asserted by *name*, never by "some hash changed".
-  The nested runtime is what keeps the component list from drifting from the report's.
-- **INV-04** — exactly one seconds-to-samples conversion, through `to_samples`, fed from a
-  decimal string rather than a float.
-- **INV-02** — real-model reproducibility is an assumption, not a fact, until the smoke test
-  measures it. That is OQ-022, and it is raised rather than assumed.
+### Assumptions made and open questions raised
 
-### Deliberately not doing
+- **OQ-009 answered.** `MAX_FORCE_ALIGN_INPUT_SECONDS = 180` in the package's own source, and
+  **it is not on this project's route at all**: the chunking limit is reached only through
+  `transcribe(return_time_stamps=True)`, and this adapter makes the two public calls
+  separately. `max_segment_s ≤ 120` was the right cap for a reason that turned out to be the
+  wrong one.
+- **OQ-018 items 1–3 answered**, item 4 and half of item 3 still open.
+  - *(1) Padding.* `pad_ms = 500` is not the constraint — a hard clip and a padded request
+    returned identical text. What the measurement found instead is that **`activity.vad.pad_ms`
+    = 30 is costing real words**: the model heard `'Testing a first transmitter…'` and the
+    transcript recorded `'a first transmitter…'`, because the aligner places "Testing" 50 ms
+    before the VAD candidate's ownership interval begins and M4's rule correctly drops it.
+    Five of eleven retained segments lost their opening word. That is M3's number, registered
+    under OQ-017, and 47 seconds of one person testing microphones is not evidence to retune a
+    detector on.
+  - *(2) Timestamp stability.* M4's stitch rule pairs **77 of 80** shared words across four
+    recordings, worst in-pair disagreement 400 ms. The three misses are named in the entry;
+    one is real and is a very short word one 80 ms quantization step out.
+  - *(3) Truncation.* The retokenized-length heuristic fires on a genuinely cut-off response
+    and not on the same audio at the default ceiling. Whether a *low-energy split* resolves a
+    truncation better than a midpoint is **unmeasured** and stays open: an eight-token ceiling
+    truncates everything, and a natural truncation needs an utterance long enough to exhaust
+    1024 tokens, which this recording does not contain.
+- **OQ-022 raised and answered.** Qwen inference on this ROCm stack is reproducible in process
+  and across cold processes, so **INV-02 stands as written** and needs no amendment naming a
+  model boundary. Sampling is disabled explicitly rather than inherited from the snapshot's
+  `generation_config.json`, so the claim is about greedy decoding and not about a temperature
+  that happened to be zero.
+- **OQ-012 updated** with the operator's report that the LTC jam between receivers did not
+  take on the sample capture — which is why the smoke test measures one recording at a time
+  and never concatenates across the receiver pairs.
 
-The charter's non-goals, unchanged: no rework of M4's normalization, collapse or rendering
-(if real output forces one, that is a finding worth an ADR); no LLM prose-cleanup pass; no
-vLLM and no FlashAttention.
+### Notes for future implementors
+
+**The aligner emits zero-length items, and treating them as corruption destroys most word
+times.** It quantizes to `timestamp_segment_time` — 80 ms on this model — so *any* word
+shorter than one step comes back with `end == start`. On the very first real utterance this
+project transcribed, that was the word "a", and the decoder's `end <= start` rule threw away
+all fifteen word times in the segment. It would have done that to most segments in most
+sessions and the only symptom would have been a transcript with no word times beside a warning
+saying alignment failed. Such an item is now widened to one sample. **ADR-0028 and this
+charter both said `end <= start` for the length of a milestone after the code stopped
+agreeing** — the code review caught the drift, and an implementor following the ADR would have
+reintroduced the loss. If you change this rule, change it in all three places.
+
+**Run the default suite from `.venv-rocm` before you believe it.** Six tests here asserted
+"the ASR runtime is unavailable" by *running* `transcribe` and expecting failure — true on
+`.venv`, false on `.venv-rocm`. The fix is to configure the absence rather than inherit it:
+`session_without_asr_models` pins a revision nothing has installed, so the test asserts a
+property of the code on every machine. The same run caught `_default_transcriber` probing the
+GPU before checking for weights, which tripped the `no_torch_import` guard. **Weights before
+hardware** is now load-bearing in that function and the comment says so.
+
+**A fix can ship with no test, and the only way to know is to revert it.** M6a's closeout says
+this and it happened again: the `--fake-models` guard in `_resolve_or_defer` was stated twice,
+once per exception handler, and reverting one copy failed nothing. Consolidating the rule into
+one statement made both halves load-bearing. Mutation-test every fix, not just the feature.
+
+**A measurement of a rule needs the rule's own notion of sameness for its numerator and
+something independent of the rule for its denominator.** OQ-018(2) was measured wrongly twice,
+in opposite directions. Matching shared words by text alone reported five outliers of 2–9
+seconds — the recording says "testing" and "transmitter" more than once, so a text-only key
+paired the first occurrence in one window with the second in the other. Fixing that by pairing
+the way the stitch rule pairs introduced the opposite error: selecting only words that already
+overlap and then reporting how closely they agree measures nothing, because a word that
+drifted far enough to stop overlapping — *the failure under investigation* — leaves the sample.
+"20 paired, worst 0 ms" was true and would have been equally true of a model getting half of
+them badly wrong.
+
+**A bound measured on one sample file is a bound on which file sorts first.** The replacement
+delta bound for OQ-018(2) was drafted at 250 ms and passed — because TX01 sorts ahead of TX03,
+whose worst is 400 ms. Replacing `samples/` would have turned the suite red for a reason
+nobody could reconstruct. `samples/` is *discovered* rather than named precisely so new
+recordings re-run these measurements instead of silently skipping them; the corollary is that
+any threshold set from them has to hold for all of them.
+
+**Configuration fields that reach provenance must be either honoured or refused.**
+`asr.model` existed because the spec's `session.yaml` has it, was ignored by
+`_default_transcriber`, and was written verbatim into the cache key and the ingest report — so
+naming any other repository produced two artifacts asserting that weights which were never
+loaded produced the transcript, with nothing downstream able to detect it. It is now refused
+at configuration load, pointing at `model_revision` as the thing that *is* adjustable. The
+general shape is worth remembering: a field the code does not read is not inert if something
+else records it.
+
+**`--fake-models` is an assertion about what ran and is not softenable.** Teaching
+`_resolve_or_defer` to turn a model failure into the transcript branch's error is right for a
+host with no weights (INV-09) and wrong under `--fake-models`, where one call builds *both*
+seams from `fake-models.json`. Softened, a missing file left activity to build the **real**
+Silero detector, and an operator who explicitly asked for fake models got a real MP3 off real
+detection with only a failed transcript stage as a hint.
+
+**`hf` and symlinks.** `verify_tree` originally skipped anything answering `is_dir()`, and a
+symlink *to* a directory answers it truthfully while `rglob` declines to descend into it — so
+an unpinned symlinked directory full of weights passed a check whose entire claim is that the
+tree is exactly the manifest, while a plain unpinned file was refused. `hf download
+--local-dir` is a tool that has created symlinks into a shared cache. A pinned file may still
+*be* a symlink, because content is the rule; an unpinned anything may not.
+
+**The package has no finish reason and `transcribe(return_time_stamps=True)` aligns
+internally.** Hence three separate backend operations rather than one call: transcribe, align,
+count tokens. Calling the timestamp path would chunk at 180 s, discard the finish signal
+anyway, and hide the alignment failure the gate requires be reported separately.
+
+**`uv` will backtrack numpy to 2021.** `qwen-asr` → `librosa` → `numba` requires `numpy<2.5`;
+the lock had 2.5.1; old numba's metadata declares no ceiling, so the resolver happily selected
+numba 0.53.1, whose sdist refuses to build on Python 3.12. The ceiling lives in **base**
+dependencies with a comment saying why, because uv resolves one numpy for the whole lock.
+
+**`[tool.uv.sources]` routes only direct dependency-list members** (M6a's lesson, still true).
+Nothing `qwen-asr` pulls needed routing, but `test_every_routed_package_is_also_a_direct_
+dependency` is what would catch it.
+
+### Deviations from this charter, and why
+
+- **The weights are a one-time setup step driven by `hf`, at the operator's direction** — but
+  behind `dnd-audio models fetch --qwen`, not beside it. The first draft of the plan made
+  `scripts/fetch-models.sh` a second network-capable entry point and proposed amending the
+  gate criterion *and* INV-06. The plan review refused that, correctly: the spec itself says
+  `models fetch` is the only command expected to require network access, so a second authority
+  would have meant amending three documents to avoid writing one subcommand. The script
+  remains as a thin FHS-shell wrapper, because `hf` ships with the `huggingface_hub` that lives
+  in `.venv-rocm`. **Nothing in the gate, INV-06 or the spec moved.**
+- **`asr.model` and `asr.aligner` accept exactly one value each.** The charter reads them as
+  configurable identity; this build carries snapshots for two repositories and no command can
+  install a third. Refusing is the only honest option — see *Notes*.
+- **`models fetch` and `models plan` grew `--asr-revision` / `--aligner-revision`.** Not in the
+  charter, and required by it: "explicit model/aligner revisions may be set in configuration"
+  is not met if no command can install one.
+- **The charter's proof table named tests that were never written.** Reconciled during verify;
+  where a planned proof was dropped rather than renamed, the table now says which and why.
+- **M4's deferred three-way collapse case stays deferred.** One operator testing microphones
+  one at a time is not evidence about three lavs agreeing closely enough for the shape to
+  occur. That is the same real-session evidence OQ-017 waits on.
+- **Non-goals held.** No rework of M4's normalization, collapse or rendering; no LLM prose
+  cleanup; no vLLM; no FlashAttention.
+
+### Downstream charters updated
+
+- **H1 (hardware fixture)** — now also the event that settles `activity.vad.pad_ms`, which
+  OQ-018(1) found is dropping the first word of roughly half the segments. The symptom to look
+  for is a transcript quietly missing an utterance's opening word rather than anything that
+  raises.
+- **H2 (drift soak / first session)** — owns OQ-018(4), the text-similarity thresholds, and
+  the unmeasured half of item 3: whether a low-energy split resolves a truncation better than
+  a midpoint needs an utterance long enough to exhaust 1024 tokens.
+- **M6a's deferred promotion of the two gfx1151 environment variables to host defaults** was
+  waiting on this smoke test. It has now run repeatedly and clean; the decision is the
+  operator's to make against the host's NixOS configuration.
+
+### Next smallest step
+
+**H1 — the hardware fixture.** Every remaining open question that blocks anything is waiting
+on real recordings rather than on code: OQ-003 (the transmitter counter), OQ-007, OQ-012 (the
+LTC jam, which the sample capture is reported not to have achieved), OQ-017 and OQ-018(4). The
+owner has said better samples are coming, captured with a proper sync procedure and in the
+right formats. `tests/test_qwen_smoke.py` discovers `samples/*.wav` by glob, so dropping them
+in re-runs every measurement in this closeout without a code change.

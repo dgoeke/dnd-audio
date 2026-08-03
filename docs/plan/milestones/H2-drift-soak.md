@@ -32,6 +32,17 @@ session's start/end clap measurements.
 - [ ] For the first real session, raw files and all outputs are retained even if the
       transcript is imperfect; they are the basis for tuning bleed thresholds and
       the automixer.
+- [ ] **OQ-018's remaining two parts answered**, both added by M6b and both needing speech
+      its 47-second capture could not contain:
+      - **item 4**, the text-similarity thresholds — how differently Qwen transcribes *the
+        same* utterance heard on two lavs. This is the one that can silently destroy speech,
+        which the spec calls the worse failure, so it wants one utterance deliberately heard
+        on two transmitters at known relative levels.
+      - **the unmeasured half of item 3** — whether splitting a truncated response at the
+        quietest interior point resolves it better than at the midpoint. A *natural*
+        truncation is required, which needs one continuous utterance long enough to exhaust
+        1024 generated tokens; forcing a low ceiling truncates everything and measures
+        nothing about the split.
 
 ## Explicitly not in this milestone
 
