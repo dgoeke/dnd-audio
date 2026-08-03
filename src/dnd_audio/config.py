@@ -19,6 +19,7 @@ that states it, or every default change would silently reuse stale cached work.
 from __future__ import annotations
 
 import datetime as dt
+import math
 from collections import Counter
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Final, Literal
@@ -29,6 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from dnd_audio.determinism import canonical_json, sha256_bytes
 from dnd_audio.errors import ConfigError, TimecodeError
 from dnd_audio.timecode import parse_frame_rate, parse_timecode
+from dnd_audio.timeline import CANONICAL_SAMPLE_RATE as _CANONICAL_SAMPLE_RATE
 
 __all__ = [
     "CONFIG_SCHEMA_VERSION",
@@ -36,6 +38,8 @@ __all__ = [
     "AsrConfig",
     "BleedConfig",
     "DuplicateConfig",
+    "EncodeConfig",
+    "EnvelopeConfig",
     "MixConfig",
     "RecoveryConfig",
     "ScoringConfig",
@@ -436,13 +440,142 @@ class SyncQaConfig(_Strict):
     min_correlation: float = Field(default=0.5, gt=0.0, le=1.0)
 
 
+class EnvelopeConfig(_Strict):
+    """How the activity graph becomes a gain per track per moment (ADR-0022).
+
+    Everything here changes the samples in the mix, so this whole section — and only this
+    section — enters the render cache identity. The encode settings beside it reach the MP3,
+    which is regenerated on every run and never cached (ADR-0023).
+
+    Every default is a number chosen against 10.5 seconds of shaped noise. **OQ-019** is the
+    record of that.
+    """
+
+    #: Gains are computed per control frame and linearly interpolated to samples, so the
+    #: applied gain is continuous by construction. 1 kHz is 48 samples per frame; at 100 Hz a
+    #: 10 ms attack would be a single frame, which is no slew limit at all (OQ-019).
+    control_rate_hz: int = Field(default=1000, gt=0, le=48_000)
+    #: Short, so a word is not clipped. A third of `activity.vad.pad_ms`, so the ramp finishes
+    #: inside the padding the candidate already carries (OQ-019).
+    attack_ms: int = Field(default=10, gt=0, le=1000)
+    #: Longer, so a channel change does not click or pump (OQ-019).
+    release_ms: int = Field(default=300, gt=0, le=10_000)
+    #: The weight every channel keeps when nobody on it is speaking, so silence blends room
+    #: tone rather than muting five lavs. Only its *ratio* to `min_active_share` matters:
+    #: during silence every weight is equal and the shares are 1/N whatever this is (OQ-019).
+    room_tone_share: float = Field(default=0.005, gt=0.0, lt=1.0)
+    #: The weight an active channel keeps however badly it scored. Without this floor,
+    #: dominance would scale with the winner's score and the gate criterion below would be a
+    #: property of the fixture rather than of the rule (ADR-0022, OQ-019).
+    min_active_share: float = Field(default=0.5, gt=0.0, le=1.0)
+    #: The spec's "clamp correction to a safe range", in dB either way. Deliberately
+    #: conservative: it costs twice this much of the dominance margin, and a wearer whose lav
+    #: is further out than this is a capture problem a mixer should not paper over (OQ-019).
+    max_level_correction_db: float = Field(default=6.0, ge=0.0, le=24.0)
+    #: The gate's "configured attenuation margin": how far a solo speaker's applied
+    #: coefficient must sit above every inactive channel's once the attack has finished.
+    #: Validated to be *achievable* below, rather than merely asserted by a test (OQ-019).
+    solo_attenuation_margin_db: float = Field(default=20.0, gt=0.0, le=120.0)
+    #: The gate's "nontrivial audible gain" during genuine overlap, against the applied
+    #: coefficient. Two active channels share roughly -6 dB each, and the correction clamp can
+    #: take another 6 (OQ-019).
+    overlap_min_gain_db: float = Field(default=-15.0, lt=0.0, ge=-60.0)
+
+    @model_validator(mode="after")
+    def _check_grid(self) -> EnvelopeConfig:
+        """The control grid is exact, or it is not a grid.
+
+        Two separate properties, and the second does not follow from the first: 800 Hz divides
+        48000 and an 11 ms attack is 8.8 frames of it. Caught by M5's plan review, which was
+        right that stating "the rate divides the sample rate" accounts for only half of it.
+        """
+        if _CANONICAL_SAMPLE_RATE % self.control_rate_hz:
+            message = (
+                f"mix.envelope.control_rate_hz={self.control_rate_hz} does not divide the "
+                f"{_CANONICAL_SAMPLE_RATE} Hz session grid, so a control frame would not be a "
+                f"whole number of samples"
+            )
+            raise ValueError(message)
+        for name, milliseconds in (("attack_ms", self.attack_ms), ("release_ms", self.release_ms)):
+            if milliseconds * self.control_rate_hz % 1000:
+                message = (
+                    f"mix.envelope.{name}={milliseconds} is "
+                    f"{milliseconds * self.control_rate_hz / 1000} control frames at "
+                    f"{self.control_rate_hz} Hz, not a whole number. A slew limit expressed in "
+                    f"fractional frames is not a limit anything can check."
+                )
+                raise ValueError(message)
+        return self
+
+    @model_validator(mode="after")
+    def _check_margin_is_achievable(self) -> EnvelopeConfig:
+        """Refuse a configuration whose own dominance criterion cannot be met (ADR-0022).
+
+        The two floors bound the share ratio at `min_active_share / room_tone_share`; the
+        level correction can erode it by twice its clamp, when a quiet track is lifted while a
+        loud one is cut. A configuration promising more than that would produce a mix that
+        fails its own gate, silently, on the first session where a correction was needed.
+        """
+        available = 20.0 * math.log10(self.min_active_share / self.room_tone_share)
+        guaranteed = available - 2.0 * self.max_level_correction_db
+        if guaranteed < self.solo_attenuation_margin_db:
+            message = (
+                f"mix.envelope.solo_attenuation_margin_db={self.solo_attenuation_margin_db} dB "
+                f"is not achievable: min_active_share/room_tone_share gives {available:.2f} dB "
+                f"of separation and max_level_correction_db={self.max_level_correction_db} can "
+                f"erode {2.0 * self.max_level_correction_db:.2f} of it, leaving "
+                f"{guaranteed:.2f} dB. Lower room_tone_share, raise min_active_share, or "
+                f"tighten the correction clamp."
+            )
+            raise ValueError(message)
+        return self
+
+
+class EncodeConfig(_Strict):
+    """Everything after the render boundary: what the MP3 must measure, and what to do if it
+    does not (ADR-0023).
+
+    None of this enters the render cache identity. The intermediate is written at unity master
+    gain, so changing a target or a tolerance re-encodes rather than re-mixing six tracks.
+    """
+
+    #: How far the decoded MP3's integrated loudness may sit from `integrated_lufs`. The
+    #: spec's own number.
+    loudness_tolerance_lu: float = Field(default=1.0, gt=0.0, le=10.0)
+    #: The spec's "documented measurement tolerance" on the true-peak ceiling. FFmpeg's
+    #: `ebur128` summary reports one decimal place, so 0.1 dB of this is pure quantization and
+    #: the rest is margin for measuring a decode rather than the encoder's own model (OQ-020).
+    true_peak_tolerance_db: float = Field(default=0.3, gt=0.0, le=6.0)
+    #: The spec's "within one MP3 frame (or another documented codec-appropriate tolerance)",
+    #: applied to the **decoded sample count**. One MPEG-1 Layer III frame is 1152 samples,
+    #: 24 ms at 48 kHz (OQ-020).
+    duration_tolerance_frames: int = Field(default=1, ge=0, le=100)
+    #: Additional encodes spent walking the gain down under a true-peak overshoot. Exhausting
+    #: it **fails the mix stage** rather than claiming a compliance nothing demonstrated
+    #: (OQ-020).
+    max_retries: int = Field(default=3, ge=0, le=16)
+    #: A ceiling on the two-pass loudness gain. A normalizer with no ceiling turns a session
+    #: nobody spoke in into 50 dB of amplified noise floor (OQ-019).
+    max_master_gain_db: float = Field(default=30.0, gt=0.0, le=60.0)
+    #: Below this the mix is left un-normalized, with a warning. Not hypothetical: a session
+    #: where the detector found nothing has every track at the room-tone share, and that is a
+    #: correct outcome to report rather than an input to amplify (OQ-019).
+    silence_floor_lufs: float = Field(default=-50.0, le=0.0, ge=-70.0)
+
+
 class MixConfig(_Strict):
-    """Automix and encode targets. M5 extends this."""
+    """Automix and encode targets.
+
+    The three fields the spec's own `session.yaml` names stay at this level; the rest is split
+    by which side of the render boundary it falls on (ADR-0023).
+    """
 
     integrated_lufs: float = Field(default=-16.0, ge=-70.0, le=0.0)
     #: Applies to the decoded MP3, not merely the lossless intermediate.
     true_peak_dbtp: float = Field(default=-1.5, ge=-20.0, le=0.0)
     mp3_bitrate_kbps: int = 128
+    envelope: EnvelopeConfig = Field(default_factory=EnvelopeConfig)
+    encode: EncodeConfig = Field(default_factory=EncodeConfig)
 
     @field_validator("mp3_bitrate_kbps")
     @classmethod
@@ -653,10 +786,10 @@ def config_hash(config: SessionConfig) -> str:
 
 
 #: The cached stages, each with its own view of what "the configuration" means (ADR-0016).
-StageScope = Literal["inspection", "derivative", "detection", "attribution"]
+StageScope = Literal["inspection", "derivative", "detection", "attribution", "mix"]
 
 _ALL_STAGES: Final[frozenset[StageScope]] = frozenset(
-    ("inspection", "derivative", "detection", "attribution")
+    ("inspection", "derivative", "detection", "attribution", "mix")
 )
 _PLACEMENT: Final[frozenset[StageScope]] = frozenset(("inspection", "derivative"))
 
@@ -683,6 +816,12 @@ _FIELD_SCOPES: Final[dict[str, frozenset[StageScope]]] = {
     # Placement: which files are selected, where their samples land, and what overrides
     # moved them. The 16 kHz derivative is a function of the segment map, so it inherits
     # everything the map depends on.
+    #
+    # The mix is *not* here even though it plainly depends on placement, and this is the same
+    # exception `asr` and `transcript` get below: the render identity carries the timeline's
+    # own sha256 and the activity graph's `attribution_cache_key`, each of which is already
+    # downstream of every one of these sections. Restating the same facts in a second place
+    # buys nothing and creates somewhere for the two to disagree.
     "active_tracks": _PLACEMENT,
     "timecode": _PLACEMENT,
     "recovery": _PLACEMENT,
@@ -692,9 +831,20 @@ _FIELD_SCOPES: Final[dict[str, frozenset[StageScope]]] = {
     "activity.bleed": frozenset(("attribution",)),
     "activity.scoring": frozenset(("attribution",)),
     "activity.correlation_max_lag_ms": frozenset(("attribution",)),
-    # Reaches none of the four stages *this table covers*. `title` and `language` are carried
-    # into outputs M3 does not produce; `mix` belongs to M5. `sync_qa` produces warnings and
-    # report decisions but never a sample.
+    # The mix, split at the render boundary (ADR-0023). The envelope decides every sample of
+    # the lossless intermediate, which is cached. Everything after it decides only the MP3,
+    # which is regenerated on every run and never cached — so keying the intermediate on a
+    # bitrate or a tolerance would re-mix six four-hour tracks to change a number that cannot
+    # reach it.
+    "mix.envelope": frozenset(("mix",)),
+    "mix.integrated_lufs": frozenset(),
+    "mix.true_peak_dbtp": frozenset(),
+    "mix.mp3_bitrate_kbps": frozenset(),
+    "mix.encode": frozenset(),
+    # Reaches none of the stages *this table covers*. `title` and `language` are carried into
+    # outputs; `title` in particular reaches the MP3's ID3 tags, which are written every run
+    # beside the encode settings above and are likewise never cached. `sync_qa` produces
+    # warnings and report decisions but never a sample.
     #
     # `asr` and `transcript` are the subtle entries: they genuinely change what the ASR stage
     # submits and returns, and that stage caches. Its identity is built where it is used
@@ -706,7 +856,6 @@ _FIELD_SCOPES: Final[dict[str, frozenset[StageScope]]] = {
     "asr": frozenset(),
     "transcript": frozenset(),
     "sync_qa": frozenset(),
-    "mix": frozenset(),
 }
 
 

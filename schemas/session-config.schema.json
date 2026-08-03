@@ -206,10 +206,130 @@
       "title": "DuplicateConfig",
       "type": "object"
     },
+    "EncodeConfig": {
+      "additionalProperties": false,
+      "description": "Everything after the render boundary: what the MP3 must measure, and what to do if it\ndoes not (ADR-0023).\n\nNone of this enters the render cache identity. The intermediate is written at unity master\ngain, so changing a target or a tolerance re-encodes rather than re-mixing six tracks.",
+      "properties": {
+        "duration_tolerance_frames": {
+          "default": 1,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Duration Tolerance Frames",
+          "type": "integer"
+        },
+        "loudness_tolerance_lu": {
+          "default": 1.0,
+          "exclusiveMinimum": 0.0,
+          "maximum": 10.0,
+          "title": "Loudness Tolerance Lu",
+          "type": "number"
+        },
+        "max_master_gain_db": {
+          "default": 30.0,
+          "exclusiveMinimum": 0.0,
+          "maximum": 60.0,
+          "title": "Max Master Gain Db",
+          "type": "number"
+        },
+        "max_retries": {
+          "default": 3,
+          "maximum": 16,
+          "minimum": 0,
+          "title": "Max Retries",
+          "type": "integer"
+        },
+        "silence_floor_lufs": {
+          "default": -50.0,
+          "maximum": 0.0,
+          "minimum": -70.0,
+          "title": "Silence Floor Lufs",
+          "type": "number"
+        },
+        "true_peak_tolerance_db": {
+          "default": 0.3,
+          "exclusiveMinimum": 0.0,
+          "maximum": 6.0,
+          "title": "True Peak Tolerance Db",
+          "type": "number"
+        }
+      },
+      "title": "EncodeConfig",
+      "type": "object"
+    },
+    "EnvelopeConfig": {
+      "additionalProperties": false,
+      "description": "How the activity graph becomes a gain per track per moment (ADR-0022).\n\nEverything here changes the samples in the mix, so this whole section — and only this\nsection — enters the render cache identity. The encode settings beside it reach the MP3,\nwhich is regenerated on every run and never cached (ADR-0023).\n\nEvery default is a number chosen against 10.5 seconds of shaped noise. **OQ-019** is the\nrecord of that.",
+      "properties": {
+        "attack_ms": {
+          "default": 10,
+          "exclusiveMinimum": 0,
+          "maximum": 1000,
+          "title": "Attack Ms",
+          "type": "integer"
+        },
+        "control_rate_hz": {
+          "default": 1000,
+          "exclusiveMinimum": 0,
+          "maximum": 48000,
+          "title": "Control Rate Hz",
+          "type": "integer"
+        },
+        "max_level_correction_db": {
+          "default": 6.0,
+          "maximum": 24.0,
+          "minimum": 0.0,
+          "title": "Max Level Correction Db",
+          "type": "number"
+        },
+        "min_active_share": {
+          "default": 0.5,
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "Min Active Share",
+          "type": "number"
+        },
+        "overlap_min_gain_db": {
+          "default": -15.0,
+          "exclusiveMaximum": 0.0,
+          "minimum": -60.0,
+          "title": "Overlap Min Gain Db",
+          "type": "number"
+        },
+        "release_ms": {
+          "default": 300,
+          "exclusiveMinimum": 0,
+          "maximum": 10000,
+          "title": "Release Ms",
+          "type": "integer"
+        },
+        "room_tone_share": {
+          "default": 0.005,
+          "exclusiveMaximum": 1.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Room Tone Share",
+          "type": "number"
+        },
+        "solo_attenuation_margin_db": {
+          "default": 20.0,
+          "exclusiveMinimum": 0.0,
+          "maximum": 120.0,
+          "title": "Solo Attenuation Margin Db",
+          "type": "number"
+        }
+      },
+      "title": "EnvelopeConfig",
+      "type": "object"
+    },
     "MixConfig": {
       "additionalProperties": false,
-      "description": "Automix and encode targets. M5 extends this.",
+      "description": "Automix and encode targets.\n\nThe three fields the spec's own `session.yaml` names stay at this level; the rest is split\nby which side of the render boundary it falls on (ADR-0023).",
       "properties": {
+        "encode": {
+          "$ref": "#/$defs/EncodeConfig"
+        },
+        "envelope": {
+          "$ref": "#/$defs/EnvelopeConfig"
+        },
         "integrated_lufs": {
           "default": -16.0,
           "maximum": 0.0,

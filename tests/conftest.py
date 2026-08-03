@@ -43,6 +43,7 @@ from typing import Any
 
 import pytest
 
+from dnd_audio.artifacts.activity import ActivityGraph
 from dnd_audio.fixtures import FixtureTruth, build_session, canonical_session
 
 TESTS_ROOT = Path(__file__).resolve().parent
@@ -158,3 +159,35 @@ def canonical_fixture(_canonical_build: FixtureTruth, tmp_path: Path) -> Fixture
     session_dir = tmp_path / "session"
     shutil.copytree(_canonical_build.session_dir, session_dir)
     return replace(_canonical_build, session_dir=session_dir)
+
+
+@pytest.fixture(scope="session")
+def canonical_activity_graph(tmp_path_factory: pytest.TempPathFactory) -> ActivityGraph:
+    """The canonical fixture's real activity graph, built once for the whole run.
+
+    Not hand-assembled: this is what `activity` actually produces from the fixture's audio,
+    through the **leaky** scripted detector — the one that fires on bleed as well as speech,
+    which is what a real detector does and what makes the bleed gate's decisions real. INV-10
+    forbids expecting a learned Silero release to fire on synthetic noise, so the detector is
+    scripted from the fixture's own declared truth.
+
+    Shared without copying because `ActivityGraph` is frozen. The session directory it was
+    built in is not shared, and nothing here should want it: a test that needs to *run* the
+    stage wants `canonical_fixture`.
+    """
+    from dnd_audio.activity.runner import DetectorBundle, run_activity
+    from dnd_audio.fakes import ScriptedActivityDetector
+    from dnd_audio.timeline import DERIVATIVE_SAMPLE_RATE
+
+    truth = build_session(canonical_session(), tmp_path_factory.mktemp("graph"))
+    detector = ScriptedActivityDetector(
+        truth.leaky_activity_spans(sample_rate=DERIVATIVE_SAMPLE_RATE)
+    )
+    result = run_activity(
+        truth.session_dir,
+        detector=DetectorBundle(identity=detector.identity(), make=lambda _track: detector),
+    )
+    assert result.graph is not None, [
+        f"{error.code}: {error.message}" for stage in result.report.stages for error in stage.errors
+    ]
+    return result.graph
