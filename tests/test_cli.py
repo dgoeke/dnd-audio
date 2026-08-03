@@ -25,13 +25,11 @@ from dnd_audio.models import ModelDescriptor
 
 runner = CliRunner()
 
-#: Command, and the milestone its stub names. `doctor`, `inspect`, and `ingest` are
-#: absent: they are implemented, in M0, M1, and M2 respectively.
+#: Command, and the milestone its stub names. Everything else is implemented: `doctor` in
+#: M0, `inspect` in M1, `ingest` in M2, `activity` in M3, `transcribe` and `render` in M4.
 STUBS = [
     ("process", "M5"),
-    ("transcribe", "M4"),
     ("mix", "M5"),
-    ("render", "M4"),
 ]
 
 CONSOLE_SCRIPT = Path(sys.executable).parent / "dnd-audio"
@@ -216,15 +214,15 @@ class TestInstalledConsoleScript:
 
     def test_a_stub_exits_with_the_not_implemented_code(self, session_dir: Path) -> None:
         """A traceback would be a bad message; a distinct exit code is a usable one."""
-        completed = self._run("transcribe", str(session_dir))
+        completed = self._run("mix", str(session_dir))
         assert completed.returncode == ExitCode.NOT_IMPLEMENTED
         assert "not implemented yet" in completed.stderr
-        assert "M4" in completed.stderr
+        assert "M5" in completed.stderr
         assert "Traceback" not in completed.stderr
 
     def test_stub_exit_code_is_distinct_from_usage_error(self, tmp_path: Path) -> None:
-        usage = self._run("transcribe", str(tmp_path / "absent"))
-        stub = self._run("transcribe", str(tmp_path))
+        usage = self._run("mix", str(tmp_path / "absent"))
+        stub = self._run("mix", str(tmp_path))
         assert usage.returncode == 2
         assert stub.returncode == ExitCode.NOT_IMPLEMENTED
         assert usage.returncode != stub.returncode

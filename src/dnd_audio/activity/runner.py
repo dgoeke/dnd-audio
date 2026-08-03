@@ -31,11 +31,9 @@ import datetime as dt
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from types import TracebackType
-from typing import Final, Protocol, Self
+from typing import Final, Protocol
 
 import numpy as np
-import numpy.typing as npt
 import scipy
 
 from dnd_audio.activity import (
@@ -93,15 +91,17 @@ from dnd_audio.inspection import OUTPUT_DIRNAME
 from dnd_audio.interfaces import ActivityDetector
 from dnd_audio.raw_guard import raw_roots, reject_outputs_inside_raw, snapshot, verify_unchanged
 from dnd_audio.timeline import DERIVATIVE_SAMPLE_RATE, TIMELINE_RELATIVE_PATH
-from dnd_audio.timeline.pcm import PcmReader, open_pcm
-from dnd_audio.timeline.reader import DEFAULT_WINDOW_SAMPLES
+from dnd_audio.timeline.reader import DEFAULT_WINDOW_SAMPLES, DerivativeReader
 from dnd_audio.timeline.resample import to_derivative_interval, to_source_sample
 from dnd_audio.timeline.runner import build_timeline, ingest_outputs
 
 __all__ = [
     "ActivityResult",
+    "ActivityWork",
     "DetectorBundle",
     "activity_outputs",
+    "perform_activity",
+    "remove_activity_artifacts",
     "run_activity",
 ]
 
@@ -117,6 +117,18 @@ _SKIPPED_STAGES: Final = (
 DEFAULT_DETECT_WINDOW: Final = DERIVATIVE_SAMPLE_RATE
 
 
+class _Committable(Protocol):
+    """A staged cache: publish it, or drop it. Every cache in this project is one.
+
+    A protocol rather than a base class so `ActivityWork` can hold M1's, M2's and M3's caches
+    in one tuple without any of them knowing about the others.
+    """
+
+    def commit(self) -> int: ...
+
+    def discard(self) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class DetectorBundle:
     """A detector implementation, its identity, and how to build one per track.
@@ -130,6 +142,32 @@ class DetectorBundle:
     identity: DetectorIdentity
     make: Callable[[str], ActivityDetector]
     runtime_version: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ActivityWork:
+    """The activity stages' results, with every cache **staged and uncommitted**.
+
+    What `perform_activity` returns so a longer run can compose it (M4's `transcribe` does).
+    The caller owns the INV-01 verification and the commit: an entry may only be published
+    once the sources it was computed from have been re-checked, and a composed run has one
+    place where that is true for everything at once.
+    """
+
+    graph: ActivityGraph
+    timeline: Timeline
+    timeline_sha256: str
+    caches: tuple[_Committable, ...]
+
+    def commit(self) -> None:
+        """Publish every staged cache entry. Call only after INV-01 has been re-verified."""
+        for cache in self.caches:
+            cache.commit()
+
+    def discard(self) -> None:
+        """Drop everything staged. The data files remain, and without sidecars are inert."""
+        for cache in self.caches:
+            cache.discard()
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,35 +234,23 @@ def run_activity(
         before = snapshot(session_dir, roots)
         reject_outputs_inside_raw(session_dir, config, roots, activity_outputs(session_dir))
 
-        build = build_timeline(
+        work = perform_activity(
             session_dir,
             config,
             builder=builder,
+            detector=detector,
             use_cache=use_cache,
             window_samples=window_samples,
-        )
-        timeline = build.timeline
-        write_json_atomic(timeline_path, timeline.model_dump(mode="json"))
-
-        bundle = detector or _silero_bundle(config)
-        graph, notes = _attribute(
-            session_dir,
-            config,
-            timeline,
-            bundle=bundle,
-            builder=builder,
-            use_cache=use_cache,
             detect_window_samples=detect_window_samples,
-            timeline_sha256=sha256_file(timeline_path),
         )
+        timeline = work.timeline
+        graph = work.graph
 
         # Verify first, publish second — every cache from this composed run commits at one
         # moment, after INV-01 has been re-checked. A run that correctly failed on a changed
         # source must not leave an entry keyed on the bytes it read (M2's closeout).
         verify_unchanged(session_dir, roots, before)
-        build.inspection_cache.commit()
-        build.derivative_cache.commit()
-        notes.commit()
+        work.commit()
 
         write_json_atomic(graph_path, graph.model_dump(mode="json"))
         builder.stage_complete(StageName.RECONSTRUCT, warnings=_notes(timeline.warnings))
@@ -235,14 +261,7 @@ def run_activity(
         # Every failure, not only the ones raised on purpose: an operator whose run died on
         # an OSError needs a report more than anyone.
         #
-        # Both artifacts, not only the graph. `timeline.json` is written *before* attribution
-        # here — the attribution cache key is keyed on its hash, so it has to exist first —
-        # which means a failed run had already overwritten it. Leaving it behind published a
-        # timeline that the report simultaneously calls `reconstruct: failed` and does not
-        # hash as a deliverable, and M4 and M5 read that file (INV-13). `run_ingest` writes
-        # it only after verification and removes it on failure; this is the same contract.
-        _remove_stale(graph_path)
-        _remove_stale(timeline_path)
+        remove_activity_artifacts(session_dir)
         error = StructuredError(code=_code_of(exc), message=str(exc) or type(exc).__name__)
         for stage in (StageName.INSPECT, StageName.RECONSTRUCT, StageName.ACTIVITY):
             if not builder.recorded(stage):
@@ -280,6 +299,84 @@ def run_activity(
         report_path=report_path,
         exit_code=report.exit_code(),
     )
+
+
+def perform_activity(
+    session_dir: Path,
+    config: SessionConfig,
+    *,
+    builder: ReportBuilder,
+    detector: DetectorBundle | None = None,
+    use_cache: bool = True,
+    window_samples: int = DEFAULT_WINDOW_SAMPLES,
+    detect_window_samples: int = DEFAULT_DETECT_WINDOW,
+) -> ActivityWork:
+    """Reconstruct, detect and attribute, leaving every cache staged.
+
+    The composable half of `activity`, so a longer run — `transcribe`, and `process` in M5 —
+    performs these stages exactly once and exactly the way the `activity` command does, rather
+    than reimplementing the composition beside it (ADR-0015's argument, one milestone later).
+
+    What it deliberately does **not** do: snapshot `raw/`, verify it, commit anything, write
+    the graph, or write a report. Those belong to whoever owns the whole run, because INV-01
+    verification has to happen once, around everything, and a cache entry may only be
+    committed after it.
+
+    `timeline.json` *is* written here, before attribution, because the attribution cache key
+    is keyed on its hash and so it has to exist first. A failed run therefore has to remove it
+    — see :func:`remove_activity_artifacts`.
+
+    Raises:
+        Exception: any fatal condition, for the caller to turn into a failed stage and a
+            report (INV-13).
+    """
+    timeline_path = session_dir / TIMELINE_RELATIVE_PATH
+    build = build_timeline(
+        session_dir,
+        config,
+        builder=builder,
+        use_cache=use_cache,
+        window_samples=window_samples,
+    )
+    write_json_atomic(timeline_path, build.timeline.model_dump(mode="json"))
+    timeline_sha256 = sha256_file(timeline_path)
+
+    bundle = detector or _silero_bundle(config)
+    graph, caches = _attribute(
+        session_dir,
+        config,
+        build.timeline,
+        bundle=bundle,
+        builder=builder,
+        use_cache=use_cache,
+        detect_window_samples=detect_window_samples,
+        timeline_sha256=timeline_sha256,
+    )
+    return ActivityWork(
+        graph=graph,
+        timeline=build.timeline,
+        timeline_sha256=timeline_sha256,
+        caches=(
+            build.inspection_cache,
+            build.derivative_cache,
+            caches.detection,
+            caches.attribution,
+        ),
+    )
+
+
+def remove_activity_artifacts(session_dir: Path) -> None:
+    """Delete the graph and the timeline a failed run may have left behind.
+
+    Both, not only the graph. `timeline.json` is written *before* attribution, so a run that
+    failed during attribution had already overwritten it — and leaving it there publishes a
+    timeline the report simultaneously calls `reconstruct: failed` and does not hash as a
+    deliverable, which M4 and M5 both read (INV-13). A stale artifact that looks current is
+    worse than none: the file describes attributions that no longer hold and nothing in it
+    says so.
+    """
+    (session_dir / ACTIVITY_RELATIVE_PATH).unlink(missing_ok=True)
+    (session_dir / TIMELINE_RELATIVE_PATH).unlink(missing_ok=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -377,7 +474,7 @@ def _attribute(
         return cached, caches
 
     candidates = _candidates(timeline, detections)
-    with _DerivativeAudio(session_dir, timeline) as audio:
+    with DerivativeReader(session_dir, derivative_paths(timeline)) as audio:
         decided = attribute(candidates, read=audio.read, config=config.activity)
 
     graph = _graph(
@@ -603,54 +700,6 @@ def _decisions(
     return found
 
 
-class _DerivativeAudio:
-    """Bounded reads of every track's 16 kHz working audio, one open handle per track.
-
-    A context manager because the bleed gate steps over the same tracks repeatedly:
-    reopening per read would be a syscall per comparison for no benefit, and leaking handles
-    across six tracks and hundreds of candidates is its own failure.
-    """
-
-    def __init__(self, session_dir: Path, timeline: Timeline) -> None:
-        self._session_dir = session_dir
-        self._paths = {
-            track.track_id: session_dir / record.relative_path
-            for track in timeline.tracks
-            if (record := _derivative(track)) is not None
-        }
-        self._open: dict[str, PcmReader] = {}
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None:
-        for reader in self._open.values():
-            reader.close()
-        self._open.clear()
-
-    def read(self, track_id: str, start: int, n_samples: int) -> npt.NDArray[np.float32]:
-        """``[start, start + n)`` of one track's derivative, clamped to what exists.
-
-        Clamped rather than trusted: candidate intervals are already bounded by the session
-        duration, so a read past the end means an assumption broke, and returning silence
-        for the tail is a better failure than a traceback in the middle of attribution.
-        """
-        reader = self._open.get(track_id)
-        if reader is None:
-            reader = PcmReader(open_pcm(self._paths[track_id]))
-            reader.__enter__()
-            self._open[track_id] = reader
-        available = max(0, min(n_samples, reader.source.n_samples - start))
-        if available <= 0:
-            return np.zeros(0, dtype=np.float32)
-        return reader.read(start, available)
-
-
 def _silero_bundle(config: SessionConfig) -> DetectorBundle:
     """The pinned Silero detector, resolved from the local model store.
 
@@ -661,6 +710,20 @@ def _silero_bundle(config: SessionConfig) -> DetectorBundle:
     from dnd_audio.activity.silero import silero_bundle
 
     return silero_bundle(silence_threshold=config.activity.vad.silence_threshold)
+
+
+def derivative_paths(timeline: Timeline) -> dict[str, str]:
+    """Each track's 16 kHz derivative, session-relative, for :class:`DerivativeReader`.
+
+    Only tracks that have one. A track with no derivative has nothing to detect on and
+    nothing to transcribe from, and both stages report that as a warning rather than reading
+    a file that is not there.
+    """
+    return {
+        track.track_id: record.relative_path
+        for track in timeline.tracks
+        if (record := _derivative(track)) is not None
+    }
 
 
 def _derivative(track: TimelineTrack) -> DerivativeRecord | None:
@@ -787,16 +850,6 @@ def _notes(notes: Sequence[_Note]) -> list[ReportWarning]:
         ReportWarning(code=note.code, message=note.message, path=note.path) for note in notes
     ]
     return sorted(flattened, key=lambda note: (note.code, note.path or "", note.message))
-
-
-def _remove_stale(path: Path) -> None:
-    """Delete a graph left by an earlier successful run.
-
-    A failed run that leaves the previous graph in place is worse than one that leaves none:
-    the file looks current, describes attributions that no longer hold, and nothing in it
-    says so. The report records the failure; the stale artifact would contradict it.
-    """
-    path.unlink(missing_ok=True)
 
 
 def _code_of(exc: BaseException) -> str:

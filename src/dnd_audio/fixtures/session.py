@@ -32,7 +32,7 @@ import numpy.typing as npt
 import yaml
 
 from dnd_audio.config import SessionConfig
-from dnd_audio.determinism import sha256_file
+from dnd_audio.determinism import sha256_file, write_json_atomic
 from dnd_audio.fixtures import synth
 from dnd_audio.fixtures.wav import BroadcastMetadata, ExtraChunk, write_wav
 from dnd_audio.interfaces import SpeechSpan
@@ -129,6 +129,18 @@ class SpeechInterval:
     @property
     def end_sample(self) -> int:
         return self.start_sample + self.n_samples
+
+    @property
+    def delay_samples(self) -> int:
+        """How late this interval's bleed arrives, its own value or the module default.
+
+        A property rather than three copies of the same conditional: the renderer, the truth
+        record, and the declared fake-ASR script all need it, and a fixture whose scripted text
+        landed near the bleed rather than on it would be testing nothing in particular.
+        """
+        return (
+            _BLEED_DELAY_SAMPLES if self.bleed_delay_samples is None else self.bleed_delay_samples
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,11 +301,7 @@ class FixtureTruth:
         """
         spans: dict[str, list[SpeechSpan]] = {}
         for interval in self.speech:
-            delay = (
-                _BLEED_DELAY_SAMPLES
-                if interval.bleed_delay_samples is None
-                else interval.bleed_delay_samples
-            )
+            delay = interval.delay_samples
             for target in interval.bleeds_into:
                 spans.setdefault(target, []).append(
                     SpeechSpan(
@@ -520,7 +528,7 @@ def build_session(spec: FixtureSession, directory: Path) -> FixtureTruth:
             written.append(_write_chunk(spec, track, chunk, directory, zero, events))
 
     _write_config(spec, directory)
-    return FixtureTruth(
+    truth = FixtureTruth(
         session_dir=directory,
         sample_rate=spec.sample_rate,
         session_zero_since_midnight=zero,
@@ -528,6 +536,8 @@ def build_session(spec: FixtureSession, directory: Path) -> FixtureTruth:
         speech=spec.speech,
         claps=spec.claps,
     )
+    _write_fake_models(truth, directory)
+    return truth
 
 
 @dataclass(frozen=True, slots=True)
@@ -569,11 +579,7 @@ def _build_events(spec: FixtureSession) -> tuple[_Event, ...]:
 
         bleed = synth.bleed_of(
             voice,
-            delay_samples=(
-                _BLEED_DELAY_SAMPLES
-                if interval.bleed_delay_samples is None
-                else interval.bleed_delay_samples
-            ),
+            delay_samples=interval.delay_samples,
             attenuation_db=(
                 _BLEED_ATTENUATION_DB
                 if interval.bleed_attenuation_db is None
@@ -813,6 +819,20 @@ def _wall_clock(spec: FixtureSession, start_sample: int) -> dt.datetime:
     seconds, _ = divmod(zero + start_sample, spec.sample_rate)
     midnight = dt.datetime.combine(spec.origin_date, dt.time(), tzinfo=dt.UTC)
     return midnight + dt.timedelta(seconds=seconds)
+
+
+def _write_fake_models(truth: FixtureTruth, directory: Path) -> None:
+    """Write the declared fake model outputs beside `session.yaml` (ADR-0018).
+
+    Imported here rather than at module scope because it reads a completed
+    :class:`FixtureTruth`, which is what this module produces — importing it at the top would
+    be a cycle. It writes an *input*: something a run may be told to read, never under `raw/`,
+    and never consulted unless `--fake-models` says so.
+    """
+    from dnd_audio.fixtures.fakemodels import fake_models_document
+    from dnd_audio.transcript import FAKE_MODELS_FILENAME
+
+    write_json_atomic(directory / FAKE_MODELS_FILENAME, fake_models_document(truth))
 
 
 def _write_config(spec: FixtureSession, directory: Path) -> None:
