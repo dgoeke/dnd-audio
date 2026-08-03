@@ -7,10 +7,10 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 
 ## Right now
 
-- **Current milestone:** M6b — Qwen adapter (not started)
-- **Branch:** `main`
+- **Current milestone:** M6b — Qwen adapter (verified, awaiting close)
+- **Branch:** `milestone/M6b-qwen-adapter`
 - **Last closed milestone:** M6a — ROCm environment
-- **Gate status at HEAD:** passes, zero skips (8 checks, 2122 tests)
+- **Gate status at HEAD:** passes, zero skips (8 checks, 2294 tests)
 - **Blocked on:** nothing for M6b — its environment is built, locked, and proved on the
   real device. **OQ-008 is answered:** `torch 2.9.1+rocm7.13.0` (HIP `7.13.99004-3309c6114a`)
   on `Radeon 8060S Graphics` / `gfx1151`, bfloat16 and float32 both exact, and the
@@ -65,7 +65,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | M4  | Fake transcript            | closed      | `8556f43` |
 | M5  | Automix                    | closed      | `d282688` |
 | M6a | ROCm environment           | closed      | `f5c6632` |
-| M6b | Qwen adapter               | not started | —         |
+| M6b | Qwen adapter               | verified    | —         |
 | H1  | Hardware fixture (2 min)   | not started | —         |
 | H2  | Drift soak / first session | not started | —         |
 | M7  | Archival (sketch)          | sketch      | —         |
