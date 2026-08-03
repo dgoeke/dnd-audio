@@ -717,3 +717,67 @@ class TestAttentionIsFixed:
         from dnd_audio.config import AsrConfig
 
         assert "attention" not in AsrConfig.model_fields
+
+
+class TestBoundedMemory:
+    """INV-07 at this seam. `asr.py` bounds submission; this bounds the adapter.
+
+    The composed proof is `tests/test_memory.py`'s — an ordered event log showing a write
+    before the last read, which nothing accumulating a session-length array can satisfy.
+    What is left to show here is the narrower claim the module docstring makes: that the
+    adapter itself keeps nothing after it answers. A transcriber that stashed each window
+    "for debugging" would satisfy every other test in this file and turn a four-hour session
+    into six full waveforms in RAM on a machine where that gets the process killed.
+    """
+
+    def test_nothing_survives_the_request_that_carried_it(self) -> None:
+        """Asserted through the garbage collector rather than by reading the code.
+
+        A `weakref` is the only way to state "nothing holds this any more" without
+        enumerating the places that might. The *request* is dropped as well as the backend's
+        recording, and that is not a weakening of the claim — it is the claim. The adapter
+        does not copy the window (see below), so while a caller holds the request the array
+        is alive because the caller wants it. What must not happen is the adapter outliving
+        the caller's interest, which is what a transcriber stashing windows "for debugging"
+        would do: six of those at session length is exactly what INV-07 exists to prevent.
+        """
+        import gc
+        import weakref
+
+        backend = FakeBackend(items=(AlignedItem("hello", 0.1, 0.2),))
+        transcriber = a_transcriber(backend)
+        request = a_request()
+
+        transcriber.transcribe(request)
+        submitted = weakref.ref(backend.transcribe_calls[0]["audio"])
+
+        backend.transcribe_calls.clear()
+        backend.align_calls.clear()
+        del request
+        gc.collect()
+
+        assert submitted() is None, "the adapter is still holding a submitted window"
+
+    def test_the_window_is_submitted_without_being_copied(self) -> None:
+        """`np.ascontiguousarray` is a no-op on an array that is already contiguous float32,
+        which every window from `DerivativeReader` is. So the normalization the adapter does
+        for safety costs nothing in the ordinary case, and a request's audio is not briefly
+        resident twice. Worth pinning: switching to `np.array(...)` or `.astype(np.float32)`
+        would look equivalent and would double peak memory per request.
+        """
+        backend = FakeBackend(items=(AlignedItem("hello", 0.1, 0.2),))
+        request = a_request()
+
+        a_transcriber(backend).transcribe(request)
+
+        assert backend.transcribe_calls[0]["audio"] is request.audio.samples
+
+    def test_it_submits_exactly_one_window_per_request(self) -> None:
+        """Two calls, one array. The adapter transcribes and aligns the *same* window rather
+        than making a second copy to align — which would double peak memory for no gain."""
+        backend = FakeBackend(items=(AlignedItem("hello", 0.1, 0.2),))
+        a_transcriber(backend).transcribe(a_request())
+
+        assert len(backend.transcribe_calls) == 1
+        assert len(backend.align_calls) == 1
+        assert backend.align_calls[0]["audio"] is backend.transcribe_calls[0]["audio"]

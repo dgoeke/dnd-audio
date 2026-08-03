@@ -34,6 +34,20 @@ model as an array and never as a path (INV-06) — is behaviour of *this* module
 
 Torch, `transformers` and `qwen_asr` are imported lazily inside :func:`load_qwen_backend`
 and nowhere else, so importing this module stays free for the default suite (INV-05).
+
+**Memory is bounded here and only here** (INV-07). One request's audio is in flight at a
+time — `asr.py` reads a window, submits it, and drops it before touching the next plan, and
+`tests/test_memory.py` proves that over the composed path rather than over one function.
+This module adds nothing to that: it holds no reference to a submitted array after
+:meth:`QwenTranscriber.transcribe` returns, and the backend is stateless between calls.
+
+What it cannot bound is everything else on the machine. The target host has **unified
+memory**, so model weights and system RAM come from one pool and `systemd-oomd` will kill a
+user process under sustained pressure. A transcription must not run alongside a heavy
+ComfyUI or large-LLM workload; six gigabytes of resident weights plus a session's working
+audio leaves little room for a second tenant, and the failure mode is an hours-long run
+dying partway rather than anything this code can catch. `README.md` says so where an
+operator will read it.
 """
 
 from __future__ import annotations
