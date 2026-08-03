@@ -26,7 +26,7 @@ import pytest
 from dnd_audio.activity import ACTIVITY_RELATIVE_PATH
 from dnd_audio.activity.runner import perform_activity
 from dnd_audio.artifacts.report import OverallStatus, StageName, StageStatus
-from dnd_audio.errors import ExitCode
+from dnd_audio.errors import DiscoveryError, ExitCode
 from dnd_audio.fixtures import FixtureTruth
 from dnd_audio.inspection import OUTPUT_DIRNAME
 from dnd_audio.interfaces import TranscriptionResult
@@ -377,6 +377,70 @@ class TestTheReportIsAlwaysFinalized:
         stages = {stage.stage: stage.status for stage in result.report.stages}
         assert stages[StageName.MIX] == "complete"
         assert stages[StageName.TRANSCRIBE] == "failed"
+
+    def test_a_missing_fake_models_file_never_falls_back_to_the_real_detector(
+        self, canonical_fixture: FixtureTruth
+    ) -> None:
+        """`--fake-models` is an assertion about what ran, and it is not softenable.
+
+        `transcribe` has refused this since M4; `process` did not, and the hole opened when
+        M6b taught `_resolve_or_defer` to turn a model failure into the transcript branch's
+        error so the mix could survive it (INV-09). That is right for a host with no ASR
+        weights and wrong here: under `--fake-models` this one call builds *both* seams from
+        `fake-models.json`, so a file that will not load is a detector failure too. Caught,
+        the run continued with `models=None` and the caller's `detector` — `None` from the
+        CLI — and activity therefore built the **real** Silero detector. An operator who
+        explicitly asked for fake models would have received a real MP3 and a real activity
+        graph off real detection, with only a failed transcript stage as a hint, on any host
+        where the VAD model happens to be installed. Found by M6b's code review.
+        """
+        session_dir = canonical_fixture.session_dir
+        (session_dir / "fake-models.json").unlink()
+
+        result = run_process(session_dir, fake_models=True)
+
+        assert result.exit_code is not ExitCode.OK
+        assert result.records is None
+        assert result.encode is None, "no mix may be produced from a detector nobody asked for"
+        assert not result.mp3_path.exists()
+        stages = {stage.stage: stage.status for stage in result.report.stages}
+        assert stages[StageName.ACTIVITY] != "complete"
+
+    def test_a_discovery_failure_while_resolving_models_is_never_softened(
+        self, canonical_fixture: FixtureTruth
+    ) -> None:
+        """The other half of `_resolve_or_defer`'s rule, and it had no test until a mutation
+        run showed that removing it broke nothing.
+
+        Softening an ASR failure into the transcript branch's error is what INV-09 asks for.
+        Softening a *discovery* failure is not: `output_inside_raw` is INV-01's fatality, and
+        a run that continued past it would go on to write outputs into `raw/`. Resolving
+        models never walks the session's paths, so this cannot arise today — which is exactly
+        why it is asserted rather than trusted: the clause protects against a future
+        `resolve_models` that does, and an untested guard against a future change is a guard
+        that will be deleted by the person making it.
+
+        `ModelError` is a sibling of `DiscoveryError` rather than a subclass, so the
+        ordinary missing-weights path above is unaffected — which the test beside this one
+        continues to prove.
+        """
+        raised = DiscoveryError("the output directory is inside raw/", code="output_inside_raw")
+
+        def refusing(*args: Any, **kwargs: Any) -> Any:
+            raise raised
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr("dnd_audio.orchestrate.resolve_models", refusing)
+            result = run_process(canonical_fixture.session_dir)
+
+        # Fatal for the whole run, not partial — and still a written report rather than a
+        # traceback, because INV-13 is not suspended by INV-01 being the thing that failed.
+        assert result.exit_code is ExitCode.FATAL
+        assert result.report.overall_status is OverallStatus.FAILED
+        assert result.encode is None
+        assert not (canonical_fixture.session_dir / MP3_RELATIVE_PATH).exists()
+        codes = {error.code for stage in result.report.stages for error in stage.errors}
+        assert "output_inside_raw" in codes
 
     def test_that_failure_names_what_to_do_about_it(
         self, session_without_asr_models: FixtureTruth

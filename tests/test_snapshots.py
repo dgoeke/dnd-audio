@@ -25,6 +25,7 @@ import pytest
 from dnd_audio.models import (
     LOCK_VERSION,
     MODEL_HASH_MISMATCH,
+    MODEL_LOCK_FILENAME,
     MODEL_REVISION_NOT_INSTALLED,
     MODEL_SIZE_MISMATCH,
     MODEL_UNAVAILABLE,
@@ -225,6 +226,56 @@ class TestVerification:
         stray.parent.mkdir(parents=True)
         stray.write_text("{}")
         assert "is not pinned" in (verify_snapshot(toy, directory=store) or "")
+
+    def test_an_unpinned_symlinked_directory_is_refused(
+        self, toy: SnapshotDescriptor, store: Path, tmp_path: Path
+    ) -> None:
+        """The hole the two-directional check had, found by M6b's verify phase.
+
+        A symlink *to a directory* answers `is_dir()` truthfully, so testing `is_dir()`
+        alone skipped it — and `rglob` does not descend into it, so its contents were never
+        walked either. The result was that a plain unpinned file was refused while a
+        symlinked directory holding a whole second model went through, which is the exact
+        inverse of what the rule claims. Not hypothetical: `hf download --local-dir` is a
+        tool that has created symlinks into a shared cache, and Transformers loads a
+        *directory*, so anything reachable inside one is a file a model may read.
+        """
+        elsewhere = tmp_path / "outside"
+        elsewhere.mkdir()
+        (elsewhere / "other.safetensors").write_bytes(b"\xff" * 32)
+        (snapshot_dir(toy, directory=store) / "extra").symlink_to(
+            elsewhere, target_is_directory=True
+        )
+
+        assert "is not pinned" in (verify_snapshot(toy, directory=store) or "")
+        assert find_snapshot(toy, directory=store) is None
+
+    def test_an_unpinned_symlinked_file_is_refused_too(
+        self, toy: SnapshotDescriptor, store: Path, tmp_path: Path
+    ) -> None:
+        """The same rule, stated for the simpler case so the fix cannot regress to
+        "symlinks are always fine"."""
+        target = tmp_path / "stray.bin"
+        target.write_bytes(b"\x00")
+        (snapshot_dir(toy, directory=store) / "stray.bin").symlink_to(target)
+
+        assert "is not pinned" in (verify_snapshot(toy, directory=store) or "")
+
+    def test_a_pinned_file_may_still_be_a_symlink_to_the_right_bytes(
+        self, toy: SnapshotDescriptor, store: Path, tmp_path: Path
+    ) -> None:
+        """Content is the rule, not inode identity. `hf` has stored a snapshot as symlinks
+        into a shared blob cache, and a manifest file whose bytes hash correctly is the
+        pinned artifact however it got there — refusing it would break a supported layout
+        for no gain."""
+        root = snapshot_dir(toy, directory=store)
+        body = (root / "config.json").read_bytes()
+        blob = tmp_path / "blob"
+        blob.write_bytes(body)
+        (root / "config.json").unlink()
+        (root / "config.json").symlink_to(blob)
+
+        assert verify_snapshot(toy, directory=store) is None
 
     def test_an_empty_directory_beside_the_files_is_not_a_failure(
         self, toy: SnapshotDescriptor, store: Path
@@ -502,6 +553,28 @@ class TestInstallation:
         assert downloaded is False
         assert calls == []
         assert path == snapshot_dir(toy, directory=store)
+
+    def test_it_repairs_a_deleted_lock_without_downloading(
+        self, toy: SnapshotDescriptor, store: Path
+    ) -> None:
+        """`fetch` has done this for Silero since M3; the snapshot half did not until M6b's
+        verify phase.
+
+        The early return above skipped straight past the lock, so deleting `models.lock.json`
+        and re-running `models fetch --qwen` reported a lock path it had not written and left
+        the snapshot section missing — for a six-gigabyte download whose whole point is that
+        it is cheap to re-run as an "am I set up?" check. Raised by M6b's code review.
+        """
+        # The `toy` fixture materializes correct bytes and no lock, which *is* the state
+        # a deleted lock leaves behind.
+        assert not (store / MODEL_LOCK_FILENAME).exists()
+
+        download, calls = self._downloader(_CONTENTS)
+        _, downloaded = install_snapshot(toy, directory=store, download=download)
+
+        assert downloaded is False, "verified bytes must not be downloaded again"
+        assert calls == [], "repairing a lock must not reach the network"
+        assert read_snapshots(directory=store) == {toy.key: snapshot_lock_record(toy)}
 
     def test_repository_furniture_never_reaches_the_snapshot(self, store: Path) -> None:
         """`hf` fetches the whole repository; a verified tree holds only model files.

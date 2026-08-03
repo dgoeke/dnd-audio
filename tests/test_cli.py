@@ -132,6 +132,54 @@ class TestCommandSurface:
         assert all(row["present"] is False for row in plan["models"])
         assert list(tmp_path.iterdir()) == []
 
+    def test_a_configured_revision_can_actually_be_installed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The half of *"explicit model/aligner revisions may be set in configuration"*
+        that M6b's first pass left unbuildable.
+
+        `session.yaml` accepted `asr.model_revision` and `_default_transcriber` required a
+        snapshot at exactly that commit — but `models fetch --qwen` always installed the
+        revision pinned in the build and took no argument. So an operator who set one had a
+        `process` that reported "revision not installed" forever and no permitted command
+        able to fix it: the criterion was satisfiable in configuration and unreachable in
+        practice. Found by M6b's code review.
+
+        Asserted through `plan`, which reads the same override and reaches no network.
+        """
+        monkeypatch.setenv("DND_AUDIO_MODELS_DIR", str(tmp_path))
+        override = "1" * 40
+        result = runner.invoke(app, ["models", "plan", "--json", "--asr-revision", override])
+
+        assert result.exit_code == 0
+        rows = {row["key"]: row for row in json.loads(result.output)["models"]}
+        assert rows["qwen3-asr"]["revision"] == override
+        assert rows["qwen3-asr"]["target"].endswith(override)
+        # The aligner is untouched: the two are overridden independently.
+        assert rows["qwen3-forced-aligner"]["revision"] == QWEN3_ALIGNER.revision
+
+    def test_fetch_takes_the_same_overrides_plan_does(self) -> None:
+        """The pair has to exist on the command that installs, not only on the one that
+        reports — a plan naming a revision nothing can fetch is the defect, restated."""
+        result = runner.invoke(app, ["models", "fetch", "--help"])
+        assert result.exit_code == 0
+        assert "--asr-revision" in result.output
+        assert "--aligner-revision" in result.output
+
+    def test_a_revision_that_is_not_a_commit_is_refused_at_the_command_line(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`AsrConfig`'s rule, restated for the entry point that does not read a config
+        file: a branch name would install into a directory `process` never looks in."""
+        monkeypatch.setenv("DND_AUDIO_MODELS_DIR", str(tmp_path))
+        result = runner.invoke(app, ["models", "plan", "--asr-revision", "main"])
+
+        # Click's usage code — a typo, not a pipeline failure, which is why `ExitCode`
+        # deliberately leaves 2 undefined.
+        assert result.exit_code == 2
+        assert result.exit_code not in set(ExitCode)
+        assert list(tmp_path.iterdir()) == []
+
     def test_models_plan_agrees_with_the_descriptors_it_is_supposed_to_restate(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

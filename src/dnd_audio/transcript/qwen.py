@@ -266,7 +266,7 @@ class QwenTranscriber:
         language = spoken.language or request.language
         try:
             items = self._backend.align(audio, text=text, language=language)
-        except Exception:
+        except Exception as exc:
             # Deliberately `Exception`. This is the recovery path the gate names, and what
             # an aligner can raise is not enumerable: an out-of-memory error, a shape
             # mismatch from a text its tokenizer split differently than the model expected,
@@ -281,6 +281,7 @@ class QwenTranscriber:
                 status="segment_only",
                 truncated=truncated,
                 aligned=None,
+                align_failure=f"{type(exc).__name__}: {exc}",
             )
 
         words = decode_alignment(items, request=request)
@@ -351,6 +352,7 @@ class QwenTranscriber:
         status: Literal["aligned", "segment_only", "not_attempted"],
         truncated: bool,
         aligned: tuple[AlignedItem, ...] | None,
+        align_failure: str | None = None,
     ) -> TranscriptionResult:
         return TranscriptionResult(
             request_id=request.request_id,
@@ -359,11 +361,13 @@ class QwenTranscriber:
             language=spoken.language or request.language,
             truncated=truncated,
             alignment_status=status,
-            public_document=_public_document(spoken, aligned),
+            public_document=_public_document(spoken, aligned, align_failure),
         )
 
 
-def _public_document(spoken: QwenText, aligned: tuple[AlignedItem, ...] | None) -> dict[str, Any]:
+def _public_document(
+    spoken: QwenText, aligned: tuple[AlignedItem, ...] | None, align_failure: str | None = None
+) -> dict[str, Any]:
     """The spec's lossless raw artifact, in the shape the two calls actually produced.
 
     The spec asks for "the unmodified public `ASRTranscription`... losslessly serialize all
@@ -373,12 +377,25 @@ def _public_document(spoken: QwenText, aligned: tuple[AlignedItem, ...] | None) 
     reassembling them into an `ASRTranscription` that no call returned. `calls` is the
     honest part: a reader can tell "the aligner was never asked" from "the aligner was
     asked and this is what came back".
+
+    **Three outcomes, not two, and the first draft collapsed two of them.** `aligned is
+    None` was read as "no align call", which is true when there was no text to align and
+    false when the aligner was called and raised — and those recorded an identical `calls`
+    list. This is the per-segment audit artifact an operator consults precisely when a
+    transcript looks wrong, so a segment whose aligner threw would have been indistinguishable
+    from a segment nobody tried to align. `align_failure` carries the exception's type and
+    message, which is also the only place that detail survives at all: the transcript itself
+    reports one `alignment_failed` note per *track*. Found by M6b's code review, which noted
+    that the test asserting this behaviour had a docstring describing the opposite.
     """
+    attempted = aligned is not None or align_failure is not None
     document: dict[str, Any] = {
         "asr_transcription": spoken.document,
-        "calls": ["transcribe"] if aligned is None else ["transcribe", "align"],
+        "calls": ["transcribe", "align"] if attempted else ["transcribe"],
         "package": QWEN_BACKEND_NAME,
     }
+    if align_failure is not None:
+        document["forced_alignment"] = {"error": align_failure}
     if aligned is not None:
         document["forced_alignment"] = {
             "items": [

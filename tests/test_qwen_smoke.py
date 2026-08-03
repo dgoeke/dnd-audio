@@ -23,6 +23,7 @@ from __future__ import annotations
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -129,6 +130,12 @@ class Loaded:
     device: str
     dtype: str
     gfx_target: str | None
+    #: The two `torch.nn.Module`s underneath the wrappers. Reached through the concrete
+    #: backend rather than the protocol on purpose: the gate asks for bfloat16, `cuda:0` and
+    #: SDPA *in effect*, and the only object that knows whether Transformers honoured those
+    #: requests is the loaded model itself.
+    asr_module: Any
+    aligner_module: Any
 
 
 @pytest.fixture(scope="session")
@@ -161,6 +168,8 @@ def loaded() -> Loaded:
         device=resolution.device,
         dtype=resolution.dtype,
         gfx_target=probe.gfx_target,
+        asr_module=backend.model.model,  # type: ignore[attr-defined]
+        aligner_module=backend.aligner.model,  # type: ignore[attr-defined]
     )
 
 
@@ -235,8 +244,30 @@ class TestTheGateCriterion:
         assert result.public_document["asr_transcription"]["text"] == result.text
         assert result.public_document["forced_alignment"]["items"]
 
-    def test_the_attention_implementation_is_the_one_the_spec_asks_for(self) -> None:
-        assert ATTENTION_IMPLEMENTATION == "sdpa"
+    def test_the_loaded_models_really_are_bf16_sdpa_on_the_gpu(self, loaded: Loaded) -> None:
+        """The completion gate's *"Transformers backend, `torch.bfloat16`, `cuda:0`, SDPA
+        attention"* — read off the loaded models rather than off this project's constants.
+
+        The first version of this test asserted `ATTENTION_IMPLEMENTATION == "sdpa"`, which
+        is a module constant already pinned by an offline test: a `host_smoke` test that
+        needed a GPU and six gigabytes of weights in order to compare a string to itself.
+        What it never checked is the thing that can actually be wrong — that
+        `load_qwen_backend` passes those choices *through* to `from_pretrained` and that
+        Transformers honoured them. A silently-ignored `attn_implementation`, a dtype
+        overridden by a checkpoint's own config, or a model left on the CPU while the
+        resolver reported `cuda:0` would all have passed. Found by M6b's verify phase.
+        """
+        import torch
+
+        for name, module in (("asr", loaded.asr_module), ("aligner", loaded.aligner_module)):
+            assert module.config._attn_implementation == ATTENTION_IMPLEMENTATION, (
+                f"{name} loaded with {module.config._attn_implementation}, "
+                f"not {ATTENTION_IMPLEMENTATION}"
+            )
+            parameter = next(module.parameters())
+            assert parameter.dtype is torch.bfloat16, f"{name} is {parameter.dtype}"
+            assert parameter.device.type == "cuda", f"{name} is on {parameter.device}"
+            assert not module.training, f"{name} was left in training mode"
 
 
 @_no_speech
@@ -249,7 +280,9 @@ class TestOq018Padding:
     request recovers edge words the clipped one loses, the padding is doing its job.
     """
 
-    def test_padding_recovers_words_a_hard_clip_loses(self, transcriber: QwenTranscriber) -> None:
+    def test_it_measures_what_a_hard_clip_costs_against_a_padded_request(
+        self, transcriber: QwenTranscriber
+    ) -> None:
         generous = transcriber.transcribe(
             a_request(decode(_speech_path(), seconds=14.0, start=9.0), request_id="pad-generous")
         )
@@ -269,8 +302,16 @@ class TestOq018Padding:
         # Recorded rather than asserted as a threshold: what this run *measures* is how the
         # two texts differ, and a hard assertion on word counts would be pinning one
         # recording's outcome as a property of the model.
+        #
+        # The name of this test used to be `test_padding_recovers_words_a_hard_clip_loses`,
+        # which is a claim about the result rather than a description of the instrument —
+        # and the measured result is the opposite: the two texts came back *identical*, so
+        # the clip lost nothing for the padding to recover. Both of M6b's reviewers flagged
+        # the mismatch. The finding is real and recorded under OQ-018(1); what was wrong was
+        # a test asserting non-emptiness under a name promising a recovery.
         print(f"\nOQ-018(1) padded:  {generous.text!r}")
         print(f"OQ-018(1) clipped: {clipped.text!r}")
+        print(f"OQ-018(1) identical: {generous.text.strip() == clipped.text.strip()}")
         assert generous.text.strip()
         assert clipped.text.strip()
 
@@ -310,22 +351,70 @@ class TestOq018TimestampStability:
         # the test's own matching, not of the model.
         from dnd_audio.transcript.normalize import comparison_key
 
+        # **Two passes, and the denominator is the point.** Pairing on "same key *and*
+        # overlapping" is how the stitch rule pairs, but using it alone to *measure* the
+        # rule silently excludes its own failures: a word whose two placements drifted far
+        # enough to stop overlapping simply vanishes from the sample, so the surviving
+        # deltas are small by construction and "worst 0 ms" would be true of a model that
+        # got half of them badly wrong. Codex's code review caught the selection bias.
+        #
+        # So: the first pass counts every word of the shared span by text alone — the
+        # candidates the rule *ought* to recognize — and the second reports how many of them
+        # it actually did. The gap between the two numbers is the measurement.
+        shared_start = max(early.words[0].start_sample, late.words[0].start_sample)
+        shared_end = min(early.words[-1].end_sample, late.words[-1].end_sample)
+
+        candidates = 0
         deltas_ms: list[int] = []
         for late_word in late.words:
-            for early_word in early.words:
-                overlapping = (
-                    early_word.start_sample < late_word.end_sample
-                    and late_word.start_sample < early_word.end_sample
-                )
-                same = comparison_key(early_word.text) == comparison_key(late_word.text)
-                if same and overlapping:
-                    delta = abs(early_word.start_sample - late_word.start_sample)
-                    deltas_ms.append(delta * 1000 // DERIVATIVE_SAMPLE_RATE)
-                    break
+            if not (shared_start <= late_word.start_sample < shared_end):
+                continue
+            matches = [
+                early_word
+                for early_word in early.words
+                if comparison_key(early_word.text) == comparison_key(late_word.text)
+            ]
+            if not matches:
+                continue
+            candidates += 1
+            paired = [
+                early_word
+                for early_word in matches
+                if early_word.start_sample < late_word.end_sample
+                and late_word.start_sample < early_word.end_sample
+            ]
+            if paired:
+                delta = abs(paired[0].start_sample - late_word.start_sample)
+                deltas_ms.append(delta * 1000 // DERIVATIVE_SAMPLE_RATE)
 
-        assert deltas_ms, "the two windows produced no word M4's stitch rule would pair"
-        print(f"\nOQ-018(2) {len(deltas_ms)} paired word(s); |delta| ms: {sorted(deltas_ms)}")
-        print(f"OQ-018(2) worst {max(deltas_ms)} ms")
+        assert candidates, "the two windows shared no word for the stitch rule to pair"
+        print(f"\nOQ-018(2) {len(deltas_ms)}/{candidates} shared word(s) paired by the rule")
+        print(f"OQ-018(2) |delta| ms: {sorted(deltas_ms)}")
+        print(f"OQ-018(2) worst {max(deltas_ms) if deltas_ms else 'n/a'} ms")
+
+        # The regression bounds, now that the measurement has a denominator. Both numbers
+        # are set from all four sample recordings rather than from whichever one this host
+        # happens to sort first — which is not a hypothetical: a first draft of this bound
+        # was 250 ms, and it passed only because TX01 sorts ahead of TX03, whose worst
+        # in-pair disagreement is 400 ms. Replacing `samples/` would have turned a green
+        # suite red for no reason anyone could have reconstructed. Measured 2026-08-03:
+        #
+        #     TX01  20/22 paired, worst   0 ms     TX03  18/18 paired, worst 400 ms
+        #     TX02  21/22 paired, worst  80 ms     TX04  18/18 paired, worst 320 ms
+        #
+        # The **ratio** is the assertion that matters and the half that could not fail
+        # before: it is the stitch rule's own hit rate, and a word the rule fails to pair is
+        # one it emits twice. The delta bound is the coarse sanity check beside it — the
+        # claim is "times do not wander by more than a word's length", and a word is a few
+        # hundred milliseconds, so a second means they have become unrelated.
+        assert len(deltas_ms) >= candidates * 3 // 4, (
+            f"only {len(deltas_ms)} of {candidates} shared words still overlap between two "
+            f"requests — M4's stitch rule would emit the rest twice"
+        )
+        assert max(deltas_ms) <= 1000, (
+            f"word starts moved by {max(deltas_ms)} ms between two requests over the same "
+            f"audio; the stitch rule pairs on overlap and cannot survive that"
+        )
 
 
 @_no_speech

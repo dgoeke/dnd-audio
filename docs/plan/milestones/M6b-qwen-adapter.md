@@ -283,9 +283,12 @@ From `qwen_asr` 0.0.6's published wheel. Each of these shapes a decision below:
    decimal string is the value it meant and the binary float is not (INV-04). Rebasing on
    `audio.start_sample` is not a detail: a request starting at sample 1 600 000 whose words
    came back at 0.5 s would otherwise land near session zero and be dropped by M4's
-   ownership rule. Non-finite, negative, `end <= start`, non-monotonic, or out-of-window
+   ownership rule. Non-finite, negative, `end < start`, non-monotonic, or out-of-window
    items are a **recoverable per-segment alignment failure** — `segment_only` plus a warning
-   — never an exception that aborts a session's transcript.
+   — never an exception that aborts a session's transcript. `end == start` is *not* in that
+   list: the aligner quantizes to 80 ms, so a shorter word comes back zero-length and is
+   widened to one sample rather than treated as corruption. This plan said `end <= start`
+   until the first real transcription proved it wrong; see ADR-0028.
 5. **Identity, runtime, report** — `TranscriberIdentity` gains a **nested
    `runtime: RuntimeProvenance | None`** rather than a parallel row of scalars, so python,
    torch, hip, device, device name and dtype all reach the cache key from the one place M6a
@@ -333,22 +336,26 @@ From `qwen_asr` 0.0.6's published wheel. Each of these shapes a decision below:
 
 ### Completion gate → named proof
 
+**Reconciled in the verify phase**, where several of the names below turned out to be tests
+this plan had imagined rather than written. The table now names what exists and was executed;
+where a planned proof was dropped rather than renamed, the row says so and why.
+
 | Criterion | Proof |
 | --- | --- |
-| Network only at fetch; snapshot commits; local lock; caches outside sessions | `TestSnapshotLock`, `TestModelsDirIsOutsideSessions`; `test_only_models_fetch_reaches_the_network` |
-| `process` uses the lock, not a moving branch | `test_a_branch_name_is_refused_at_config_load`, `test_absent_lock_is_fatal_even_with_valid_bytes`, `test_a_mismatched_lock_is_refused`, `test_the_locked_revision_is_the_one_in_identity_and_report` |
-| Offline execution | `test_offline_env_is_set_before_the_backend_is_imported`; an incomplete local snapshot under the socket block |
-| Explicit model/aligner revisions configurable | `test_configured_revision_verifies_against_the_lock` |
-| Transformers backend, bfloat16, `cuda:0`, SDPA | `test_backend_is_constructed_with_the_resolved_runtime`; the smoke test |
-| Audio never a URL or path (INV-06) | `test_audio_reaches_the_backend_as_an_array`, plus a backend fake that fails if handed a `str` |
+| Network only at fetch; snapshot commits; local lock; caches outside sessions | `TestThePinnedDescriptors`, `TestTheDirectoryLayout`, `TestTheLock`, `tests/test_network_blocked.py` |
+| `process` uses the lock, not a moving branch | `TestAConfiguredRevisionVerifiesAgainstTheLock`, `test_a_revision_that_is_not_a_full_commit_is_rejected`. **No `test_absent_lock_is_fatal_even_with_valid_bytes`**: ADR-0027 makes the *checked-in* manifest authoritative for the pinned revision, which is strictly stronger than a local lock — see the verify phase's rejected findings |
+| Offline execution | `TestOfflineMode`, `test_offline_mode_is_set_before_the_backend_is_imported` |
+| Explicit model/aligner revisions configurable | `TestAConfiguredRevisionVerifiesAgainstTheLock`, `test_a_configured_revision_can_actually_be_installed` |
+| Transformers backend, bfloat16, `cuda:0`, SDPA | `TestAttentionIsFixed`; `test_the_loaded_models_really_are_bf16_sdpa_on_the_gpu` (`host_smoke`, read off the loaded modules rather than off this project's constants) |
+| Audio never a URL or path (INV-06) | `TestAudioNeverLeavesAsAPathOrUrl` |
 | English forced, configurable; glossary via context; absence never blocks | `TestLanguageAndContext` |
-| Aligner word times; per-segment failure warns and keeps text | `test_an_aligner_exception_keeps_the_text_as_segment_only`, `TestMalformedAlignmentIsRecoverable` |
-| Cache identity complete; atomic; incomplete never hits | `test_asr_identity_document_names_every_component` extended over the nested runtime; existing `AsrCache` tests |
-| `max_new_tokens` 1024; changing it invalidates the cache | `test_max_new_tokens_moves_the_key`, `test_changing_max_new_tokens_re_runs_the_adapter`, `test_a_request_disagreeing_with_the_bound_ceiling_raises` |
-| Truncation from public metadata or retokenization, never a private API | `TestTruncationHeuristic`; `test_no_private_finish_reason_or_generation_path_is_used` |
-| Bounded windows; UMA caveat documented | `tests/test_memory.py` extended over the adapter path |
-| Report records python, qwen-asr, transformers, torch, HIP, device, dtype, attention, revisions | `test_report_records_the_whole_asr_stack` |
-| A real transcription and alignment on the target host | `tests/test_qwen_smoke.py` (`host_smoke`) |
+| Aligner word times; per-segment failure warns and keeps text | `TestTimestampDecoding`, `TestAlignmentFailureKeepsTheText`, `TestMalformedAlignmentIsRecoverable`, `test_the_segment_survives_the_run_warns_and_the_exit_is_clean` |
+| Cache identity complete; atomic; incomplete never hits | `test_the_document_names_every_component`, `test_every_part_of_the_runtime_moves_the_key`, `test_the_package_versions_move_the_key`, `test_the_truncation_margin_moves_the_key`; existing `AsrCache` tests |
+| `max_new_tokens` 1024; changing it invalidates the cache | `test_max_new_tokens_moves_the_key`, `TestTheBoundCeiling` |
+| Truncation from public metadata or retokenization, never a private API | `TestTruncationHeuristic`, `test_no_private_finish_reason_or_generation_path_is_used` |
+| Bounded windows; UMA caveat documented | `TestBoundedMemory`, `tests/test_memory.py`; `README.md` |
+| Report records python, qwen-asr, transformers, torch, HIP, device, dtype, attention, revisions | `test_report_records_the_whole_asr_stack` — planned, missing from the first pass, written in the verify phase after both reviewers found the hole |
+| A real transcription and alignment on the target host | `tests/test_qwen_smoke.py` (`host_smoke`), 16 passed on the device |
 | The default suite still passes with none of it installed | `./scripts/gate.sh` from `.venv`, **and** the whole suite from `.venv-rocm` |
 
 ### Invariants at risk, and what stops it

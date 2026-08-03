@@ -24,6 +24,7 @@ Stage boundaries, from the spec:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -37,7 +38,10 @@ from dnd_audio.errors import DndAudioError, ExitCode
 from dnd_audio.inspection.runner import InspectionResult, run_inspect
 from dnd_audio.mix.runner import MixResult, run_mix
 from dnd_audio.models import (
+    QWEN3_ALIGNER,
+    QWEN3_ASR,
     QWEN_SNAPSHOTS,
+    REVISION_PATTERN,
     SILERO_VAD,
     SNAPSHOT_FETCH_COMMAND,
     fetch,
@@ -307,6 +311,22 @@ def models_fetch(
             "runs this for you from there.",
         ),
     ] = False,
+    asr_revision: Annotated[
+        str | None,
+        typer.Option(
+            "--asr-revision",
+            help="Install this commit of the ASR repository instead of the pinned one — "
+            "the counterpart of `asr.model_revision` in session.yaml.",
+        ),
+    ] = None,
+    aligner_revision: Annotated[
+        str | None,
+        typer.Option(
+            "--aligner-revision",
+            help="Install this commit of the aligner repository instead of the pinned one "
+            "— the counterpart of `asr.aligner_revision` in session.yaml.",
+        ),
+    ] = None,
 ) -> None:
     """Install the pinned models and record what they resolved to.
 
@@ -337,19 +357,21 @@ def models_fetch(
     typer.echo(f"  release   {descriptor.release}")
     typer.echo(f"  commit    {descriptor.commit}")
 
+    overrides = _snapshot_revisions(asr_revision, aligner_revision)
     for snapshot in QWEN_SNAPSHOTS:
+        revision = overrides[snapshot.key]
         if not qwen:
-            state = "present" if snapshot_present(snapshot) else "absent"
+            state = "present" if snapshot_present(snapshot, revision=revision) else "absent"
             typer.echo(f"  {state:<15} {snapshot.key} ({snapshot.repository})")
             continue
         try:
-            target, downloaded = install_snapshot(snapshot)
+            target, downloaded = install_snapshot(snapshot, revision=revision)
         except DndAudioError as exc:
             typer.secho(f"  error  {exc.code}: {exc}", fg=typer.colors.RED, err=True)
             raise typer.Exit(code=ExitCode.FATAL) from exc
         typer.echo(f"  {'installed' if downloaded else 'already present'}  {snapshot.key}")
         typer.echo(f"  model     {target}")
-        typer.echo(f"  commit    {snapshot.revision}")
+        typer.echo(f"  commit    {revision}")
 
     typer.echo(f"  lock      {lock_path()}")
     if not qwen:
@@ -359,12 +381,51 @@ def models_fetch(
         )
 
 
+def _snapshot_revisions(
+    asr_revision: str | None, aligner_revision: str | None
+) -> dict[str, str | None]:
+    """Map each snapshot key to the revision asked for, refusing anything not a commit.
+
+    `models fetch` has to accept these because `session.yaml` accepts them. Without it an
+    operator could *configure* `asr.model_revision` — the completion gate requires that —
+    and then have no command able to install it: `process` would report "revision not
+    installed" forever, and the only permitted network command would keep fetching the
+    revision the build was pinned to. Found by M6b's code review.
+
+    The shape check is `AsrConfig`'s, restated here because this entry point does not go
+    through a config file. Both refuse for the same reason (ADR-0027): a directory is keyed
+    by this string, so a branch name would install into a directory `process` never looks in.
+    """
+    chosen = {QWEN3_ASR.key: asr_revision, QWEN3_ALIGNER.key: aligner_revision}
+    for key, revision in chosen.items():
+        if revision is not None and not re.fullmatch(REVISION_PATTERN, revision):
+            typer.secho(
+                f"  error  {revision!r} is not a commit. Give the full 40-character "
+                f"lowercase hexadecimal commit sha for {key} — a branch or tag moves, and "
+                f"the snapshot directory is keyed by this string.",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            # Click's usage code, and `ExitCode` deliberately does not define 2 for exactly
+            # this reason: a malformed option is a typo, not a pipeline failure.
+            raise typer.Exit(code=2)
+    return chosen
+
+
 @models_app.command("plan")
 def models_plan(
     as_json: Annotated[
         bool,
         typer.Option("--json", help="Emit the plan as canonical JSON instead of a table."),
     ] = False,
+    asr_revision: Annotated[
+        str | None,
+        typer.Option("--asr-revision", help="Plan for this commit of the ASR repository."),
+    ] = None,
+    aligner_revision: Annotated[
+        str | None,
+        typer.Option("--aligner-revision", help="Plan for this commit of the aligner."),
+    ] = None,
 ) -> None:
     """Print what `models fetch` would install, and where. Touches nothing.
 
@@ -373,14 +434,15 @@ def models_plan(
     directory — a wrapper that restated any of them would be a second place for the pin to
     live, and the one that drifts is always the one nobody is looking at.
     """
+    overrides = _snapshot_revisions(asr_revision, aligner_revision)
     rows = [
         {
             "key": snapshot.key,
             "kind": "snapshot",
-            "present": snapshot_present(snapshot),
+            "present": snapshot_present(snapshot, revision=overrides[snapshot.key]),
             "repository": snapshot.repository,
-            "revision": snapshot.revision,
-            "target": str(snapshot_dir(snapshot)),
+            "revision": overrides[snapshot.key] or snapshot.revision,
+            "target": str(snapshot_dir(snapshot, revision=overrides[snapshot.key])),
         }
         for snapshot in QWEN_SNAPSHOTS
     ]
@@ -439,8 +501,9 @@ def doctor(
 ) -> None:
     """Check this host without touching session audio.
 
-    Reports the pinned VAD model as a warning when it is absent — that is a machine
-    that can do everything but activity detection. The ASR models arrive with M6b.
+    Reports each pinned model as a warning when it is absent rather than as a failure —
+    that is a machine that can still do everything the missing model is not needed for.
+    A host with no ASR snapshots mixes and detects; a host with no VAD model does neither.
 
     `--device` and `--dtype` answer "will *my* configuration work here" before a session
     starts rather than during it. An explicitly requested combination this machine cannot

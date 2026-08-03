@@ -227,6 +227,41 @@ class TestRejections:
         raw["asr"]["model_revision"] = revision
         _reject(raw, "commit")
 
+    def test_a_repository_this_build_has_no_snapshot_for_is_rejected(
+        self, raw: dict[str, Any]
+    ) -> None:
+        """False provenance refused at the door, rather than recorded as truth.
+
+        `_default_transcriber` loads the `QWEN3_ASR` and `QWEN3_ALIGNER` descriptors — there
+        is no code path that fetches an arbitrary repository and `models fetch` cannot
+        install one. Before this check, naming another repository here ran Qwen anyway and
+        wrote the *configured* name into the ASR cache key and the ingest report: two
+        artifacts asserting that weights which were never loaded produced the transcript,
+        with nothing downstream able to notice (INV-08). Raised by M6b's code review.
+        """
+        raw["asr"]["model"] = "openai/whisper-large-v3"
+        _reject(raw, "not a repository this build carries")
+
+    def test_the_aligner_is_guarded_the_same_way(self, raw: dict[str, Any]) -> None:
+        raw["asr"]["aligner"] = "Qwen/Qwen3-ASR-1.7B"  # a real repository, the wrong role
+        _reject(raw, "not a repository this build carries")
+
+    def test_the_defaults_are_the_repositories_this_build_pins(self, raw: dict[str, Any]) -> None:
+        """Which is what makes the check above a guard rather than an obstacle: the
+        ordinary session names these and never notices."""
+        from dnd_audio.models import QWEN3_ALIGNER, QWEN3_ASR
+
+        config = SessionConfig.model_validate(raw)
+        assert config.asr.model == QWEN3_ASR.repository
+        assert config.asr.aligner == QWEN3_ALIGNER.repository
+
+    def test_a_revision_with_a_trailing_newline_is_rejected(self, raw: dict[str, Any]) -> None:
+        """`re.match` accepted this and `re.fullmatch` does not: Python's `$` also matches
+        just before a trailing newline, so a YAML block scalar could carry a 41-character
+        "commit" into a directory name. Raised by M6b's code review."""
+        raw["asr"]["model_revision"] = "7278e1e70fe206f11671096ffdd38061171dd6e5\n"
+        _reject(raw, "commit")
+
     def test_the_default_is_no_configured_revision(self, raw: dict[str, Any]) -> None:
         """Which means "use the revision pinned in this build" — the ordinary case."""
         config = SessionConfig.model_validate(raw)
@@ -523,7 +558,11 @@ class TestResolvedConfigHash:
         [
             ("asr", "max_new_tokens", 512),
             ("asr", "max_segment_s", 90),
-            ("asr", "model", "Qwen/Qwen3-ASR-Flash"),
+            # `asr.model` and `asr.aligner` are not here, and their absence is the point:
+            # since M6b's verify phase each accepts exactly one value, the repository this
+            # build carries a snapshot of, so there is no second value to perturb. They
+            # still reach the hash — `TestTheRepositoriesAreNotAKnob` is what holds the
+            # line, by proving the alternative is refused rather than merely re-keyed.
             ("asr", "model_revision", "d" * 40),
             ("asr", "truncation_margin_tokens", 32),
             ("asr", "dtype", "float32"),

@@ -13,6 +13,7 @@ Nothing here imports torch, `transformers` or `qwen_asr`, and nothing here touch
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -551,19 +552,51 @@ class TestThePublicDocument:
 
     def test_it_records_which_calls_were_made(self) -> None:
         """A reader must be able to tell "the aligner was never asked" from "the aligner
-        was asked and this is what came back"."""
+        was asked and this is what came back" — **including when what came back was an
+        exception**.
+
+        There are three outcomes and the first draft of this test asserted two. It said in
+        its own docstring that a reader must be able to distinguish them, and then asserted
+        that the aligner-raised case and the nothing-to-align case record an identical call
+        list — enshrining the conflation it was written to prevent. `public_document` is the
+        per-segment audit artifact an operator reaches for exactly when a transcript looks
+        wrong, and the transcript itself reports only one `alignment_failed` note per
+        *track*, so this is the only place the individual failure survives at all. Found by
+        M6b's code review.
+        """
         aligned = a_transcriber(FakeBackend(items=(AlignedItem("a", 0.1, 0.2),))).transcribe(
             a_request()
         )
-        failed = a_transcriber(FakeBackend(align_error=RuntimeError("x"))).transcribe(a_request())
+        failed = a_transcriber(FakeBackend(align_error=RuntimeError("kaboom"))).transcribe(
+            a_request()
+        )
         silent = a_transcriber(FakeBackend(text="")).transcribe(a_request())
 
         assert aligned.public_document is not None
         assert failed.public_document is not None
         assert silent.public_document is not None
+
+        # The aligner ran and answered.
         assert aligned.public_document["calls"] == ["transcribe", "align"]
-        assert failed.public_document["calls"] == ["transcribe"]
+        assert "error" not in aligned.public_document["forced_alignment"]
+        # The aligner ran and raised — a *call* was made, and what it did is recorded.
+        assert failed.public_document["calls"] == ["transcribe", "align"]
+        assert failed.public_document["forced_alignment"] == {"error": "RuntimeError: kaboom"}
+        # There was nothing to align, so nothing was asked.
         assert silent.public_document["calls"] == ["transcribe"]
+        assert "forced_alignment" not in silent.public_document
+
+    def test_the_three_alignment_outcomes_are_all_distinguishable(self) -> None:
+        """Stated as the property rather than as three call lists, so a future encoding
+        that happened to collide would fail here even if each case still looked plausible
+        on its own."""
+        documents = [
+            a_transcriber(FakeBackend(items=(AlignedItem("a", 0.1, 0.2),))).transcribe(a_request()),
+            a_transcriber(FakeBackend(align_error=RuntimeError("kaboom"))).transcribe(a_request()),
+            a_transcriber(FakeBackend(text="")).transcribe(a_request()),
+        ]
+        rendered = [json.dumps(result.public_document, sort_keys=True) for result in documents]
+        assert len(set(rendered)) == 3, rendered
 
     def test_alignment_items_are_serialized_in_the_aligners_own_units(self) -> None:
         """Seconds, as returned. The samples are the pipeline's reading of them; the raw

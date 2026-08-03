@@ -342,16 +342,37 @@ def _resolve_or_defer(
     otherwise would produce a mix of silence. `resolve_models` builds the detector lazily
     from the fake-models file or takes the caller's, so in practice what fails here is the
     Qwen adapter — which is exactly the thing INV-09 says the mix must survive.
+
+    **`--fake-models` is never softened**, and the first draft of this function got that
+    wrong. Under `--fake-models` this call builds *both* seams from `fake-models.json`, so a
+    file that is missing or malformed is a detector failure as much as a transcriber one.
+    Catching it left `models` as `None`, and the caller then falls back to its own
+    `detector` argument — which is `None` from the CLI, so activity built the **real**
+    Silero detector. An operator who explicitly asked for fake models would have got a real
+    MP3 and a real activity graph off real detection, with nothing but a failed transcript
+    stage to hint at it. `run_transcribe` has refused this since M4
+    (`test_a_missing_fake_models_file_is_fatal_rather_than_a_fallback`); `process` now
+    refuses it identically. Found by M6b's code review.
     """
     try:
         return resolve_models(
             session_dir, config, transcriber, detector, fake_models=fake_models
         ), None
-    except DiscoveryError as exc:
-        if exc.code == "output_inside_raw":
-            raise
-        return None, _error(exc)
     except Exception as exc:
+        # One statement of the rule rather than one per handler. Splitting it across a
+        # `DiscoveryError` clause and a general one left the `--fake-models` half of the
+        # first clause unexercised, which a mutation run caught: reverting it failed
+        # nothing. Two copies of a rule where one is untested is how they drift.
+        #
+        # **Any** `DiscoveryError`, not only `output_inside_raw`. Resolving models reads
+        # `fake-models.json`, verifies two snapshots and loads them; none of that walks the
+        # session's paths, so a discovery failure arriving here is something this handler
+        # did not anticipate — and softening an unanticipated error is how INV-01's
+        # fatality would be quietly downgraded to a warning by code that never considered
+        # it. A missing snapshot raises `ModelError`, which is a sibling rather than a
+        # subclass, so the INV-09 path this function exists for is untouched.
+        if fake_models or isinstance(exc, DiscoveryError):
+            raise
         return None, _error(exc)
 
 

@@ -134,6 +134,92 @@ class TestTheReport:
         assert identity["asr_language"] == "English"
         assert len(identity["asr_variant"]) == 64
 
+    def test_report_records_the_whole_asr_stack(self, canonical_fixture: FixtureTruth) -> None:
+        """The completion gate's list, end to end through the production wiring.
+
+        *"Report records Python, `qwen-asr`, Transformers, Torch, HIP runtime, device,
+        dtype, attention implementation, and resolved model revisions."*
+
+        The charter named this test in its proof table and M6b's first pass did not write
+        it — both independent reviewers found the same hole. What existed covered the pieces
+        and not the wiring: `ReportBuilder` was tested with a hand-made `RuntimeProvenance`,
+        `TranscriberIdentity` was tested as a model, and `test_provenance_carries_the_
+        transcriber_identity` ran the real path but with a *scripted* transcriber, whose
+        bundle leaves every one of these fields `None` — so every conditional branch in
+        `_record_transcriber` was unexecuted and `record_runtime` was never called by a run
+        at all. `_default_transcriber` populating the bundle correctly is the smoke test's
+        half; carrying a populated bundle into the report is this one's, and it is the half
+        that runs on every machine.
+
+        The transcriber is scripted because what is under test is the identity's route to
+        the report, not the model — but the *bundle* is exactly what `_default_transcriber`
+        builds, field for field.
+        """
+        session_dir = canonical_fixture.session_dir
+
+        from dnd_audio.artifacts.report import RuntimeProvenance
+        from dnd_audio.transcript.fakemodels import load_fake_models
+
+        fake = load_fake_models(session_dir)
+        result = run_transcribe(
+            session_dir,
+            detector=fake.detector,
+            transcriber=TranscriberBundle(
+                transcriber=fake.transcriber,
+                name="qwen-asr",
+                model="Qwen/Qwen3-ASR-1.7B",
+                model_revision="7278e1e70fe206f11671096ffdd38061171dd6e5",
+                aligner="Qwen/Qwen3-ForcedAligner-0.6B",
+                aligner_revision="c7cbfc2048c462b0d63a45797104fc9db3ad62b7",
+                runtime=RuntimeProvenance(
+                    python="3.12.13",
+                    torch="2.9.1+rocm7.13.0",
+                    hip="7.13.99004-3309c6114a",
+                    device="cuda:0",
+                    device_name="Radeon 8060S Graphics",
+                    dtype="bfloat16",
+                    attention="sdpa",
+                ),
+                package_version="0.0.6",
+                transformers_version="4.57.6",
+                truncation_margin_tokens=16,
+            ),
+        )
+
+        assert result.exit_code is ExitCode.OK
+        provenance = result.report.provenance
+
+        # The resolved revisions, and the identifiers they are revisions *of*.
+        identity = provenance.model_identity
+        assert identity["asr"] == "Qwen/Qwen3-ASR-1.7B"
+        assert identity["asr_revision"] == "7278e1e70fe206f11671096ffdd38061171dd6e5"
+        assert identity["aligner"] == "Qwen/Qwen3-ForcedAligner-0.6B"
+        assert identity["aligner_revision"] == "c7cbfc2048c462b0d63a45797104fc9db3ad62b7"
+        # The package versions, which belong to the transcriber rather than to the device.
+        assert identity["asr_package_version"] == "0.0.6"
+        assert identity["transformers_version"] == "4.57.6"
+        assert identity["asr_truncation_margin_tokens"] == "16"
+
+        # The runtime half: python, torch, HIP, device, dtype, attention.
+        runtime = provenance.runtime
+        assert runtime is not None, "a run that resolved a runtime must record it"
+        assert runtime.python == "3.12.13"
+        assert runtime.torch == "2.9.1+rocm7.13.0"
+        assert runtime.hip == "7.13.99004-3309c6114a"
+        assert runtime.device == "cuda:0"
+        assert runtime.device_name == "Radeon 8060S Graphics"
+        assert runtime.dtype == "bfloat16"
+        assert runtime.attention == "sdpa"
+
+        # And every one of them reaches the ASR cache key through the same identity, so a
+        # Torch upgrade re-runs the work rather than serving a transcript it did not produce.
+        records = json.loads((session_dir / RECORDS_RELATIVE_PATH).read_text())
+        recorded = records["provenance"]["transcriber"]
+        assert recorded["runtime"]["attention"] == "sdpa"
+        assert recorded["package_version"] == "0.0.6"
+        assert recorded["transformers_version"] == "4.57.6"
+        assert recorded["truncation_margin_tokens"] == 16
+
     def test_every_deliverable_is_hashed(self, transcribed: Any) -> None:
         result, _ = transcribed
         produced = {item.relative_path for item in result.report.provenance.deliverables}

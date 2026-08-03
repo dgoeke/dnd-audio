@@ -26,11 +26,19 @@ from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Final, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from dnd_audio.determinism import canonical_json, sha256_bytes
 from dnd_audio.errors import ConfigError, TimecodeError
-from dnd_audio.models import REVISION_PATTERN
+from dnd_audio.models import QWEN3_ALIGNER, QWEN3_ASR, REVISION_PATTERN
 from dnd_audio.timecode import parse_frame_rate, parse_timecode
 from dnd_audio.timeline import CANONICAL_SAMPLE_RATE as _CANONICAL_SAMPLE_RATE
 
@@ -238,6 +246,33 @@ class AsrConfig(_Strict):
     def _check_context_file(cls, value: str | None) -> str | None:
         return None if value is None else _validate_relative_path(value)
 
+    @field_validator("model", "aligner")
+    @classmethod
+    def _check_repository(cls, value: str, info: ValidationInfo) -> str:
+        """The two repositories this build has snapshots for, and no others.
+
+        These fields exist because the spec's `session.yaml` has them, and they reach the
+        cache key and the report as the identity of what produced a transcript. But
+        `_default_transcriber` verifies and loads the *descriptors* — there is no code path
+        that fetches an arbitrary repository, and `models fetch` has no way to install one.
+        Accepting another name would therefore run Qwen and record something else as having
+        produced the result: a cache key and an ingest report that name weights that were
+        never loaded, which is worse than a refusal because nothing downstream can detect
+        it (INV-08). Refused at configuration load, before any work. Raised by M6b's code
+        review.
+        """
+        expected = QWEN3_ASR.repository if info.field_name == "model" else QWEN3_ALIGNER.repository
+        if value != expected:
+            message = (
+                f"asr {info.field_name} {value!r} is not a repository this build carries. "
+                f"It has snapshots for {expected!r} only, pinned by commit, and no command "
+                f"can install another — so a run would load {expected!r} and record "
+                f"{value!r} as what produced the transcript. Pin a different *revision* of "
+                f"the same repository with `{info.field_name}_revision` instead."
+            )
+            raise ValueError(message)
+        return value
+
     @field_validator("model_revision", "aligner_revision")
     @classmethod
     def _check_revision(cls, value: str | None) -> str | None:
@@ -251,7 +286,12 @@ class AsrConfig(_Strict):
         """
         if value is None:
             return None
-        if not re.match(REVISION_PATTERN, value):
+        # `fullmatch`, not `match`: Python's `$` also matches immediately before a trailing
+        # newline, so `re.match` accepts a 41-character value ending in one — reachable from
+        # a YAML block scalar. The directory layout is keyed by this string, so a revision
+        # with an invisible newline would name a directory nothing installs into. Raised by
+        # M6b's code review.
+        if not re.fullmatch(REVISION_PATTERN, value):
             message = (
                 f"asr revision {value!r} is not a commit. Give the full 40-character "
                 f"lowercase hexadecimal commit sha — a branch or tag moves, and this "

@@ -840,7 +840,18 @@ def verify_tree(root: Path, manifest: Sequence[SnapshotFile], *, key: str) -> st
             return f"{entry.path} does not hash to the pinned {entry.sha256}"
 
     for found in sorted(root.rglob("*")):
-        if found.is_dir() or found in expected:
+        # `is_symlink()` first, and it is not redundant: a symlink *to a directory* answers
+        # `is_dir()` truthfully, so testing `is_dir()` alone skipped it — and `rglob` does
+        # not descend into it, so its contents were never examined either. An unpinned
+        # symlinked directory therefore passed a check whose whole claim is that the tree is
+        # exactly the manifest, while a plain unpinned file was refused. That matters here
+        # rather than in the abstract: `hf download --local-dir` is a tool that has created
+        # symlinks into a shared cache, and Transformers loads a *directory*, so anything
+        # reachable inside it is something a model may read. Found by M6b's verify phase.
+        if found.is_symlink():
+            if found in expected:
+                continue
+        elif found.is_dir() or found in expected:
             continue
         return (
             f"{found.relative_to(root)} is in {root} but is not pinned. Transformers "
@@ -1124,6 +1135,19 @@ def install_snapshot(
     resolved = descriptor.revision if revision is None else revision
     target = snapshot_dir(descriptor, revision=resolved, directory=directory)
     if verify_snapshot(descriptor, revision=resolved, directory=directory) is None:
+        # Verified bytes, so nothing to download — but the lock entry is rewritten anyway.
+        # `fetch` has repaired a deleted lock without re-downloading since M3 (`test_it_
+        # repairs_a_deleted_lock_without_downloading`), and a snapshot that silently did
+        # not would make `models fetch --qwen` report a lock path it had not written. For
+        # an overridden revision the lock *is* the manifest, so its absence already failed
+        # verification above and this line is unreachable; for the pinned one the manifest
+        # is checked in and the entry is reconstructible from it. Found by M6b's code
+        # review.
+        manifest = snapshot_manifest(descriptor, revision=resolved, directory=directory)
+        if manifest is not None:
+            record_snapshot_in_lock(
+                descriptor, revision=resolved, files=manifest, directory=directory
+            )
         return target, False
 
     staging = target.parent / f".staging-{resolved}"

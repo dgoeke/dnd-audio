@@ -70,10 +70,26 @@ waveform submitted; a request beginning at sample 1 600 000 whose first word cam
 correctly drop it as outside its own core. The word would vanish with no error anywhere.
 
 **A malformed alignment is a recoverable per-segment failure, never an exception.**
-Non-finite values, negative times, `end <= start`, non-monotonic items, or items outside the
+Non-finite values, negative times, `end < start`, non-monotonic starts, or items outside the
 submitted window degrade the whole result to `segment_only` with a warning. The alternative
 is one bad aligner item failing `WordRecord` validation and aborting a four-hour session's
 transcript, on the very criterion that asks for the opposite.
+
+**`end == start` is quantization, not corruption, and this decision was amended by running
+it.** This ADR was accepted saying `end <= start` was malformed. On the first real
+transcription this project performed, the aligner returned the word `'a'` at
+`10.800 → 10.800`, and the rule discarded all fifteen word times in that segment. The cause
+is `timestamp_segment_time` — 80 ms on this model — so *any* word shorter than one step comes
+back zero-length. It would have happened to most segments in most sessions, and the only
+symptom would have been a transcript with no word times and a warning saying alignment
+failed. A zero-length item is therefore widened to one sample: the word is there and its
+start is known; what is unknown is a duration below the aligner's resolution, and one sample
+is the smallest half-open interval that says so without inventing an extent. Dropping it
+would silently delete a word instead.
+
+Recorded here rather than only in the code because an ADR is what the next implementor
+trusts: this file said the opposite for the length of one milestone, which M6b's code review
+found, and following it would have reintroduced the loss.
 
 **Truncation is the retokenized-length heuristic**: the returned text retokenized with the
 processor's own public tokenizer, compared against `max_new_tokens` less
@@ -144,6 +160,11 @@ about the world rather than about this code. It is registered as **OQ-022** and 
 the adapter, and the host smoke test measures it.
 
 **OQ-018** items 1–3 — padding sufficient for word recovery, timestamp stability across
-overlapping requests, and whether a low-energy split beats the midpoint — become measurable
-for the first time and are answered by this milestone's smoke test. Item 4, the
-text-similarity thresholds, still needs a real session.
+overlapping requests, and truncation detection — become measurable for the first time and are
+answered by this milestone's smoke test.
+
+Two parts of that item are **not** answered and this ADR previously implied otherwise.
+Whether a low-energy split beats the midpoint is unmeasured: an eight-token ceiling truncates
+everything, and a natural truncation needs an utterance long enough to exhaust 1024 tokens,
+which 47 seconds of one person testing microphones does not contain. Item 4, the
+text-similarity thresholds, still needs a real session. Both remain open under OQ-018.

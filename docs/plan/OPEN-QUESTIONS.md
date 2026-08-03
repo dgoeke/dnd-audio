@@ -601,27 +601,44 @@ request-shaping and text-similarity default in `TranscriptConfig` cites this ent
 the sample probe, on `gfx1151` in bfloat16; `tests/test_qwen_smoke.py` is the instrument and
 prints every number below. Item (4) is untouched and still needs a real session.
 
-**(2) Timestamp stability — answered, and the answer is better than the rule needs.** Two
-requests over the same audio, offset by four seconds so they share twelve. Paired the way M4's
-stitch rule pairs — same `comparison_key` *and* overlapping in time:
+**(2) Timestamp stability — answered, and the rule's hit rate is 96%.** Two requests over the
+same audio, offset by four seconds so they share twelve. The measurement counts every word of
+the shared span whose text appears in both — the duplicates M4's stitch rule *ought* to
+recognize — and then reports how many of them it actually paired, which needs both the same
+`comparison_key` and an overlap in time. Measured 2026-08-03, all four recordings:
 
-| recording | paired words | worst disagreement |
+| recording | paired / shared | worst disagreement among the paired |
 | --- | --- | --- |
-| TX03 (`pcm_f32le`, receiver B) | 18 | **400 ms** (17 of 18 at exactly 0) |
-| TX01 (`pcm_s24le`, receiver A) | 20 | **0 ms** (20 of 20 exact) |
+| TX01 (`pcm_s24le`, receiver A) | 20 / 22 | **0 ms** |
+| TX02 (`pcm_s24le`, receiver A) | 21 / 22 | **80 ms** |
+| TX03 (`pcm_f32le`, receiver B) | 18 / 18 | **400 ms** |
+| TX04 (`pcm_f32le`, receiver B) | 18 / 18 | **320 ms** |
 
-The stitch rule recognizes a duplicate on text plus overlap, and a word whose two placements
-are bit-identical overlaps itself trivially. The failure this item was raised against — times
-wandering by more than a word's length, so the duplicate is emitted twice — is not happening.
-Two recordings from two different receivers and two different sample formats agree, which is
-what makes this a property of the model rather than of one file.
+77 of 80, across two receivers and two sample formats, which is what makes this a property of
+the model rather than of one file. The failure this item was raised against — times wandering
+by more than a word's length, so the duplicate is emitted twice — is not happening at a rate
+that threatens the rule.
 
-*A note on how that number was obtained, because the first attempt got it wrong.* Matching
-shared words by text alone reported five outliers of 2–9 seconds. Those were the test's
-fault: the recording says "testing", "a" and "transmitter" twice, and a text-only key paired
-the first occurrence in one window with the second in the other. Pairing the way the rule
-under test actually pairs is the fix, and it is worth remembering that a measurement of a
-stitch rule has to use the stitch rule's own notion of "the same word".
+**The three misses are worth naming, because two of them are the measurement's fault and one
+is real.** Both `'transmitter'` misses have a nearest counterpart 1.1–1.2 s away: the recording
+says the word repeatedly, so these are almost certainly *different* occurrences that the
+text-keyed candidate count could not tell apart — the same repeated-word confound described
+below, now confined to the denominator instead of the deltas. The real one is TX01's `'a'`,
+whose two placements sit exactly 80 ms apart: one step of the aligner's `timestamp_segment_time`
+quantization, which for a word shorter than one step is enough to stop it overlapping itself.
+So the residual risk is specifically **very short words at a stitch boundary**, and the cost of
+one is that a single word appears twice — visible, harmless, and not worth machinery.
+
+*Two notes on how these numbers were obtained, because the first two attempts were both
+wrong, in opposite directions.* Matching shared words by text alone reported five outliers of
+2–9 seconds — the test's fault, since a text-only key paired the first `"testing"` in one
+window with the second in the other. Pairing the way the rule under test pairs fixed that and
+introduced the opposite error: selecting only words that already overlap and then reporting how
+closely they agree measures nothing, because a word that drifted far enough to stop overlapping
+— which is precisely the failure under investigation — simply leaves the sample. "20 paired,
+worst 0 ms" was true and would have been equally true of a model that got half of them badly
+wrong. Codex's code review caught it. **A measurement of a rule needs the rule's own notion of
+"the same thing" for its numerator and something independent of the rule for its denominator.**
 
 **(3) Truncation — answered.** With `max_new_tokens` forced to 8, the model returned
 `'Testing a first transmitter. Hello, one'` — visibly cut off mid-utterance — and the
