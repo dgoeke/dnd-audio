@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import datetime as dt
+import math
 from pathlib import Path
 from typing import Any, Final, get_args
 
@@ -15,6 +16,7 @@ from dnd_audio.config import (
     _FIELD_SCOPES,
     CONFIG_SCHEMA_VERSION,
     BleedConfig,
+    MixConfig,
     ScoringConfig,
     SessionConfig,
     StageScope,
@@ -230,6 +232,96 @@ class TestRejections:
     def test_unknown_rollover_policy_is_rejected(self, raw: dict[str, Any]) -> None:
         raw["timecode"]["rollover_policy"] = "guess"
         _reject(raw, "Input should be")
+
+
+class TestTheEnvelopeGridIsExact:
+    """ADR-0022: three separate properties, and the second does not follow from the first."""
+
+    def test_a_control_rate_that_does_not_divide_the_session_grid_is_rejected(
+        self, raw: dict[str, Any]
+    ) -> None:
+        raw["mix"] = {"envelope": {"control_rate_hz": 7000}}
+        _reject(raw, "does not divide the 48000 Hz session grid")
+
+    @pytest.mark.parametrize("field", ["attack_ms", "release_ms"])
+    def test_a_time_that_is_not_a_whole_number_of_control_frames_is_rejected(
+        self, raw: dict[str, Any], field: str
+    ) -> None:
+        """800 Hz divides 48000 and an 11 ms attack is 8.8 frames of it.
+
+        The plan review's finding, kept as a test rather than as a comment: stating that the
+        rate divides the sample rate accounts for only half of what the grid needs.
+        """
+        raw["mix"] = {"envelope": {"control_rate_hz": 800, field: 11}}
+        _reject(raw, "not a whole number")
+
+    def test_the_same_times_are_accepted_at_a_rate_that_divides_them(
+        self, raw: dict[str, Any]
+    ) -> None:
+        """The contrast: 11 ms is exact at 1000 Hz, so the refusal above is about the pair."""
+        raw["mix"] = {"envelope": {"control_rate_hz": 1000, "attack_ms": 11, "release_ms": 11}}
+        assert SessionConfig.model_validate(raw).mix.envelope.attack_ms == 11
+
+    def test_an_unachievable_dominance_margin_is_rejected(self, raw: dict[str, Any]) -> None:
+        """The first draft of M5's plan proposed exactly these numbers.
+
+        `20*log10(0.5/0.02) = 27.96 dB` of separation, eroded by twice a 12 dB clamp, leaves
+        3.96 dB against a promised 20 — a mix that would fail its own gate on the first
+        session where a correction was needed, silently.
+        """
+        raw["mix"] = {
+            "envelope": {
+                "room_tone_share": 0.02,
+                "min_active_share": 0.5,
+                "max_level_correction_db": 12.0,
+                "solo_attenuation_margin_db": 20.0,
+            }
+        }
+        _reject(raw, "is not achievable")
+
+    def test_the_shipped_defaults_are_achievable_with_room_to_spare(self) -> None:
+        """40 dB of separation, 12 of it erodible, against a 20 dB promise."""
+        envelope = MixConfig().envelope
+        separation = 20.0 * math.log10(envelope.min_active_share / envelope.room_tone_share)
+        guaranteed = separation - 2.0 * envelope.max_level_correction_db
+        assert separation == pytest.approx(40.0)
+        assert guaranteed >= envelope.solo_attenuation_margin_db + 5.0
+
+    def test_the_default_attack_finishes_inside_the_default_vad_pad(self) -> None:
+        """ADR-0022's stated reason for `attack_ms = 10`, pinned rather than left in prose.
+
+        The candidate the envelope opens on is already padded by `activity.vad.pad_ms`, so a
+        ramp shorter than the pad has the channel open before the word starts. Raising the
+        attack past the pad is how a first phoneme is lost, and nothing else would notice.
+        """
+        assert MixConfig().envelope.attack_ms < VadConfig().pad_ms
+
+    def test_an_unachievable_overlap_floor_is_rejected(self, raw: dict[str, Any]) -> None:
+        """The twin of the dominance validator, and the one that was missing.
+
+        The gate's overlap criterion was a property of the score combinations the tests used
+        rather than of the rule: a speaker scoring zero beside one scoring 1000, cut by the
+        permitted 6 dB, lands at -15.66 dB against the -15 that shipped. Found by M5's code
+        review; the promise now has to be one the share rule can keep.
+        """
+        raw["mix"] = {"envelope": {"overlap_min_gain_db": -15.0}}
+        _reject(raw, "is not achievable across")
+
+    def test_the_shipped_overlap_floor_is_what_the_rule_guarantees(self) -> None:
+        """Derived rather than estimated, and stated to two decimals so it cannot drift."""
+        envelope = MixConfig().envelope
+        assert envelope.guaranteed_overlap_gain_db(6) == pytest.approx(-15.66, abs=0.01)
+        assert envelope.guaranteed_overlap_gain_db(6) >= envelope.overlap_min_gain_db
+
+    def test_more_tracks_divide_the_overlap_guarantee_further(self) -> None:
+        """Why this validator lives on `SessionConfig`: the bound depends on the roster."""
+        envelope = MixConfig().envelope
+        assert envelope.guaranteed_overlap_gain_db(12) < envelope.guaranteed_overlap_gain_db(6)
+
+    def test_release_is_longer_than_attack(self) -> None:
+        """The spec's "short attack and longer release", as a property of the defaults."""
+        envelope = MixConfig().envelope
+        assert envelope.release_ms > envelope.attack_ms
 
 
 class TestRecoveryOverrides:
@@ -490,7 +582,11 @@ _ALTERNATIVES: Final[dict[str, tuple[_Path, Any] | None]] = {
     "asr": (("asr", "max_new_tokens"), 512),
     "transcript": (("transcript", "pad_ms"), 250),
     "sync_qa": (("sync_qa", "enabled"), True),
-    "mix": (("mix", "mp3_bitrate_kbps"), 192),
+    "mix.envelope": (("mix", "envelope", "release_ms"), 250),
+    "mix.encode": (("mix", "encode", "max_retries"), 2),
+    "mix.integrated_lufs": (("mix", "integrated_lufs"), -18.0),
+    "mix.true_peak_dbtp": (("mix", "true_peak_dbtp"), -2.0),
+    "mix.mp3_bitrate_kbps": (("mix", "mp3_bitrate_kbps"), 192),
 }
 
 #: ADR-0016's table, transcribed from the decision rather than derived from the code. The
@@ -517,6 +613,11 @@ _ADR_0016_PROJECTIONS: Final[dict[StageScope, frozenset[str]]] = {
             "activity.correlation_max_lag_ms",
         }
     ),
+    # ADR-0023's render boundary. Placement is deliberately absent: the render identity
+    # carries the timeline's sha256 and the graph's attribution key, each already downstream
+    # of every placement section, and the encode settings are absent because they reach only
+    # the MP3, which is never cached.
+    "mix": frozenset({"schema_version", "session_id", "tracks", "mix.envelope"}),
 }
 
 _MOVABLE: Final[tuple[str, ...]] = tuple(

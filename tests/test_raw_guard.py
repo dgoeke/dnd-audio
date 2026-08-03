@@ -27,6 +27,8 @@ from dnd_audio.config import SessionConfig
 from dnd_audio.errors import DiscoveryError, ExitCode
 from dnd_audio.fixtures import FixtureTruth
 from dnd_audio.inspection.runner import inspect_outputs
+from dnd_audio.mix.runner import run_mix
+from dnd_audio.orchestrate import run_process
 from dnd_audio.raw_guard import (
     raw_roots,
     reject_outputs_inside_raw,
@@ -36,6 +38,28 @@ from dnd_audio.raw_guard import (
 from dnd_audio.timeline.runner import ingest_outputs, run_ingest
 from dnd_audio.transcript.runner import run_transcribe
 from tests.manifests import config_for
+
+
+def _scripted(session_dir: Path) -> Any:
+    """The session's own declared fake detector, so a composed run needs no Silero (INV-05)."""
+    from dnd_audio.transcript.fakemodels import load_fake_models
+
+    return load_fake_models(session_dir).detector
+
+
+#: Every command that composes more than one stage, in one place.
+#:
+#: M2, M3 and M4 each wrote an INV-01 regression test naming only the runner that milestone
+#: had added, and all three carried the same bug for five milestones. So the composed commands
+#: are enumerated here once and every INV-01 property below is parametrized over them: adding a
+#: runner is then one missing entry in one list, which is visible in review.
+COMPOSED: Any = [
+    pytest.param(lambda d: run_ingest(d), id="ingest"),
+    pytest.param(lambda d: run_activity(d, detector=_scripted(d)), id="activity"),
+    pytest.param(lambda d: run_transcribe(d, fake_models=True), id="transcribe"),
+    pytest.param(lambda d: run_mix(d, detector=_scripted(d)), id="mix"),
+    pytest.param(lambda d: run_process(d, fake_models=True), id="process"),
+]
 
 
 def a_session(root: Path, *, input_template: str = "raw/{track}") -> Path:
@@ -254,14 +278,7 @@ class TestCleanupNeverWritesIntoRaw:
         victim.write_text("a real file that lives in a source directory", encoding="utf-8")
         return victim
 
-    @pytest.mark.parametrize(
-        "command",
-        [
-            pytest.param(lambda d: run_ingest(d), id="ingest"),
-            pytest.param(lambda d: run_activity(d), id="activity"),
-            pytest.param(lambda d: run_transcribe(d, fake_models=True), id="transcribe"),
-        ],
-    )
+    @pytest.mark.parametrize("command", COMPOSED)
     def test_a_failed_run_deletes_nothing_under_raw(
         self, canonical_fixture: FixtureTruth, command: Any
     ) -> None:
@@ -275,3 +292,65 @@ class TestCleanupNeverWritesIntoRaw:
         assert result.report_written is False
         assert victim.exists(), "the failure cleanup deleted a file under raw/ (INV-01)"
         assert victim.read_bytes() == before
+
+
+class TestEveryComposedRunVerifiesItsSources:
+    """INV-01's two other halves, over every composed command rather than one each.
+
+    The invariant is enforced by *three* mechanisms — refuse outputs inside `raw/`, hash every
+    source before and after, and prove the check can fail — and until now only the first was
+    parametrized. The other two were tested once per milestone, in the file belonging to
+    whichever runner that milestone happened to add, which is exactly the shape that let one
+    cleanup bug live in all three runners at once.
+    """
+
+    @pytest.mark.parametrize("command", COMPOSED)
+    def test_a_complete_run_leaves_every_source_byte_identical(
+        self, canonical_fixture: FixtureTruth, command: Any
+    ) -> None:
+        """Acceptance criterion 10, for each branch of the DAG separately."""
+        session_dir = canonical_fixture.session_dir
+        config = SessionConfig.model_validate(
+            __import__("yaml").safe_load((session_dir / "session.yaml").read_text())
+        )
+        roots = raw_roots(config)
+        before = snapshot(session_dir, roots)
+        assert before, "the snapshot is empty, so comparing it proves nothing"
+
+        result = command(session_dir)
+
+        assert result.exit_code is ExitCode.OK, [
+            f"{e.code}: {e.message}" for s in result.report.stages for e in s.errors
+        ]
+        assert snapshot(session_dir, roots) == before
+
+    @pytest.mark.parametrize("command", COMPOSED)
+    def test_a_source_corrupted_mid_run_fails_the_run(
+        self, canonical_fixture: FixtureTruth, monkeypatch: pytest.MonkeyPatch, command: Any
+    ) -> None:
+        """The check has to be able to fail, or it proves nothing.
+
+        A source is corrupted from inside the run — after the snapshot and before the
+        verification — which is the only window the invariant is about. The seam is a function
+        every composed runner reaches through `build_timeline`, so one patch drives all of
+        them and none of them can be quietly exempt.
+        """
+        from dnd_audio.artifacts.manifest import Manifest
+        from dnd_audio.timeline import layout
+
+        victim = canonical_fixture.session_dir / canonical_fixture.chunks[0].relative_path
+        original = layout.reject_unusable_sources
+
+        def corrupting(manifest: Manifest) -> None:
+            original(manifest)
+            with victim.open("r+b") as handle:
+                handle.seek(0, 2)
+                handle.write(b"\x00" * 16)
+
+        monkeypatch.setattr("dnd_audio.timeline.runner.reject_unusable_sources", corrupting)
+
+        result = command(canonical_fixture.session_dir)
+
+        assert result.exit_code is not ExitCode.OK
+        codes = {e.code for s in result.report.stages for e in s.errors}
+        assert "raw_sources_modified" in codes

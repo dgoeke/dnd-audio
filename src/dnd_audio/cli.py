@@ -34,7 +34,9 @@ from dnd_audio.determinism import canonical_json
 from dnd_audio.doctor import CheckStatus, overall_status, run_checks
 from dnd_audio.errors import DndAudioError, ExitCode
 from dnd_audio.inspection.runner import InspectionResult, run_inspect
+from dnd_audio.mix.runner import MixResult, run_mix
 from dnd_audio.models import SILERO_VAD, fetch, find_model, lock_path
+from dnd_audio.orchestrate import ProcessResult, run_process
 from dnd_audio.timeline.runner import IngestResult, run_ingest
 from dnd_audio.transcript.runner import (
     RenderResult,
@@ -74,10 +76,37 @@ app.add_typer(models_app, name="models")
 
 
 @app.command()
-def process(session_dir: SessionDir) -> None:
-    """Run every applicable stage, then always finalize the report."""
-    # DEFERRED: M5
-    raise NotImplementedError(f"`process` orchestrates both branches from M5 ({session_dir})")
+def process(
+    session_dir: SessionDir,
+    no_cache: Annotated[
+        bool,
+        typer.Option(
+            "--no-cache",
+            help="Re-run everything, ignoring cached work. Every cache is still written, so "
+            "this costs one slow run rather than every run.",
+        ),
+    ] = False,
+    fake_models: Annotated[
+        bool,
+        typer.Option(
+            "--fake-models",
+            help="Drive speech detection and transcription from this session's declared "
+            "fake-models.json instead of from models. For synthetic fixtures: the real ASR "
+            "adapter lands in M6b.",
+        ),
+    ] = False,
+) -> None:
+    """Run every applicable stage, then always finalize the report.
+
+    Activity runs once; the mix branch and the transcript branch are then attempted
+    independently, so a transcription failure still yields `session.mp3` and a report. A run
+    where either branch failed exits nonzero, so automation cannot mistake partial output for
+    full success (INV-13).
+    """
+    result = run_process(session_dir, use_cache=not no_cache, fake_models=fake_models)
+    _summarize_process(result)
+    if result.exit_code is not ExitCode.OK:
+        raise typer.Exit(code=result.exit_code)
 
 
 @app.command()
@@ -205,10 +234,29 @@ def transcribe(
 
 
 @app.command()
-def mix(session_dir: SessionDir) -> None:
-    """Automix the synchronized tracks and encode session.mp3."""
-    # DEFERRED: M5
-    raise NotImplementedError(f"`mix` lands in M5 ({session_dir})")
+def mix(
+    session_dir: SessionDir,
+    no_cache: Annotated[
+        bool,
+        typer.Option(
+            "--no-cache",
+            help="Re-run everything, ignoring cached work. Every cache is still written, so "
+            "this costs one slow run rather than every run.",
+        ),
+    ] = False,
+) -> None:
+    """Automix the synchronized tracks and encode session.mp3.
+
+    The whole audio branch: inspection, the timeline, activity, the gain envelopes, the
+    streamed mix, and the encode. It never reads a transcript and never runs a model beyond
+    the VAD (INV-09), so it is the branch that survives a transcription failure.
+
+    Always writes `output/ingest-report.json`, including when it fails (INV-13).
+    """
+    result = run_mix(session_dir, use_cache=not no_cache)
+    _summarize_mix(result)
+    if result.exit_code is not ExitCode.OK:
+        raise typer.Exit(code=result.exit_code)
 
 
 @app.command()
@@ -442,6 +490,58 @@ def _summarize_render(result: RenderResult) -> None:
                 typer.secho(
                     f"  error  {error.code}: {error.message}", fg=typer.colors.RED, err=True
                 )
+    _report_line(result.report_written, result.report_path)
+
+
+def _summarize_mix(result: MixResult) -> None:
+    """Human-readable progress for `mix`. The MP3 and the report hold everything."""
+    encoded = result.encode
+    if encoded is not None:
+        decoded = encoded.accepted.measurement
+        loudness = (
+            "unmeasurable"
+            if decoded.integrated_lufs_mb is None
+            else f"{decoded.integrated_lufs_mb / 100:.1f} LUFS"
+        )
+        peak = (
+            "unmeasurable"
+            if decoded.true_peak_dbtp_mb is None
+            else f"{decoded.true_peak_dbtp_mb / 100:.1f} dBTP"
+        )
+        typer.echo(
+            f"  mixed {decoded.n_samples / encoded.facts.sample_rate:.3f}s to "
+            f"{encoded.facts.channels}-channel {encoded.facts.bit_rate_kbps} kbps MP3: "
+            f"{loudness}, {peak}, {len(encoded.attempts)} encode attempt(s)"
+        )
+        for note in encoded.warnings:
+            typer.secho(f"  warn  {note.code}: {note.message}", fg=typer.colors.YELLOW, err=True)
+        typer.echo(f"  mp3        {result.mp3_path}")
+    else:
+        for stage in result.report.stages:
+            for error in stage.errors:
+                typer.secho(
+                    f"  error  {error.code}: {error.message}", fg=typer.colors.RED, err=True
+                )
+    _report_line(result.report_written, result.report_path)
+
+
+def _summarize_process(result: ProcessResult) -> None:
+    """Human-readable progress for `process`: one line per branch, whichever way each went."""
+    encoded = result.encode
+    if encoded is not None:
+        typer.echo(f"  mix        {result.mp3_path}")
+    else:
+        typer.secho("  mix        failed", fg=typer.colors.RED, err=True)
+
+    records = result.records
+    if records is not None:
+        typer.echo(f"  transcript {len(records.retained())} segment(s)")
+    else:
+        typer.secho("  transcript failed", fg=typer.colors.RED, err=True)
+
+    for stage in result.report.stages:
+        for error in stage.errors:
+            typer.secho(f"  error  {error.code}: {error.message}", fg=typer.colors.RED, err=True)
     _report_line(result.report_written, result.report_path)
 
 

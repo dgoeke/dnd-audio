@@ -449,3 +449,76 @@ default would cite an open question and then had none to cite for any of these: 
 only the package's segment limit and OQ-017 only the acoustic side of bleed. Every
 request-shaping and text-similarity default in `TranscriptConfig` cites this entry, so
 `rg 'OQ-018'` finds all of them at once.
+
+## OQ-019 — What do the automix constants need to be at a real table?
+**Assumption:** Six numbers, each of which M5 has to choose before anyone has heard a mix:
+
+1. **`mix.envelope.attack_ms` = 10 and `release_ms` = 300.** Short attack so a word is not
+   clipped, longer release so a channel change does not click or pump. 10 ms is a third of
+   `activity.vad.pad_ms`, so the ramp completes inside the padding the candidate already
+   carries and the channel is open before the word starts — a relationship a test pins,
+   because raising the attack past the pad is how a first phoneme is lost.
+2. **`room_tone_share` = 0.005 and `min_active_share` = 0.5.** The two floors that make the
+   gate's dominance criterion provable rather than incidental: an inactive channel never
+   falls below the first, an active one never below the second, so worst-case solo dominance
+   is `20·log10(0.5/0.005) = 40 dB` before the correction clamp erodes it. Their *ratio* is
+   what matters; their absolute values do not, because during silence every weight is equal
+   and the shares are `1/N` regardless.
+3. **`max_level_correction_db` = 6.** The spec says "clamp correction to a safe range" and
+   names no number. 6 dB is deliberately conservative: it costs 12 dB of the dominance
+   margin (a quiet track lifted while a loud one is cut), and a wearer whose lav is more than
+   6 dB out is a capture problem a mixer should not paper over.
+4. **`solo_attenuation_margin_db` = 20 and `overlap_min_gain_db` = −16.** The gate's
+   "configured attenuation margin" and "nontrivial audible gain". **Both** are validated to be
+   *achievable* from (2) and (3) at configuration load, and both are asserted against the
+   applied coefficient, correction included. The second started at −15 on the estimate "two
+   channels share roughly −6 dB each, and the clamp can take another 6"; that is 0.66 dB
+   optimistic, because the quieter of two speakers holds `min_active_share` while the louder
+   holds full weight and four room-tone floors still take a share. The real bound for six
+   tracks is −15.66 dB, and `EnvelopeConfig.guaranteed_overlap_gain_db` computes it from the
+   roster rather than from a worked example. Corrected in M5's verify phase.
+
+**Why it matters:** Every one is a number chosen against a 10.5-second synthetic fixture
+whose speech is shaped noise and whose bleed is a delayed attenuated copy of its source
+(INV-10). None of them can make the mix *wrong* — the bounded-gain invariant holds for any
+admissible values and the config validator refuses an unachievable combination — but they
+decide whether the result is pleasant to listen to, which no test can assert.
+**Evidence:** The first real session's mix, listened to, against the graph that produced it.
+The pipeline already records each track's correction and every measurement in the report, so
+answering this is reading one report and one MP3 rather than running an experiment.
+**Needs:** H2 or the first real session · **Blocks:** nothing — the mix is correct under
+whatever the configured values are · **Status:** open
+
+## OQ-020 — What does a real 128 kbps mono MP3 encode actually do to peak and duration?
+**Assumption:** Two guesses that shape the encode/verify loop:
+
+1. **True-peak overshoot is small enough that `mix.encode.max_retries` = 3 resolves it**, and
+   that pre-emptively targeting the ceiling from the intermediate's own measured true peak
+   makes the first encode compliant in the ordinary case. Lossy encoding provably introduces
+   overshoot; how much, at this bitrate, on this material, is not known.
+2. **The decoded duration lands within one MP3 frame** (`duration_tolerance_frames` = 1;
+   1152 samples at 48 kHz is 24 ms). LAME writes encoder delay and padding into its Xing/LAME
+   header and FFmpeg's decoder trims accordingly, so the count should be exact — but "should"
+   is the word this entry exists for, and the tolerance is the spec's own "or another
+   documented codec-appropriate tolerance".
+
+Also here: `true_peak_tolerance_db` = 0.3, the "documented measurement tolerance" the gate
+asks for. FFmpeg's `ebur128` summary reports one decimal place, so 0.1 dB of it is pure
+quantization; the rest is margin for a measurement taken on a decode rather than on the
+encoder's own model.
+3. **An overshoot large enough to matter is smaller than `loudness_tolerance_lu`.** A retry
+   reduces the master gain by exactly the overshoot, so on a run that *was* aiming at the
+   loudness target an overshoot above 1 dB makes the retry land outside the loudness tolerance
+   and fail the stage rather than resolve it. The ceiling-limited case is unaffected, because
+   there the loudness comparison is waived (ADR-0023). Noticed in M5's verify phase; no
+   evidence either way, and the fix if it bites is a larger pre-encode ceiling margin rather
+   than a wider tolerance.
+
+**Why it matters:** Set the retry budget too low and a compliant mix is reported as a failed
+stage; set the tolerances too loose and the pipeline claims a compliance it did not verify,
+which the spec forbids in as many words. The failure direction is safe either way — the stage
+**fails** rather than asserting compliance it cannot demonstrate.
+**Evidence:** The measurements are already retained in the report for every attempt, so a
+first real session answers both halves by being encoded once. A 10.5-second fixture answers
+neither: overshoot is a property of material with real dynamics over a real duration.
+**Needs:** H2 or the first real session · **Blocks:** nothing · **Status:** open

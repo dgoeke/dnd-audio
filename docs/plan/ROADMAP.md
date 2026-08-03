@@ -91,8 +91,15 @@ Dugan-style bounded gain sharing, streamed mono mix, two-pass loudness, MP3 enco
 
 **Gate:** Envelope-level assertions (solo dominance after attack, both channels
 audible during overlap, bounded gain invariant, no slew violations) plus decoded
-MP3 duration, integrated loudness, and true peak within configured tolerances. A
-simulated ASR failure still yields MP3 + report with `process` exiting nonzero.
+MP3 duration and true peak within configured tolerances, and integrated loudness
+within tolerance **on a run that aimed at the target** — where the true-peak
+ceiling, the master-gain clamp, or the silence floor forbade aiming at it, the run
+carries the warning naming that guard instead (ADR-0023, and the spec's acceptance
+criterion 8 as amended in M5). A simulated ASR failure still yields MP3 + report
+with `process` exiting nonzero.
+
+`process` lands here too, not in a milestone of its own: it is the dependency-aware
+orchestration of both branches, and it cannot exist before both branches do.
 
 ### M6a — ROCm environment
 
