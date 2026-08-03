@@ -100,6 +100,34 @@ streamed mix, two-pass loudness normalization, and MP3 encode/decode verificatio
 - **The graph does not contain gain.** It says who was speaking and how sure the pipeline is;
   envelopes are entirely this milestone's (ADR-0012 deliberately kept them out).
 
+## What M4 already provides (read before starting)
+
+M5 depends on M3, never on M4 — the graph is unchanged by anything the transcript branch
+decides, asserted by a re-hash inside the composed run and by a structural import test. What
+M4 leaves M5 is not data, it is three runner patterns and one trap.
+
+- **Failure cleanup runs *after* the `output_inside_raw` carve-out, never before it**
+  (ADR-0021). `run_mix` will delete the stale artifacts a failed run left; when an output path
+  resolves inside a source directory those unlinks *are* the INV-01 violation. All three
+  existing composed runners had this backwards, from M2 until M4's verify phase.
+- **`tests/test_raw_guard.py::TestCleanupNeverWritesIntoRaw` needs a `mix` parameter the moment
+  `run_mix` exists.** It is parametrized over every composed command precisely because M2, M3
+  and M4 each wrote a regression test naming only the runner that milestone had added, and all
+  three carried the same bug. Adding the parameter is the whole obligation; forgetting it is
+  what the parametrization makes visible.
+- **A stage that completed keeps its artifacts on a partial failure; a stage that did not
+  keeps nothing.** `ReportBuilder.completed` is the predicate — distinct from `recorded`, which
+  answers INV-13's no-gaps question. This is directly useful here: after a failed `transcribe`
+  the graph is still on disk, which is what lets `mix` run against it and `process` attempt
+  both branches independently.
+- **Two commit points are legitimate and INV-08 is scoped to them** (ADR-0021). If `mix`
+  commits its own caches at a point of its own, verify before publishing at *each* point, and
+  say in the test's name which region it globs.
+- **Nothing text-derived is in the graph, and it is checked rather than trusted.** M4 also
+  closed the hazard M3's review deferred: a test asserts no ASR-derived text reaches
+  `ActivityDecision.detail` or `ActivityNote.message`. The prohibition on M5 *reading* those
+  two fields (below) still stands on its own.
+
 ## Known risks and open questions
 
 - Decoded loudness alone is *not* evidence of correct channel selection. If the

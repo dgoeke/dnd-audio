@@ -84,6 +84,14 @@ complete cache identity — dropped in behind the interface M4 already exercises
   the text-similarity thresholds are all guesses about *this* model. The smoke test can settle
   the first four directly.
 
+- **One collapse case is deferred to you, with its reproducing scores.** Three mutually
+  duplicate segments scoring A=800, B=700, C=900 in canonical order leave A and C both
+  retained, because a segment that has absorbed another may not itself be absorbed. It fails
+  safe — both kept, both marked overlapping — so M4 left it. Decide it with real output: if
+  three lavs never agree closely enough for the shape to occur, delete `collapse.py`'s claim
+  that the survivor is the best source score rather than writing the resolution pass. See
+  M4's closeout.
+
 ## Known risks and open questions
 
 - Depends on **OQ-008, OQ-009, OQ-018**.
