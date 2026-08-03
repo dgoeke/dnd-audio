@@ -13,6 +13,11 @@ cd "$(dirname "$0")/.." || exit 1
 # editor, the CLI, and this gate cannot disagree about what "strict" means.
 TYPE_CHECK="${TYPE_CHECK:-uv run --no-sync mypy src tests scripts}"
 
+# Empty unless PYTEST_WORKERS is set, so the default is whatever `addopts` in
+# pyproject.toml chose and this script never states a worker count of its own.
+PYTEST_PARALLEL=()
+[ -n "${PYTEST_WORKERS:-}" ] && PYTEST_PARALLEL=(-n "$PYTEST_WORKERS")
+
 BOLD=$'\033[1m'; RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; OFF=$'\033[0m'
 PASSED=(); FAILED=(); SKIPPED=()
 
@@ -82,8 +87,22 @@ if [ -f pyproject.toml ]; then
         # `allow_network` is excluded alongside `host_smoke`: it is the socket block's
         # own escape hatch, reserved for `models fetch` (INV-06). Running an opted-out
         # test here would make "the gate is offline" false the moment one exists.
+        #
+        # No `-n` here. The suite runs in parallel because `addopts` in pyproject.toml
+        # says so, which is what makes an ad-hoc `uv run pytest` parallel too; repeating
+        # the worker count here would create a second place for it to drift. Overriding
+        # is still possible and the array below is how — PYTEST_WORKERS=0 forces a
+        # serial in-process run, PYTEST_WORKERS=16 tunes it for a different box —
+        # because a command-line `-n` beats the one in `addopts`.
+        #
+        # Parallelism is safe here for a reason worth stating: both session-scoped
+        # fixtures in `tests/conftest.py` build into their own `tmp_path_factory`
+        # directory, so each worker gets its own copy and nothing crosses the process
+        # boundary. The autouse socket block runs per worker, because every worker
+        # imports the same conftest — parallelism does not widen INV-05.
         step "pytest (offline, cpu)" \
-            uv run --no-sync pytest -m 'not host_smoke and not allow_network' -q
+            uv run --no-sync pytest -m 'not host_smoke and not allow_network' -q \
+                "${PYTEST_PARALLEL[@]}"
 
         if [ -f uv.lock ]; then
             step "lock is current" uv lock --check --offline

@@ -46,6 +46,14 @@ the same phases directly.
 `./scripts/gate.sh` is the mechanical gate. It must pass with no GPU, no model
 weights, and no network.
 
+**The suite runs in parallel by default and you do not have to ask for it.** `-n 8`
+(`pytest-xdist`) is in `addopts` in `pyproject.toml`, so every invocation gets it —
+the gate, an ad-hoc `uv run pytest tests/test_mix_run.py`, an editor's runner. Do not
+add a worker count of your own; the reason it is in configuration rather than in the
+gate script is so there is exactly one place that says it. Pass `-n 0` to run
+in-process when you need a debugger or `-s`, since xdist captures worker output and
+swallows both. `PYTEST_WORKERS=<n>` retunes the gate specifically.
+
 `./scripts/codex-review.sh` gets an independent second opinion from the Codex CLI —
 `plan <N>` before implementing, `code <N>` before closing. Run it at least once per
 milestone. It reasons differently on purpose; treat disagreement as signal, and

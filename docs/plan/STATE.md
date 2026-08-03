@@ -228,13 +228,35 @@ is finished and exercised: `transcript/runner.py::_default_transcriber` holds th
 one construction site (M5). `dnd-audio mix` needs no adapter at all, so an adapter
 regression can never cost a session its audio deliverable. (Claude Code: `/ms-start 6b`.)
 
-Queued first, and deliberately outside any milestone because it touches every milestone's
-tests: **`pytest-xdist` parallelism in the gate**, as its own commit with its own gate run.
-The suite is ~120 s, of which about 80% is ~200 end-to-end tests each running a real
-pipeline stage over the canonical fixture; the other ~1900 unit tests take ~24 s between
-them. This box has 16 cores and the suite is almost entirely independent per test. The risk
-worth watching is a pair of tests that currently pass because of shared `tmp_path_factory`
-ordering surfacing as flakes — which is information, not damage.
+**`pytest-xdist` parallelism is done** (2026-08-03), outside any milestone because it
+touches every milestone's tests. **The suite went from 120 s to ~30 s and the whole gate
+from ~2m20s to ~30 s.** No test or source file changed.
+
+It landed in **`addopts` in `pyproject.toml`, not in `./scripts/gate.sh`** — which is a
+different decision from the one queued here, and the more important half of the change.
+In the gate script it would have been a rule held by convention: the gate parallel, and
+every ad-hoc `uv run pytest` an agent types mid-implementation still serial. In
+configuration it is a mechanism, and it reaches Codex, an editor's runner and a human at
+a shell without any of them knowing it exists. The gate now passes no `-n` at all and
+defers to that number, so only one place states it. `PYTEST_WORKERS=<n>` still retunes
+the gate; `-n 0` on any command line forces a serial in-process run, which is what a
+debugger or `-s` needs.
+
+The predicted flake risk — a pair of tests passing only because of shared
+`tmp_path_factory` ordering — **did not materialize**. Both session-scoped fixtures in
+`tests/conftest.py` build into their own `tmp_path_factory` directory, so each worker
+gets its own copy and there is nothing to share across a process boundary; a dozen full
+parallel runs at worker counts from 4 to 32 were green, 2122 passed every time.
+
+Three things measured that the estimate above got wrong, worth knowing before tuning
+this again. The box has **32 cores, not 16**. The speedup ceiling is **not core count**:
+the serial run already burned **8m44s of CPU inside 2m of wall clock**, because the
+pipeline stages thread internally, so the curve is flat from roughly 8 workers up — 8,
+12, 16 and 32 all land within noise at 30–37 s. And what is *not* flat is **worker
+startup**, which every invocation pays and which only matters once parallelism is the
+default everywhere: on one fast unit file `-n 8` costs 0.7 s where `-n auto` costs
+1.8 s. Hence 8 rather than `auto` — the whole speedup at a quarter of the fixed cost,
+against mildly oversubscribing a 4-core machine.
 
 **Real DJI metadata has still not been validated.** Six milestones have now been built on
 assumptions H1 would settle. M6a is the first that neither needed nor touched them.

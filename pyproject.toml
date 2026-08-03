@@ -26,6 +26,7 @@ dev = [
     "jsonschema>=4.23",
     "mypy>=1.13",
     "pytest>=8.3",
+    "pytest-xdist>=3.6",
     "ruff>=0.8",
     "scipy-stubs>=1.18.0.1",
     "types-jsonschema>=4.23",
@@ -188,7 +189,27 @@ warn_required_dynamic_aliases = true
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
-addopts = "-ra --strict-markers --strict-config"
+# `-n 8` is pytest-xdist, and it lives here rather than in `./scripts/gate.sh` on purpose.
+# Parallelism kept in the gate script is a rule held by convention: it covers the gate and
+# leaves every ad-hoc `uv run pytest` an agent types mid-implementation running serially,
+# which is the shape this project keeps rediscovering — honoured everywhere it was thought
+# about, missed in the one place nobody was. In configuration it is a mechanism instead, and
+# it reaches Codex, an editor's test runner, and a human at a shell without any of them
+# having to know. The gate defers to this number rather than repeating it, for the same
+# reason the mypy invocation does: the editor, the CLI, and the gate cannot disagree about
+# it if only one of them says it.
+#
+# Eight, not `auto`. The suite's speedup ceiling is not core count — the pipeline stages
+# already thread internally, so on the 32-core target host the curve is flat from about 8
+# workers up (8, 12, 16 and 32 all land within noise at 31–37 s, against 120 s serial).
+# What is *not* flat is worker startup, which every invocation pays: on one fast unit file
+# `-n 8` costs 0.7 s where `-n auto` costs 1.8 s, and a tight edit-test loop pays that
+# dozens of times. Eight buys the whole speedup at a quarter of the fixed cost. It
+# oversubscribes a 4-core machine mildly, which is the accepted trade.
+#
+# `-n 0` on the command line overrides this and runs in-process. Reach for it under a
+# debugger or with `-s`: xdist captures worker output and swallows both.
+addopts = "-ra --strict-markers --strict-config -n 8"
 markers = [
     "host_smoke: needs the target host — GPU, ROCm, or model weights. Excluded by ./scripts/gate.sh (INV-05).",
     "allow_network: opts out of the socket block. Reserved for `models fetch`, the only command INV-06 permits to touch the network.",
