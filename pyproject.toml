@@ -10,7 +10,16 @@ license-files = ["LICENSE"]
 requires-python = ">=3.12,<3.13"
 
 dependencies = [
-    "numpy>=2.1",
+    # The ceiling is not this project's own need — nothing here cares which side of 2.5
+    # numpy sits on. It comes from `qwen-asr` -> `librosa` -> `numba`, and it is stated
+    # here rather than in the group because uv resolves one numpy for the whole lock, so
+    # a constraint hidden in an opt-in group would silently decide the version the
+    # everyday environment gets. Newest numba (0.66.0) requires `numpy<2.5`; without this
+    # ceiling the resolver satisfies librosa by backtracking to numba 0.53.1 (2021), whose
+    # metadata declares no numpy bound and whose sdist refuses to build on anything past
+    # Python 3.9 — a five-year-old package chosen silently, failing only at build time.
+    # Lift it when numba supports 2.5 (M6b).
+    "numpy>=2.1,<2.5",
     "onnxruntime>=1.20",
     "pydantic>=2.9",
     "pyyaml>=6.0",
@@ -60,7 +69,13 @@ dev = [
 #   nothing. Pinning them to what M6b will actually need means M6b does not relock and
 #   redownload a multi-gigabyte environment this milestone just settled.
 #
-# `qwen-asr` itself is still M6b's.
+# * **qwen-asr**, added in M6b. It pins `transformers==4.57.6` and `accelerate==1.12.0`
+#   itself, which is why M6a put those two here a milestone early at exactly those
+#   versions: adding this package must not relock a multi-gigabyte stack that was
+#   already settled and proved on the device. It also brings `nagisa`, `soynlp`,
+#   `qwen-omni-utils`, `librosa`, `soundfile`, `sox`, `gradio`, `flask` and `pytz` —
+#   all from PyPI, none of them AMD-only, so none needs a `[tool.uv.sources]` entry.
+#   `vllm` is an extra and is deliberately not requested (ADR-0028).
 asr-qwen = [
     "torch==2.9.1+rocm7.13.0",
     "rocm[libraries]==7.13.0",
@@ -69,6 +84,16 @@ asr-qwen = [
     "triton==3.5.1+rocm7.13.0",
     "transformers==4.57.6",
     "accelerate==1.12.0",
+    "qwen-asr==0.0.6",
+    # A floor, not a pin, and it is here to make a future failure loud. `librosa` asks
+    # only for `numba>=0.51`, so when a numpy bump next outruns numba the resolver's
+    # cheapest escape is to walk backwards through numba releases until it finds one whose
+    # metadata declares no numpy ceiling — arriving at 2021 and failing in a compiler
+    # rather than in the resolver. With this floor that search has nowhere to go and uv
+    # reports the real conflict instead. Same principle as routing every AMD-only package
+    # explicitly: the danger is not the wrong answer, it is the wrong answer arrived at
+    # quietly (ADR-0025).
+    "numba>=0.62",
 ]
 
 [build-system]

@@ -324,6 +324,63 @@ class TestTheLockIsWhatWeAskedFor:
         assert {"typer", "pydantic", "pyyaml", "numpy", "pytest", "ruff", "mypy"} <= names
 
 
+class TestQwenArrivedWithoutDisturbingAnything:
+    """M6b added one package to a group M6a had already settled on the real device.
+
+    M6a's closeout names the risk in as many words: `qwen-asr` pulls Gradio, Flask,
+    `nagisa`, `soynlp` and Python SoX, and one AMD-only requirement among them would have
+    resolved from PyPI silently, because `[tool.uv.sources]` ignores a transitive-only
+    name. It did not happen — the assertions above still hold at exactly five AMD
+    packages — and these are the ones that say so about *this* package rather than in
+    general.
+    """
+
+    def test_qwen_asr_is_a_direct_member_of_the_group(self, pyproject: dict[str, object]) -> None:
+        assert "qwen-asr" in _group(pyproject, "asr-qwen")
+
+    def test_qwen_asr_and_its_notable_dependencies_all_come_from_pypi(
+        self, lock: dict[str, object]
+    ) -> None:
+        """Named individually rather than left to the general assertion.
+
+        `test_everything_else_comes_from_pypi` would catch any of these arriving from the
+        AMD index, but it would report it as an anonymous stray. These are the five M6a
+        singled out as the ones to watch, so a failure here says which one moved.
+        """
+        packages = _packages(lock)
+        watched = ("qwen-asr", "gradio", "flask", "nagisa", "soynlp", "sox")
+        for name in watched:
+            assert name in packages, f"{name} is not in the lock at all"
+            assert _registry(packages[name]) == "https://pypi.org/simple", name
+
+    def test_transformers_and_accelerate_did_not_move(self, lock: dict[str, object]) -> None:
+        """The reason M6a pinned these a milestone early.
+
+        `qwen-asr` 0.0.6 pins `transformers==4.57.6` and `accelerate==1.12.0` itself. M6a
+        put those exact versions in the group so that adding this package could not relock
+        and redownload a multi-gigabyte stack it had just proved on the device. If this
+        ever fails, something upstream moved and it is worth understanding before the new
+        resolution is accepted (STATE.md).
+        """
+        packages = _packages(lock)
+        assert str(packages["transformers"]["version"]) == "4.57.6"
+        assert str(packages["accelerate"]["version"]) == "1.12.0"
+
+        # Not vacuous: `qwen-asr` has to actually want them for the versions above to be
+        # the ones it constrained. If it stopped depending on either, this milestone's
+        # pins would be holding nothing in place and the equality would still pass.
+        assert {"transformers", "accelerate"} <= set(_dependency_names(packages["qwen-asr"]))
+
+    def test_vllm_is_not_in_the_lock(self, lock: dict[str, object]) -> None:
+        """`qwen-asr[vllm]` is an extra, and it is deliberately not requested (ADR-0028).
+
+        The spec says not to make vLLM a prerequisite. Requesting the extra would pull a
+        second inference stack with its own CUDA expectations into a lock whose whole
+        point is that exactly five packages come from AMD's index.
+        """
+        assert "vllm" not in _packages(lock)
+
+
 class TestMarkerWiring:
     """`host_smoke` and `allow_network` only work if both ends agree."""
 

@@ -319,7 +319,11 @@ class EnvelopeStream:
         Accepts one frame or many; the sum is taken over the last axis either way.
         """
         weights = np.maximum(presence, self._settings.room_tone_share)
-        return weights / np.sum(weights, axis=-1, keepdims=True)
+        # Annotated rather than returned directly: numpy 2.4's stubs type `np.sum` as
+        # `Any`, so the quotient widens and strict mode rejects the return. The arithmetic
+        # is unchanged — this says what the array already is (M6b, numpy 2.5 -> 2.4).
+        shares: npt.NDArray[np.float64] = weights / np.sum(weights, axis=-1, keepdims=True)
+        return shares
 
     def _check(
         self,
