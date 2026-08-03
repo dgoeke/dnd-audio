@@ -62,6 +62,7 @@ class TestScriptedTranscriber:
             request_id="req-1",
             text="We should go back to Zephyrine.",
             words=(TranscribedWord(start_sample=8_000, end_sample=9_000, text="We"),),
+            alignment_status="aligned",
         )
         transcriber = ScriptedTranscriber({"req-1": expected})
         assert transcriber.transcribe(_request()) == expected
@@ -95,6 +96,42 @@ class TestScriptedTranscriber:
             {"req-1": TranscriptionResult(request_id="req-1", text="cut off mid", truncated=True)}
         )
         assert transcriber.transcribe(_request()).truncated is True
+
+
+class TestAlignmentStatusIsStatedNotInferred:
+    """A result says whether its word times are aligned; nothing guesses from `words`.
+
+    ADR-0005 named three states and only the adapter can tell `segment_only` — the aligner
+    ran and failed — from `not_attempted`. The two consistency rules exist so a mismatch is
+    an error at the seam rather than a wrong `alignment_status` in a transcript.
+    """
+
+    def test_aligned_requires_words(self) -> None:
+        with pytest.raises(ValueError, match="carries no words"):
+            TranscriptionResult(request_id="req-1", text="hello", alignment_status="aligned")
+
+    def test_words_require_aligned(self) -> None:
+        word = TranscribedWord(start_sample=8_000, end_sample=9_000, text="hello")
+        with pytest.raises(ValueError, match="alignment_status='segment_only'"):
+            TranscriptionResult(
+                request_id="req-1",
+                text="hello",
+                words=(word,),
+                alignment_status="segment_only",
+            )
+
+    def test_a_wordless_result_defaults_to_not_attempted(self) -> None:
+        result = TranscriptionResult(request_id="req-1", text="hello")
+        assert result.alignment_status == "not_attempted"
+        assert result.words == ()
+
+    def test_a_public_document_is_optional_and_is_not_the_result_itself(self) -> None:
+        """`None` means "this object is already its own public form" — M6b fills it."""
+        assert TranscriptionResult(request_id="req-1", text="hi").public_document is None
+        carried = TranscriptionResult(
+            request_id="req-1", text="hi", public_document={"language": "English", "text": "hi"}
+        )
+        assert carried.public_document == {"language": "English", "text": "hi"}
 
 
 class TestScriptedActivityDetector:

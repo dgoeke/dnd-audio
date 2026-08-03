@@ -156,6 +156,56 @@
       "title": "BleedConfig",
       "type": "object"
     },
+    "DuplicateConfig": {
+      "additionalProperties": false,
+      "description": "When two tracks' segments are the same utterance heard twice (spec, Milestone 3).\n\nCollapse needs **all three** of substantial temporal overlap, strongly similar normalized\ntext, and supporting acoustic evidence — and the acoustic half comes from the activity\ngraph's own per-pair measurements rather than from a second correlator (ADR-0017).\n\nThe thresholds split by what settles them. The text ones are calibrated against *Qwen's*\nerror distribution — how differently one model transcribes the same utterance heard on two\nlavs (OQ-018). The acoustic ones are about a real room, which is OQ-017's question.",
+      "properties": {
+        "min_correlation": {
+          "default": 0.5,
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "Min Correlation",
+          "type": "number"
+        },
+        "min_overlap_ratio": {
+          "default": 0.5,
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "Min Overlap Ratio",
+          "type": "number"
+        },
+        "min_score_margin": {
+          "default": 0.1,
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "Min Score Margin",
+          "type": "number"
+        },
+        "min_text_chars": {
+          "default": 12,
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Min Text Chars",
+          "type": "integer"
+        },
+        "min_text_similarity": {
+          "default": 0.85,
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "Min Text Similarity",
+          "type": "number"
+        },
+        "min_text_words": {
+          "default": 4,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Min Text Words",
+          "type": "integer"
+        }
+      },
+      "title": "DuplicateConfig",
+      "type": "object"
+    },
     "MixConfig": {
       "additionalProperties": false,
       "description": "Automix and encode targets. M5 extends this.",
@@ -478,6 +528,52 @@
       "title": "TrackConfig",
       "type": "object"
     },
+    "TranscriptConfig": {
+      "additionalProperties": false,
+      "description": "How activity candidates become ASR requests, and what happens to the answers.\n\nEvery default here is a guess about a model this milestone deliberately does not have.\n**OQ-018** is the record of that, and it is cited from each one so `rg 'OQ-018'` finds\nthem together when M6b can finally measure them.",
+      "properties": {
+        "duplicate": {
+          "$ref": "#/$defs/DuplicateConfig"
+        },
+        "max_truncation_retries": {
+          "default": 4,
+          "maximum": 32,
+          "minimum": 0,
+          "title": "Max Truncation Retries",
+          "type": "integer"
+        },
+        "merge_gap_ms": {
+          "default": 1500,
+          "maximum": 60000,
+          "minimum": 0,
+          "title": "Merge Gap Ms",
+          "type": "integer"
+        },
+        "min_split_core_ms": {
+          "default": 2000,
+          "exclusiveMinimum": 0,
+          "maximum": 120000,
+          "title": "Min Split Core Ms",
+          "type": "integer"
+        },
+        "overlap_min_ms": {
+          "default": 250,
+          "maximum": 60000,
+          "minimum": 0,
+          "title": "Overlap Min Ms",
+          "type": "integer"
+        },
+        "pad_ms": {
+          "default": 500,
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Pad Ms",
+          "type": "integer"
+        }
+      },
+      "title": "TranscriptConfig",
+      "type": "object"
+    },
     "VadConfig": {
       "additionalProperties": false,
       "description": "Where speech starts and stops on one track.\n\nEvery default here is a number chosen against synthetic audio and **OQ-017** is the\nrecord of that: a real session is what will move them.",
@@ -599,6 +695,9 @@
       "minItems": 1,
       "title": "Tracks",
       "type": "array"
+    },
+    "transcript": {
+      "$ref": "#/$defs/TranscriptConfig"
     }
   },
   "required": [

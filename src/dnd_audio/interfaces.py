@@ -20,10 +20,12 @@ session timeline.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 import numpy.typing as npt
+
+from dnd_audio.artifacts.transcript import AlignmentStatus
 
 __all__ = [
     "ActivityDetector",
@@ -136,6 +138,31 @@ class TranscriptionResult:
     #: The backend reported a length stop, or the text looks cut off at the generation
     #: ceiling. M4 responds by splitting the core and retrying, within a bounded count.
     truncated: bool = False
+    #: Whether word times are here, and if not, why. Only the adapter knows the difference
+    #: between "the aligner ran and failed" and "no aligner ran", and the two mean different
+    #: things to an operator reading a transcript with no word times in it (ADR-0005). It is
+    #: stated rather than inferred from ``words`` because inference cannot tell them apart.
+    alignment_status: AlignmentStatus = "not_attempted"
+    #: The backend's *own* public result, losslessly serialized, for the versioned raw
+    #: artifact the spec requires before normalization. ``None`` for a transcriber whose
+    #: result already is its public form — every fake here — in which case the raw artifact
+    #: records this object and says so. Never a pickle, and never a private API's output.
+    public_document: dict[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        if self.alignment_status == "aligned" and not self.words:
+            message = (
+                f"result for {self.request_id} claims alignment succeeded but carries no "
+                f"words; `aligned` is what says word times are present"
+            )
+            raise ValueError(message)
+        if self.alignment_status != "aligned" and self.words:
+            message = (
+                f"result for {self.request_id} carries {len(self.words)} word(s) with "
+                f"alignment_status={self.alignment_status!r}. Word times that nothing claims "
+                f"are aligned would be serialized as though they were."
+            )
+            raise ValueError(message)
 
 
 @runtime_checkable

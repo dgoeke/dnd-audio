@@ -488,6 +488,7 @@ _ALTERNATIVES: Final[dict[str, tuple[_Path, Any] | None]] = {
     "title": (("title",), "Session 02"),
     "language": (("language",), "German"),
     "asr": (("asr", "max_new_tokens"), 512),
+    "transcript": (("transcript", "pad_ms"), 250),
     "sync_qa": (("sync_qa", "enabled"), True),
     "mix": (("mix", "mp3_bitrate_kbps"), 192),
 }
