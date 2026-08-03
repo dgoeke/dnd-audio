@@ -36,6 +36,7 @@ from typing import Annotated, Final, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from dnd_audio.artifacts.report import RuntimeProvenance
 from dnd_audio.artifacts.transcript import AlignmentStatus, TranscriptSpeaker
 
 __all__ = [
@@ -135,6 +136,25 @@ class TranscriberIdentity(_Artifact):
     #: Distinguishes two instances of one implementation. Scripted transcribers hash their
     #: script into it; a real one leaves it unset because its revision already differs.
     variant_digest: Sha256Hex | None = None
+    #: The compute runtime the adapter resolved: python, torch, HIP, device, device name,
+    #: dtype, attention. **Nested rather than flattened into fields beside these**, which is
+    #: the point: M6a defined that vocabulary once, in `RuntimeProvenance`, precisely so
+    #: M6b would not build a second one for the cache key to drift from (INV-08). The same
+    #: audio transcribed in BF16 on gfx1151 and in float32 on a CPU are not the same result,
+    #: and a Torch or HIP upgrade can change a kernel's rounding.
+    #:
+    #: ``None`` for a transcriber that resolved no runtime — every fake, which is why this
+    #: is optional rather than required (ADR-0005's additive rule).
+    runtime: RuntimeProvenance | None = None
+    #: The `qwen-asr` distribution version. Its release notes are not the model's, but its
+    #: prompt construction, chunking and output parsing all change what a request returns.
+    package_version: str | None = None
+    #: Transformers' version. Reaches the key for the same reason: generation is its code.
+    transformers_version: str | None = None
+    #: How close to `max_new_tokens` a response must land to be called truncated. In the key
+    #: because it decides whether a split-and-retry happened, and therefore what the text is
+    #: (ADR-0028). ``None`` for a transcriber with no such notion.
+    truncation_margin_tokens: int | None = Field(default=None, ge=0)
 
 
 class TranscriptRecordsProvenance(_Artifact):

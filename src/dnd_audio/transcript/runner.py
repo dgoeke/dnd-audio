@@ -54,6 +54,7 @@ from dnd_audio.artifacts.report import (
     IngestReport,
     ReportBuilder,
     ReportWarning,
+    RuntimeProvenance,
     StageName,
     StructuredError,
 )
@@ -128,6 +129,14 @@ class TranscriberBundle:
     aligner_revision: str | None = None
     #: Distinguishes two instances of one implementation. A script hashes itself into it.
     variant_digest: str | None = None
+    #: The compute runtime this transcriber resolved, or ``None`` for one that resolved
+    #: none. Carried here rather than looked up later for the same reason the model name is:
+    #: the identity has to be complete *before* the first request, because it decides
+    #: whether that request has to be submitted at all (INV-08).
+    runtime: RuntimeProvenance | None = None
+    package_version: str | None = None
+    transformers_version: str | None = None
+    truncation_margin_tokens: int | None = None
 
     def identity(self, config: SessionConfig, context_sha256: str | None) -> TranscriberIdentity:
         return TranscriberIdentity(
@@ -140,6 +149,10 @@ class TranscriberBundle:
             language=config.language,
             context_sha256=context_sha256,
             variant_digest=self.variant_digest,
+            runtime=self.runtime,
+            package_version=self.package_version,
+            transformers_version=self.transformers_version,
+            truncation_margin_tokens=self.truncation_margin_tokens,
         )
 
 
@@ -230,7 +243,7 @@ def run_transcribe(
         before = snapshot(session_dir, roots)
         reject_outputs_inside_raw(session_dir, config, roots, transcribe_outputs(session_dir))
 
-        models = resolve_models(session_dir, transcriber, detector, fake_models=fake_models)
+        models = resolve_models(session_dir, config, transcriber, detector, fake_models=fake_models)
         work = perform_activity(
             session_dir,
             config,
@@ -405,20 +418,36 @@ class Models:
     transcriber: TranscriberBundle
     detector: DetectorBundle | None
     warnings: tuple[TranscriptNote, ...] = ()
+    #: The compute runtime, for `ReportBuilder.record_runtime`. Carried out to the caller
+    #: rather than recorded here because this function does not have the builder — and it
+    #: must not, since `process` resolves models before it has decided to write a report.
+    runtime: RuntimeProvenance | None = None
 
 
 def resolve_models(
     session_dir: Path,
+    config: SessionConfig,
     transcriber: TranscriberBundle | None,
     detector: DetectorBundle | None,
     *,
     fake_models: bool,
 ) -> Models:
-    """Resolve both model seams, explicitly and visibly (ADR-0018)."""
+    """Resolve both model seams, explicitly and visibly (ADR-0018).
+
+    Takes ``config`` because the real adapter needs it: the device, the dtype and the model
+    revisions all come from `session.yaml`, and a resolver that could not see them would
+    honour none of them. The plan review caught that omission before any code existed.
+    """
     if transcriber is not None:
-        return Models(transcriber=transcriber, detector=detector)
+        return Models(transcriber=transcriber, detector=detector, runtime=transcriber.runtime)
     if not fake_models:
-        return Models(transcriber=_default_transcriber(session_dir), detector=detector)
+        bundle, warnings = _default_transcriber(config)
+        return Models(
+            transcriber=bundle,
+            detector=detector,
+            warnings=warnings,
+            runtime=bundle.runtime,
+        )
 
     from dnd_audio.transcript.fakemodels import load_fake_models
 
@@ -441,19 +470,80 @@ def resolve_models(
     )
 
 
-def _default_transcriber(session_dir: Path) -> TranscriberBundle:
-    """The real adapter, which does not exist yet.
+def _default_transcriber(
+    config: SessionConfig,
+) -> tuple[TranscriberBundle, tuple[TranscriptNote, ...]]:
+    """The real adapter: probe the machine, verify both snapshots, load, and report.
 
-    Raises the builtin `NotImplementedError` annotated at the raise site, the same shape every
-    other unbuilt stage uses, so `scripts/scan_placeholders.py` can see it. The seam is real
-    and everything above it is finished; what is missing is one implementation behind it.
+    The order matters and is the order M5 asked for. Everything that can fail — an
+    unavailable device, an unverifiable snapshot, a model that will not load — fails *here*,
+    before the raw snapshot is acted on and before any cache is written. A run on a host
+    without the weights gets a named, actionable failure rather than a half-finished session.
+
+    The resolver's warnings are carried out rather than swallowed: a `device: auto` run that
+    fell back to CPU must say so prominently, because the difference on a session-length
+    recording is minutes against hours and the only other evidence is the wall clock.
     """
-    # DEFERRED: M6b
-    raise NotImplementedError(
-        f"`transcribe` needs the Qwen adapter, which lands in M6b. Until then, a synthetic "
-        f"session can be transcribed from its own declared script with --fake-models "
-        f"({session_dir})"
+    from dnd_audio.models import QWEN3_ALIGNER, QWEN3_ASR, require_snapshot
+    from dnd_audio.runtime import probe_runtime, resolve_runtime
+    from dnd_audio.transcript.qwen import (
+        ATTENTION_IMPLEMENTATION,
+        QWEN_BACKEND_NAME,
+        QwenTranscriber,
+        load_qwen_backend,
+        qwen_asr_version,
     )
+
+    resolution = resolve_runtime(
+        device=config.asr.device, dtype=config.asr.dtype, probe=probe_runtime()
+    )
+
+    asr_revision = config.asr.model_revision or QWEN3_ASR.revision
+    aligner_revision = config.asr.aligner_revision or QWEN3_ALIGNER.revision
+    asr_dir = require_snapshot(QWEN3_ASR, revision=asr_revision)
+    aligner_dir = require_snapshot(QWEN3_ALIGNER, revision=aligner_revision)
+
+    backend = load_qwen_backend(
+        asr_dir=asr_dir,
+        aligner_dir=aligner_dir,
+        device=resolution.device,
+        dtype=resolution.dtype,
+        max_new_tokens=config.asr.max_new_tokens,
+    )
+    runtime = resolution.provenance().model_copy(update={"attention": ATTENTION_IMPLEMENTATION})
+
+    bundle = TranscriberBundle(
+        transcriber=QwenTranscriber(
+            backend,
+            max_new_tokens=config.asr.max_new_tokens,
+            truncation_margin_tokens=config.asr.truncation_margin_tokens,
+        ),
+        name=QWEN_BACKEND_NAME,
+        model=config.asr.model,
+        model_revision=asr_revision,
+        aligner=config.asr.aligner,
+        aligner_revision=aligner_revision,
+        runtime=runtime,
+        package_version=qwen_asr_version(),
+        transformers_version=_transformers_version(),
+        truncation_margin_tokens=config.asr.truncation_margin_tokens,
+    )
+    warnings = tuple(
+        TranscriptNote(code="asr_runtime_fallback", message=message)
+        for message in resolution.warnings
+    )
+    return bundle, warnings
+
+
+def _transformers_version() -> str:
+    """Transformers' version, for the report and the cache key (INV-08).
+
+    Read from distribution metadata rather than by importing the package, which is a
+    multi-second import and has already happened by the time this is called anyway.
+    """
+    from importlib.metadata import version
+
+    return version("transformers")
 
 
 def perform_transcript(
@@ -507,6 +597,12 @@ def perform_transcript(
     )
 
     builder.record_cache(hits=cache.hits, misses=cache.misses)
+    if models.runtime is not None:
+        # Here rather than in either caller, because both reach ASR through this function
+        # and a second recording site is a second thing to keep in step. `record_runtime`
+        # refuses a *different* runtime rather than overwriting, so recording it once at
+        # the point the models were actually used is also the honest place.
+        builder.record_runtime(models.runtime)
     _record_transcriber(builder, identity)
     for decision in records.decisions:
         builder.record_decision(
@@ -692,6 +788,19 @@ def _record_transcriber(builder: ReportBuilder, identity: TranscriberIdentity) -
     builder.record_model_identity("asr_language", identity.language)
     if identity.context_sha256 is not None:
         builder.record_model_identity("asr_context_sha256", identity.context_sha256)
+    # The spec's list is python, qwen-asr, Transformers, Torch, HIP runtime, device, dtype,
+    # attention implementation, and resolved model revisions. The revisions are above; the
+    # runtime half lives in the report's own `runtime` subsection, recorded from `Models`;
+    # these two are the package versions, which belong to the transcriber rather than to
+    # the device and so have no home there.
+    if identity.package_version is not None:
+        builder.record_model_identity("asr_package_version", identity.package_version)
+    if identity.transformers_version is not None:
+        builder.record_model_identity("transformers_version", identity.transformers_version)
+    if identity.truncation_margin_tokens is not None:
+        builder.record_model_identity(
+            "asr_truncation_margin_tokens", str(identity.truncation_margin_tokens)
+        )
 
 
 def _builder(

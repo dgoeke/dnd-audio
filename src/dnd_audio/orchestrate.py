@@ -26,10 +26,17 @@ reads unchecked — and INV-01's guarantee is about a complete run, not about ea
 A stage marked complete before that check would have to be un-marked afterwards, so nothing is
 marked until the check has passed.
 
-**A missing ASR adapter is not a branch failure.** Before M6b lands, a `process` run without
-`--fake-models` raises the same `DEFERRED: M6b` `NotImplementedError` that `transcribe` does,
-*before any work*, rather than producing a report that calls the session broken (ADR-0005). An
-operator who wants the audio branch on such a host runs `mix`.
+**An unusable ASR runtime is a branch failure, and M6b is where that changed.** Until the
+adapter existed, a run without `--fake-models` raised before any work and stopped everything:
+"this pipeline has not built that yet" is not "your session is broken" (ADR-0005), and a
+half-finished run would have been a third and worse answer. The adapter exists now, so the
+same situation means something else — the weights are absent, the device is unavailable, or
+the opt-in `asr-qwen` group is not installed — and that is an ordinary transcription failure,
+which is exactly what INV-09 says must still yield `session.mp3`.
+
+Both halves are kept. Models are still resolved **before any work**, so a model that will not
+load costs nothing and leaves nothing behind; but its failure is recorded as the transcript
+branch's rather than the run's, and the mix branch proceeds.
 """
 
 from __future__ import annotations
@@ -132,8 +139,9 @@ def run_process(
     """Run every applicable stage, attempt both branches, and always finalize the report.
 
     Never raises for an expected failure: a fatal condition becomes a failed stage, a
-    structured error, a written report, and a nonzero exit code (INV-13). The one exception is
-    a missing ASR adapter, which is raised before any work — see the module docstring.
+    structured error, a written report, and a nonzero exit code (INV-13). That now includes an
+    unusable ASR runtime, which costs the transcript branch and not the mix — see the module
+    docstring.
     """
     started_at = now or dt.datetime.now(dt.UTC)
     paths = _Paths(session_dir)
@@ -151,16 +159,31 @@ def run_process(
         before = snapshot(session_dir, roots)
         reject_outputs_inside_raw(session_dir, config, roots, process_outputs(session_dir))
 
-        # Resolved before anything is written. A `NotImplementedError` here means the adapter
-        # does not exist yet, which is a different answer from "your session is broken"
-        # (ADR-0005) and must not become a half-finished run.
-        models = resolve_models(session_dir, transcriber, detector, fake_models=fake_models)
+        # Resolved before anything is written, so a model that will not load fails before
+        # the first cache is written rather than partway through six tracks of inference.
+        #
+        # **Its failure belongs to the transcript branch, not to the run.** Until M6b this
+        # raised `NotImplementedError` and stopped everything, which was right when it meant
+        # "the adapter does not exist yet". Now it means the weights are absent, the device
+        # is unavailable, or the runtime will not load — which is precisely the transcription
+        # failure INV-09 says must still yield `session.mp3`. Letting it kill the run would
+        # violate the invariant in the one case it exists for, and on every machine without
+        # the opt-in group rather than hypothetically (found by M6b's own CLI test).
+        models, model_error = _resolve_or_defer(
+            session_dir, config, transcriber, detector, fake_models=fake_models
+        )
 
         work = perform_activity(
             session_dir,
             config,
             builder=builder,
-            detector=models.detector,
+            # The caller's detector when the ASR seam failed to resolve. That is not a
+            # fallback: on the non-fake path `resolve_models` passes this argument through
+            # untouched, so it is the same value either way — and the *activity* stage has
+            # to run regardless, because the mix consumes its graph. A fake-models file that
+            # cannot be read fails both seams and does stop the run, which is right: there
+            # is no graph then, and a mix of silence is worse than a failure.
+            detector=detector if models is None else models.detector,
             use_cache=use_cache,
             mix=True,
             window_samples=window_samples,
@@ -187,18 +210,24 @@ def run_process(
             before=before,
             use_cache=use_cache,
         )
-        _transcript_branch(
-            session_dir,
-            config,
-            work,
-            state,
-            models=models,
-            builder=builder,
-            roots=roots,
-            before=before,
-            use_cache=use_cache,
-            graph_sha256=graph_sha256,
-        )
+        if models is None:
+            # The branch cannot run, and the reason is already known. Recorded here rather
+            # than at resolution time so it lands in the same place as any other transcript
+            # failure and the report cannot tell the two apart by accident.
+            state.transcript_error = model_error
+        else:
+            _transcript_branch(
+                session_dir,
+                config,
+                work,
+                state,
+                models=models,
+                builder=builder,
+                roots=roots,
+                before=before,
+                use_cache=use_cache,
+                graph_sha256=graph_sha256,
+            )
 
         # INV-01, over the complete run rather than over each commit point. With four
         # verification points a branch that failed before its own would otherwise leave the
@@ -295,6 +324,35 @@ def _mix_branch(
         state.mix_error = _error(exc)
     except Exception as exc:
         state.mix_error = _error(exc)
+
+
+def _resolve_or_defer(
+    session_dir: Path,
+    config: SessionConfig,
+    transcriber: TranscriberBundle | None,
+    detector: DetectorBundle | None,
+    *,
+    fake_models: bool,
+) -> tuple[Models | None, StructuredError | None]:
+    """Resolve both model seams, turning an ASR-side failure into the branch's error.
+
+    Only the *transcript* seam may fail softly. A detector failure is not caught here and
+    stops the run, and that is deliberate: the mix consumes the activity graph, so a
+    detector that will not load has already made both branches impossible and pretending
+    otherwise would produce a mix of silence. `resolve_models` builds the detector lazily
+    from the fake-models file or takes the caller's, so in practice what fails here is the
+    Qwen adapter — which is exactly the thing INV-09 says the mix must survive.
+    """
+    try:
+        return resolve_models(
+            session_dir, config, transcriber, detector, fake_models=fake_models
+        ), None
+    except DiscoveryError as exc:
+        if exc.code == "output_inside_raw":
+            raise
+        return None, _error(exc)
+    except Exception as exc:
+        return None, _error(exc)
 
 
 def _transcript_branch(

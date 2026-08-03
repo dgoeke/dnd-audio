@@ -71,18 +71,36 @@ class TestCommandSurface:
             assert not isinstance(result.exception, NotImplementedError), command
 
     @pytest.mark.parametrize("command", ["transcribe", "process"])
-    def test_a_command_that_needs_the_absent_asr_adapter_says_which_milestone(
+    def test_a_command_that_needs_an_absent_asr_runtime_fails_cleanly(
         self, canonical_fixture: FixtureTruth, command: str
     ) -> None:
-        """The one place the `DEFERRED` shape still lives, and the reason it still lives.
+        """M6b retires the last `DEFERRED` raise, and this is what replaces it.
 
-        Both commands run against a *valid* session, so this is not "your session is broken"
-        by any reading — it is a pipeline that has not built the adapter yet, and an operator
-        who wants the audio branch runs `mix` (ADR-0005, ADR-0024).
+        Both commands run against a *valid* session on a machine with no Torch — which is
+        the project environment, deliberately (INV-05). That used to be "this pipeline has
+        not built the adapter yet"; it is now "this machine cannot run it", which is an
+        ordinary failure and must behave like one: an exit code rather than an exception,
+        and no traceback.
         """
         result = runner.invoke(app, [command, str(canonical_fixture.session_dir)])
-        assert isinstance(result.exception, NotImplementedError)
-        assert "M6b" in str(result.exception)
+
+        assert not isinstance(result.exception, NotImplementedError)
+        assert result.exit_code not in (0, ExitCode.NOT_IMPLEMENTED)
+
+    def test_nothing_in_the_pipeline_defers_to_a_later_milestone_any_more(self) -> None:
+        """The exit code ADR-0005 spends on "not built yet" is now unreachable, and that is
+        the milestone: every command the spec names is implemented, adapter included.
+
+        Asserted on `raise NotImplementedError` rather than on the `DEFERRED:` marker,
+        because the marker also appears in prose explaining the convention and prose is not
+        a placeholder. `scripts/scan_placeholders.py` pairs the two the same way.
+        """
+        unbuilt = [
+            path
+            for path in Path("src/dnd_audio").rglob("*.py")
+            if "raise NotImplementedError" in path.read_text(encoding="utf-8")
+        ]
+        assert unbuilt == []
 
     def test_models_fetch_offers_the_qwen_half(self) -> None:
         """M4's version of this asserted that `fetch` said the ASR half was still to come.
@@ -318,24 +336,52 @@ class TestInstalledConsoleScript:
         assert checks
         assert "not installed" in checks["torch"]["detail"], "the shadow did not take"
 
-    def test_an_unbuilt_adapter_exits_with_the_not_implemented_code(
+    def test_a_host_without_the_asr_runtime_fails_like_an_implemented_command(
         self, canonical_fixture: FixtureTruth
     ) -> None:
-        """A traceback would be a bad message; a distinct exit code is a usable one."""
-        completed = self._run("process", str(canonical_fixture.session_dir))
-        assert completed.returncode == ExitCode.NOT_IMPLEMENTED
-        assert "not implemented yet" in completed.stderr
-        assert "M6b" in completed.stderr
-        assert "Traceback" not in completed.stderr
+        """M6b changes what this means, and the change is the milestone.
 
-    def test_the_not_implemented_code_is_distinct_from_a_usage_error(
+        Until now `process` on a machine with no ASR adapter exited 3 — "this pipeline has
+        not built that yet" — because that was true. It is not any more. The adapter exists;
+        what this machine lacks is the opt-in `asr-qwen` group, which is an ordinary
+        environment failure. So it is a *failed stage with a written report* and a nonzero
+        exit, which is what INV-13 asks for and what ADR-0005 always reserved exit 3
+        against.
+
+        Still no traceback, and the message must still say what to do about it.
+        """
+        completed = self._run("process", str(canonical_fixture.session_dir))
+
+        assert completed.returncode != 0
+        assert completed.returncode != ExitCode.NOT_IMPLEMENTED
+        assert "Traceback" not in completed.stderr
+        assert "asr-qwen" in completed.stdout + completed.stderr
+
+    def test_that_failure_still_produces_the_mp3_and_the_report(
+        self, canonical_fixture: FixtureTruth
+    ) -> None:
+        """INV-09, at the one place it now bites for real rather than by simulation.
+
+        A host that cannot transcribe is exactly the case the invariant exists for, and it
+        is no longer hypothetical: it is every machine without the group. The audio branch
+        must still deliver.
+        """
+        self._run("process", str(canonical_fixture.session_dir))
+        session = canonical_fixture.session_dir
+
+        assert (session / "output" / "session.mp3").is_file()
+        report = json.loads((session / "output" / "ingest-report.json").read_text())
+        stages = {stage["stage"]: stage["status"] for stage in report["stages"]}
+        assert stages["mix"] == "complete"
+        assert stages["transcribe"] == "failed"
+
+    def test_a_usage_error_is_still_distinct_from_a_pipeline_failure(
         self, canonical_fixture: FixtureTruth, tmp_path: Path
     ) -> None:
         usage = self._run("process", str(tmp_path / "absent"))
-        deferred = self._run("process", str(canonical_fixture.session_dir))
+        failed = self._run("process", str(canonical_fixture.session_dir))
         assert usage.returncode == 2
-        assert deferred.returncode == ExitCode.NOT_IMPLEMENTED
-        assert usage.returncode != deferred.returncode
+        assert failed.returncode not in (0, 2)
 
     def test_ingest_fails_like_an_implemented_command(self, session_dir: Path) -> None:
         """`ingest` is implemented now, so a session with no config is a fatal exit.

@@ -226,6 +226,12 @@ class RuntimeProvenance(_Artifact):
     device_name: str | None = None
     #: The resolved dtype, not the requested one.
     dtype: str
+    #: The attention implementation the ASR model was loaded with — ``sdpa`` today. M6a had
+    #: nothing to put here because nothing in it loaded a model; M6b's adapter fills it.
+    #: Output-affecting like everything else in this class: SDPA and the math fallback are
+    #: not required to produce identical numbers, so it belongs in the cache key.
+    #: ``None`` on a run that resolved a device without loading a model.
+    attention: str | None = None
 
 
 class Provenance(_Artifact):

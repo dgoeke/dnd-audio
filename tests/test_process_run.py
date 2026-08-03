@@ -349,14 +349,39 @@ class TestTheReportIsAlwaysFinalized:
         assert {e.code for e in stages[StageName.TRANSCRIBE].errors} == {"raw_sources_modified"}
         assert result.exit_code is not ExitCode.OK
 
-    def test_a_missing_adapter_is_not_a_broken_session(
+    def test_an_unavailable_asr_runtime_costs_the_transcript_and_not_the_mix(
         self, canonical_fixture: FixtureTruth
     ) -> None:
-        """ADR-0005's distinction, kept at the composed command too: "this pipeline has not
-        built that yet" and "your session is broken" are different answers, and a half-finished
-        run would be a third, worse one. An operator who wants the audio branch runs `mix`."""
-        with pytest.raises(NotImplementedError, match="M6b"):
-            run_process(canonical_fixture.session_dir)
+        """INV-09, in the case that stopped being hypothetical when M6b landed.
+
+        Until M6b this raised `NotImplementedError` and stopped the whole run, which was
+        right while it meant "the adapter does not exist yet" (ADR-0005). Now the adapter
+        exists and what is missing is the opt-in `asr-qwen` group — an ordinary
+        transcription failure, and exactly the one the invariant exists for. Model
+        resolution still happens *before* any cache is written, so nothing is half-finished;
+        what changed is that its failure belongs to the transcript branch rather than to the
+        run.
+
+        This test runs on the project environment, which deliberately carries no Torch
+        (INV-05), so the failure is the real one rather than a simulated one.
+        """
+        result = run_process(canonical_fixture.session_dir)
+
+        assert result.exit_code is not ExitCode.OK
+        assert result.records is None
+        assert result.encode is not None, "the mix must survive a transcription failure"
+        assert result.mp3_path.is_file()
+
+        stages = {stage.stage: stage.status for stage in result.report.stages}
+        assert stages[StageName.MIX] == "complete"
+        assert stages[StageName.TRANSCRIBE] == "failed"
+
+    def test_that_failure_names_what_to_do_about_it(self, canonical_fixture: FixtureTruth) -> None:
+        """A structured error nobody can act on is a worse artifact than none."""
+        result = run_process(canonical_fixture.session_dir)
+        errors = " ".join(error.message for stage in result.report.stages for error in stage.errors)
+        assert "asr-qwen" in errors
+        assert "--fake-models" in errors
 
 
 class TestTheOutputSet:

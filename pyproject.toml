@@ -204,6 +204,15 @@ ignore_missing_imports = true
 module = ["torch"]
 ignore_missing_imports = true
 
+# `qwen_asr` ships no `py.typed` and, like torch, is not installed in the environment the
+# gate type-checks in (INV-05). Same containment: it is imported lazily inside
+# `load_qwen_backend` and nowhere else, and everything it returns is reshaped immediately
+# into `QwenText`/`AlignedItem`, so no untyped object escapes `_TransformersBackend`
+# (ADR-0028).
+[[tool.mypy.overrides]]
+module = ["qwen_asr"]
+ignore_missing_imports = true
+
 [tool.pydantic-mypy]
 init_forbid_extra = true
 init_typed = true

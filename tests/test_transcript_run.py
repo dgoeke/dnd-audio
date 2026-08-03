@@ -288,12 +288,43 @@ class TestTheCapHoldsOnARealSession:
 
 
 class TestFailureBehaviour:
-    def test_without_fake_models_the_missing_adapter_is_named(
+    def test_without_the_asr_runtime_the_run_fails_with_a_report(
         self, canonical_fixture: FixtureTruth
     ) -> None:
-        """The seam is real and everything above it is finished; one implementation is not."""
-        with pytest.raises(NotImplementedError, match="M6b"):
-            run_transcribe(canonical_fixture.session_dir)
+        """`transcribe` has only one branch, so here a model failure *is* the run failing.
+
+        Unlike `process`, which must still produce the MP3, this command exists to produce
+        a transcript. What INV-13 requires is that it fail visibly: a failed stage, a
+        structured error, a written report, and a nonzero exit — never a traceback.
+        """
+        result = run_transcribe(canonical_fixture.session_dir)
+
+        assert result.exit_code is not ExitCode.OK
+        assert result.records is None
+        assert result.report_written
+        assert result.report_path.is_file()
+
+    def test_that_failure_names_the_group_and_the_way_around_it(
+        self, canonical_fixture: FixtureTruth
+    ) -> None:
+        """Two actionable routes: install the runtime, or transcribe a synthetic session
+        from its own declared script. An operator hitting this needs to be told both."""
+        result = run_transcribe(canonical_fixture.session_dir)
+        errors = " ".join(error.message for stage in result.report.stages for error in stage.errors)
+
+        assert "asr-qwen" in errors
+        assert "--fake-models" in errors
+
+    def test_the_transcript_stage_is_the_one_marked_failed(
+        self, canonical_fixture: FixtureTruth
+    ) -> None:
+        """Model resolution happens before the snapshot is acted on, so the stages upstream
+        of it never ran — but the report must still account for every one of them (INV-13)."""
+        result = run_transcribe(canonical_fixture.session_dir)
+        stages = {stage.stage: stage.status for stage in result.report.stages}
+
+        assert stages[StageName.TRANSCRIBE] == "failed"
+        assert set(stages) == set(StageName)
 
     def test_a_missing_fake_models_file_is_fatal_rather_than_a_fallback(
         self, canonical_fixture: FixtureTruth

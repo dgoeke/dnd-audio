@@ -2,10 +2,11 @@
 
 Every command the spec names is registered here from M0 onward, so the surface is
 stable and a caller can discover it before the stages behind it exist. Everything
-except `doctor` raises ``NotImplementedError`` with a ``DEFERRED: M<n>`` annotation at
-the raise site — deliberately visible to ``scripts/scan_placeholders.py``. Hiding
+except `doctor` raised ``NotImplementedError`` with a ``DEFERRED: M<n>`` annotation at
+the raise site — deliberately visible to ``scripts/scan_placeholders.py``, because hiding
 placeholder work behind a bespoke exception type would defeat the check that exists to
-find it.
+find it. **None are left as of M6b.** A machine that cannot run a stage now fails like
+any other environment problem: a failed stage, a written report, and a nonzero exit.
 
 Stage boundaries, from the spec:
 

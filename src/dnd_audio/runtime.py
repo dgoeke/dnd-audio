@@ -34,9 +34,9 @@ a subprocess over the whole CLI — the same technique :mod:`dnd_audio.activity.
 for ``onnxruntime``.
 
 Nothing in M6a *resolves* a runtime during a pipeline run: ``mix`` and ``activity`` never
-load a model, and ``transcribe``/``process`` raise ``DEFERRED: M6b`` before one is
-constructed. ``doctor`` is this module's production caller today. M6b's adapter is what will
-resolve a runtime during a run and record it in the report.
+load a model. ``doctor`` was this module's only production caller until M6b; the Qwen
+adapter is the second, and it is the one that resolves a runtime *during* a run and records
+it in the report (`transcript/runner.py::_default_transcriber`).
 """
 
 from __future__ import annotations
