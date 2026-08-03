@@ -139,7 +139,9 @@ So the requirement is not "recover real time" but **"make every file share one o
 the hardware already has a mechanism for that: jamming receivers L-OUT → L-IN, which the
 operator can perform and watch succeed on the displays (**OQ-012**). Whether the jammed value
 reaches `bext.time_reference` is the thing that actually decides this, and it is **OQ-023** —
-untested, and the first thing to test.
+**answered 2026-08-03: it does, to within one frame.** Cross-receiver alignment therefore
+comes free from the metadata, to ±33 ms, and this reframe holds in full: a shared origin was
+the whole requirement, and the hardware supplies one.
 
 **What genuinely breaks, narrowly.** Only the case where session zero comes from a configured
 wall-clock `timecode.origin_timecode` while the files carry a power-on-relative count: the
@@ -158,14 +160,24 @@ from the earliest source instead sidesteps all of it, and that path already exis
   and 60**. The sample files declare 30/1. At **60 fps the quantum halves to 800 samples —
   16.7 ms**. That is a menu setting and should be applied before the next capture regardless
   of how OQ-023 resolves.
+  **Retracted 2026-08-03 — the setting does not reach the file.** A receiver set to 60 fps
+  wrote `TIMECODE_RATE 30/1` and a `time_reference` on a 1600-sample boundary exactly like
+  the 30 fps receiver beside it. See **OQ-024**. 33.3 ms *is* the floor on this hardware for
+  the files this project consumes, and H1's recipe no longer asks for 60 fps.
 
-**An unused signal worth remembering.** `bext.origination_date`/`origination_time` carry real
-wall clock — 19:26:55 on the rx-a pair, 19:27:39 on rx-b — consistent within each receiver.
-The strategy chain in `inspection/starttime.py` reads `time_reference` and a timecode tag and
-**nothing reads these**. One-second resolution cannot place a session precisely, but it bounds
-a cross-receiver offset to ±1 s, which is exactly the search window a correlator needs and
-does not currently have. Caveat: two receivers' real-time clocks are independent and may not
-agree with each other, so this is a hint to be verified, never evidence on its own (INV-12).
+**An unused signal worth remembering — and now known unusable across receivers.**
+`bext.origination_date`/`origination_time` carry real wall clock — 19:26:55 on the rx-a pair,
+19:27:39 on rx-b — consistent within each receiver. The strategy chain in
+`inspection/starttime.py` reads `time_reference` and a timecode tag and **nothing reads
+these**. One-second resolution cannot place a session precisely, but it looked like it could
+bound a cross-receiver offset to ±1 s, which is exactly the search window a correlator needs
+and does not currently have. The caveat attached to that — two receivers' real-time clocks
+are independent and may not agree (INV-12) — **was measured on 2026-08-03 and is fatal to the
+idea.** The two receivers' implied epochs differed by **48.7 s** while their timecode agreed
+to under one frame, so the wall clock was wrong by nearly a minute and the timecode was
+right. Wall clock is for archival naming and for a human reading a report. It must never
+anchor a cross-receiver offset, and **nothing in the code currently prevents that** — a guard
+belongs with OQ-004's other scoped M1/M2 work.
 
 **What M2 does with it.** `timeline/rasterize.py` treats a `bwf_sample_reference` as
 unsigned samples since **midnight at the file's own rate**, converts it to exact rational
@@ -212,7 +224,36 @@ acceptable for the MVP. Jammed timecode is timeline sync, not a shared word cloc
 future coherent processing degrade over four hours.
 **Evidence:** Differential clap lag measured near the start and near the end of a
 ~4-hour recording.
-**Needs:** H2 · **Blocks:** nothing (warning threshold tuning) · **Status:** open
+**Needs:** H2 · **Blocks:** nothing (warning threshold tuning) · **Status:** **partially
+answered — bounded at ≈1 ppm, catastrophic case ruled out** (jam verification capture,
+2026-08-03); the long-baseline confirmation is still H2
+
+**First measurement — the clocks are far better than consumer tolerance.** This is the
+question that decided whether the architecture works at all, and it is not really about
+timecode. Each `orig` file carries **one** `time_reference`, stamped at the start; from there
+the transmitter's own crystal defines the timeline. At typical consumer tolerance (±20–50 ppm)
+a four-hour session would diverge by 288–720 ms — an order of magnitude worse than any
+quantization, growing without bound with session length, and fatal to treating each
+transmitter as an independent recorder.
+
+Measuring the residual lag in the first third of each overlap against the last third, across
+all six transmitter pairs (`docs/fixtures/2026-08-03-jam-verification.md`):
+
+```
+drift:  +1.0  −0.2  +2.4  −0.3  +0.9  +1.1  ppm
+lag change over ~30 s:  0.00 to 0.07 ms
+```
+
+Consistent with zero inside a noise floor of about **±3 ppm** on this 30 s baseline. At the
+pessimistic end, 3 ppm over 4 hours is 43 ms and over 6 hours 65 ms; at the likely ~1 ppm,
+14 ms and 22 ms. **Drift over a full session is the same size as or smaller than the 33 ms
+quantization already present at file start** (**OQ-004**) — so the cross-track error budget
+does not grow materially with session length, and the MVP's decision to skip affine drift
+correction is supported rather than merely assumed.
+
+**Why this stays open.** A 30 s baseline cannot distinguish 1 ppm from 3 ppm, and it contains
+no thermal excursion, no battery swap, and no power cycle — all of which H2 will. It rules
+out the catastrophic case; it does not set the warning threshold.
 
 **M2 built the instrument.** `session.sync_qa` (off by default) correlates each track
 against a reference near both ends and reports the lag at each, never a correction — a
@@ -448,8 +489,21 @@ of frames falls back to `duration_ts` instead of flooring, which would invent a 
 the start is a capture-procedure problem the pipeline should detect and warn about.
 **Evidence:** Displayed timecode/rate on all three receivers recorded after the
 jam procedure, cross-checked against the files' embedded timecode.
-**Needs:** H1 · **Blocks:** nothing directly · **Status:** open — **the capability is
-confirmed on the devices; what is unverified is whether it reaches the files (OQ-023)**
+**Needs:** H1 · **Blocks:** nothing directly · **Status:** **answered for two receivers**
+(jam verification capture, 2026-08-03); the third receiver and "stays matched for the
+session" are still H1/H2
+
+**Answered — the jam holds, and it reaches the files.** Two receivers jammed L-OUT → L-IN
+produced files whose `bext.time_reference` values agree on the true inter-receiver offset to
+**17–30 ms**, inside one 30 fps frame, measured against audio cross-correlation
+(`docs/fixtures/2026-08-03-jam-verification.md`). The follow-on assumption this entry
+deferred to **OQ-023** — that a matched display propagates into the written file — is
+answered affirmatively there.
+
+**Two caveats keep this from being fully closed.** Only two of the three receivers were
+exercised, and the capture is 47 seconds, so "they stay matched for the session" is
+untested — that is OQ-006 and H2. Note also that the two receivers were on **different frame
+rates** (**OQ-024**) and the jam held anyway.
 
 **The capability is not in doubt (operator, 2026-08-03).** Connecting the receivers
 L-OUT → L-IN and pressing SYNC visibly aligns the timecodes on their displays. This entry
@@ -843,4 +897,133 @@ per source at ingest and compare across receivers; disagreement is exactly the
 "capture-procedure problem the pipeline should detect and warn about" OQ-012 names, and
 unlike the display it is checkable after the fact, on every session, for free.
 **Needs:** H1, or five minutes with the receivers · **Blocks:** nothing yet — but it decides
-what OQ-004's rework has to achieve · **Status:** open
+what OQ-004's rework has to achieve · **Status:** **answered — outcome (1), the jam
+propagates** (jam verification capture, 2026-08-03)
+
+**Answer — yes, and to within one frame.** Full evidence in
+`docs/fixtures/2026-08-03-jam-verification.md`. Two receivers were jammed L-OUT → L-IN,
+their displays confirmed matching, and each receiver's pair started a few seconds after the
+other. Cross-correlating the audio — which is the only arbiter, because metadata is
+self-consistent under both readings — measures the true offset between the two receivers'
+recordings at **5.28 s**. `bext.time_reference` alone predicts 5.267–5.300 s. All four
+cross-receiver pairs agree to **17–30 ms**, inside the 33.3 ms frame quantum; the worst pair
+overall is 47 ms.
+
+The correlator never saw the metadata. Four independent pairs landing within 30 ms of a
+metadata-only prediction across a ±47 s search range is not chance.
+
+**What this settles.** Cross-receiver alignment is solved to one frame with no audio
+processing at all, which is what OQ-004's reframe needed and what OQ-012 could not establish
+from the displays. **The absolute value is still meaningless** — `time_reference` here is
+~284 s, nowhere near the `01:51:2X` the displays showed before the capture — but the *origin*
+is shared, and `session_position` is a subtraction, so only the origin was ever required.
+
+**The warning is still wanted, and is now the highest-value piece of work left.** A failed
+jam produces files that look perfectly normal; the 2026-08-02 probe is proof, and nothing at
+capture time or ingest time flags it. The check is exactly the measurement above: correlate a
+shared transient across tracks and compare the measured offset to the timecode prediction.
+`session.sync_qa` already correlates; what it does not do is compare its result against
+`time_reference` and fail loudly when they disagree. That converts an operator ritual whose
+outcome is invisible into a pipeline assertion. See **OQ-025** for whether a deliberate
+acoustic sync signal should feed it.
+
+## OQ-024 — Does the receiver's timecode frame-rate setting reach the transmitter's file?
+**Assumption:** Yes. The receiver's configured rate is written to `iXML TIMECODE_RATE` and
+sets the quantization of `bext.time_reference`, so choosing a finer rate buys finer
+cross-track resolution.
+**Why it matters:** **OQ-004** concluded from DJI's documentation that 50 and 60 fps are
+supported and that 60 fps would halve the quantum from 1600 samples (33.3 ms) to 800
+(16.7 ms), and H1's recipe was amended to require 60 fps on all three receivers. If the
+setting does not reach the file, that instruction is an unverified ritual and 33.3 ms is the
+floor.
+**Evidence:** Record simultaneously on two receivers set to different rates and diff the
+written metadata.
+**Needs:** nothing further for `orig` · **Blocks:** nothing · **Status:** **answered — no,
+not for `orig` files** (jam verification capture, 2026-08-03)
+
+**Answer — the setting changes nothing in the file.** One receiver was set to 60 fps and the
+other to 30. The two groups' `bext` chunks differ in **exactly five bytes** —
+`origination_time` and `time_reference` — and every rate field is byte-identical across all
+four files: `TIMECODE_RATE 30/1`, `MASTER_SPEED 30/1`, `CURRENT_SPEED 30/1`,
+`TIMECODE_FLAG NDF`. Every `time_reference` is an exact multiple of **1600 samples**. No file
+shows finer resolution. (Testing for "exact at 60F" is vacuous: anything divisible by 1600 is
+divisible by 800.)
+
+**Consequences.** OQ-004's 60 fps recommendation is retracted, H1's recipe no longer asks for
+it, and **33.3 ms is the cross-track quantization floor on this hardware.** That is
+acceptable — see the error budget in **OQ-025**.
+
+**Scope, and why the untested half does not matter.** These are `orig` files: the
+transmitter's own internal recording, which may be handed a timecode value without being told
+a rate. A receiver-side `edit` file might well carry 60/1. That is untested and uninteresting
+here, because `orig` is the only file this project consumes (**OQ-007**) — the entire point is
+to treat each transmitter as an independent 32-bit-float recorder, immune to wireless dropouts
+and receiver-side processing, and merely *placed* by timecode.
+
+**A useful accident.** The two receivers were on different rates and **the jam held anyway**,
+to within one frame across a real 5.28 s offset (**OQ-023**). The spec's owner note asks for a
+consistent rate across all three kits; this capture violated that and nothing downstream
+degraded. Keep the rates consistent as hygiene, but no known behaviour depends on it.
+
+## OQ-025 — Should the capture include a deliberate acoustic sync signal?
+**Assumption:** No. Jammed timecode places the tracks, and `session.sync_qa` correlates
+ordinary speech well enough to verify it. H1's recipe asks for a three-clap pattern purely as
+a human-checkable landmark, not as the alignment mechanism.
+**Why it matters:** The LTC jam is accurate — 17–30 ms cross-receiver, better than one frame
+(**OQ-023**) — but it is a tedious manual ritual at the start of every session: cable up
+A → B, SYNC, disconnect, A → C, SYNC, disconnect, and confirm three displays. An acoustic
+alignment signal recorded once at the top of the session would be detectable automatically
+and would need no cables. The question is whether it could **replace** the jam, or only
+**verify** it.
+**Evidence:** Measured alignment accuracy achievable from an acoustic signal alone, against
+the 33 ms the jam already delivers; and whether a single anchor is sufficient given measured
+drift.
+**Needs:** a bench test; no session required · **Blocks:** nothing — the jam works today ·
+**Status:** open
+
+**What the error budget says.** Cross-track error is 33.3 ms of fixed quantization
+(**OQ-024**) plus ~15–45 ms of drift over a long session (**OQ-006**) — call it 80 ms worst
+case. Against the consumers: speaker attribution compares energy across tracks where syllables
+are 150–250 ms; duplicate collapse already sees 16–48 ms of spread from lav geometry alone;
+transcript ordering is indifferent. The one place tighter alignment would matter is any mix
+stage that **sums** correlated tracks, where 80 ms is an audible slap — M5's automix ducks
+rather than sums, so it does not arise, and that is worth not breaking.
+
+So the honest position is that **an acoustic method does not need to beat the jam; it needs to
+be good enough and cheaper.** Anything reaching ~10 ms would be strictly better than what the
+jam delivers.
+
+**The distinction that decides this.** Timecode supplies an *origin per file*, including for
+files with no overlap — a transmitter switched off and back on mid-session produces a fresh
+file whose `time_reference` places it with no audio evidence at all. An acoustic anchor at the
+top of the session cannot place that file. So an acoustic signal can replace the jam only if
+every transmitter records one continuous file per session, and must otherwise supplement it.
+The recipe deliberately includes a power cycle for exactly this reason (**OQ-003**).
+
+**Signal choice, if this is pursued.** A clap is broadband and gives a sharp correlation peak,
+but its onset is operator-dependent and its level clips easily on a lav at close range. The
+alternatives worth bench-testing, in rough order of promise:
+
+1. **A linear chirp** (e.g. 500 Hz → 8 kHz over 1 s). Matched-filter compression gives
+   sub-millisecond peak resolution, it is robust to room reverberation and to the band
+   limiting of a lav capsule, and it is trivially distinguishable from speech so it cannot be
+   mistaken for content. This is the standard answer.
+2. **A short broadband burst** (clap, slate, or a synthesized click train). Simple, no
+   playback equipment, but a single click's peak is smeared by reverberation.
+3. **A pure sine tone.** Poor — a continuous tone has no time structure, so its correlation
+   peak is ambiguous by whole cycles. Only useful for measuring *drift* between two long
+   recordings, not for establishing an origin.
+
+**The confound that limits all of them.** Every method above measures *acoustic arrival*, not
+recording time. Six lavs at a table are 0.5–3 m from any one sound source, which is
+1.5–9 ms of propagation spread, and it is not a constant — it depends where each person is
+sitting. So an acoustic anchor has a floor of several milliseconds that the jam does not have,
+and driving it below that would require a per-transmitter electrical injection rather than a
+sound in the room.
+
+**Recommendation as of 2026-08-03: keep the jam, and spend the effort on the verifier
+instead.** The jam is already better than the error budget requires, and the real gap is not
+accuracy — it is that a *failed* jam is invisible (**OQ-023**). A chirp would make automatic
+verification robust and cheap, and that is worth doing on its own merits even while the jam
+remains the alignment mechanism. Revisit replacing the jam only if H2 shows the ritual failing
+in practice, or if the power-cycle case turns out never to occur.

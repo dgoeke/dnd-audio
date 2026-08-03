@@ -35,15 +35,52 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
   **H1 is the oldest outstanding item and is now the only thing gating progress.** The
   2026-08-02 sample probe answered **OQ-001, OQ-002, OQ-004 and OQ-005**; **OQ-004's
   assumption is false on both halves** — DJI's `bext.time_reference` is not samples since
-  midnight and is frame-quantized to 33.3 ms — and **reworking the timing model remains the
-  largest known piece of outstanding work in the project**, deliberately unscheduled. `rg
-  'OQ-004'` finds every site. **OQ-007** (`ingest` refuses real 24-bit `_orig` files, with a
-  reason that is wrong for 24-bit specifically) is likewise recorded and not fixed.
+  midnight and is frame-quantized to 33.3 ms. `rg 'OQ-004'` finds every site. **OQ-007**
+  (`ingest` refuses real 24-bit `_orig` files, with a reason that is wrong for 24-bit
+  specifically) is likewise recorded and not fixed.
+
+  **The timing model is no longer the largest outstanding risk — as of 2026-08-03 it is a
+  bounded relabelling.** A jam verification capture
+  (`docs/fixtures/2026-08-03-jam-verification.md`) answered the two questions that decided
+  it:
+
+  - **OQ-023 — the jam reaches the files.** Two receivers started 5.28 s apart; their
+    independently written `time_reference` values agree on that offset to **17–30 ms**,
+    inside one 30 fps frame, verified against audio cross-correlation. Cross-receiver
+    placement is free from metadata. The absolute value is still meaningless, and still
+    does not matter — `session_position` is a subtraction.
+  - **OQ-006 — the clocks are stable.** Relative sample-clock drift across all six
+    transmitter pairs measures **≈1 ppm**, bounded ±3 ppm on a 30 s baseline. Projected over
+    a 4-hour session that is 14–43 ms: **the same size as or smaller than the quantization
+    already present at file start.** The cross-track error budget does not grow materially
+    with session length, which is what made "each transmitter is an independent recorder
+    placed by timecode" viable. H2 still owes the long baseline.
+
+  Total cross-track budget: ~33 ms fixed + ~15–45 ms drift ≈ **80 ms worst case**, against
+  syllables of 150–250 ms and lav-geometry spread of 16–48 ms that is already present. The
+  one consumer it could hurt is a mix stage that *sums* correlated tracks; M5's automix ducks
+  rather than sums, and that is worth not breaking.
+
+  **Two corrections this capture forced.** **OQ-024**: the receiver's frame-rate setting does
+  **not** reach an `orig` file — a receiver set to 60 fps wrote `TIMECODE_RATE 30/1` on
+  1600-sample boundaries like the 30 fps unit beside it, so the 60 fps instruction has been
+  retracted from H1 and 33.3 ms is the floor. And **`bext.origination_time` must never anchor
+  a cross-receiver offset**: the two receivers' wall clocks were **48.7 s apart** while their
+  timecode agreed to under a frame. Nothing in the code stops that use today; the guard
+  belongs with OQ-004's other scoped M1/M2 work.
+
+  **The highest-value code left is a verifier, not a fix.** A *failed* jam produces files that
+  look perfectly normal — the 2026-08-02 probe is proof — and nothing at capture or ingest
+  time flags it. `session.sync_qa` already correlates tracks; what it does not do is compare
+  its measured offset against what `time_reference` predicts and fail loudly on disagreement.
+  That turns an invisible operator ritual into a pipeline assertion. **OQ-025** asks whether a
+  deliberate acoustic sync signal (a chirp, not a sine) should feed it, and concludes: keep
+  the jam as the alignment mechanism, spend the effort on the verifier.
 
   What H1 still owes: OQ-003's counter across a power cycle, OQ-007's `orig`/`edit` pairing,
-  **OQ-012 and OQ-015** (receiver displays read against wall clock — unrecoverable
-  afterwards), and a second recording from one power-on cycle to confirm OQ-004's epoch
-  reading.
+  **OQ-015** (receiver displays read against wall clock — unrecoverable afterwards), the
+  **third receiver** (OQ-012 is answered for two), six transmitters, and real speech at a
+  real table. Breadth and operational questions — no longer an existential one.
 
   **M6b added a defect to H1's list that only a real model could have found.** The model
   hears an utterance's first word and the transcript does not contain it: the aligner places
@@ -52,16 +89,6 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
   capture. `activity.vad.pad_ms` = 30 is M3's number chosen against synthetic audio,
   registered under **OQ-017**, and a real table is what should move it. **Nothing raises or
   warns** — the symptom is prose that reads fine and is missing a word.
-
-  **OQ-023, new and cheap, is the highest-value thing to do next.** The receivers can be
-  jammed L-OUT → L-IN and the displays visibly agree — but nothing has ever checked whether
-  that jammed value reaches `bext.time_reference`, which is the only timecode the pipeline
-  reads. Five minutes with the receivers settles it, and it decides how much of OQ-004's
-  rework is real: **a shared origin is sufficient for alignment, wall clock was never the
-  requirement**, so if the jam propagates then cross-receiver placement is solved to one
-  frame and the remaining work is a mislabelled quantity rather than a broken one. Set the
-  receivers to **60 fps** first — the finest rate the Mic 3 offers, halving the quantum to
-  16.7 ms.
 
   **OQ-008 answered** (M6a): `torch 2.9.1+rocm7.13.0` (HIP `7.13.99004-3309c6114a`) on
   `Radeon 8060S Graphics` / `gfx1151`, bfloat16 and float32 both exact.
