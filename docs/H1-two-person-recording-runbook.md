@@ -1,5 +1,11 @@
 # H1 two-person recording runbook
 
+> **Need architecture direction, not H1 completion?** Use the much smaller
+> [minimal two-person acoustic direction check](minimal-acoustic-direction-check.md): four
+> continuously recording transmitters, one two-to-three-minute take, spoken slates instead of
+> written logs, and one transfer afterward. The full procedure below exists only to close every
+> H1 hardware/metadata question.
+
 This is the executable capture protocol for
 [H1 — Real DJI hardware fixture](plan/milestones/H1-hardware-fixture.md). It satisfies H1 with
 **two people, six transmitters, and three receivers**. It is intentionally more explicit than
