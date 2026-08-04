@@ -222,6 +222,22 @@ class TestTheReport:
         assert recorded["transformers_version"] == "4.57.6"
         assert recorded["truncation_margin_tokens"] == 16
 
+    def test_a_clean_session_reports_no_dropped_words(self, transcribed: Any) -> None:
+        """Diagnostic 9's other half, and the one that keeps it honest.
+
+        A counter that fires on every session is a counter nobody reads. The canonical
+        fixture's words all sit inside their ownership intervals, so the number is zero and
+        neither the warning nor the decision appears at all.
+        """
+        result, _ = transcribed
+        codes = {warning.code for warning in result.records.warnings}
+        assert "words_dropped_outside_ownership" not in codes
+        assert not [
+            decision
+            for decision in result.report.decisions
+            if decision.code == "transcript_words_dropped"
+        ]
+
     def test_the_records_carry_both_semantics_versions(self, transcribed: Any) -> None:
         """ADR-0032's split, from the artifact's side.
 

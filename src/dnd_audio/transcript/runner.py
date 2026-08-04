@@ -586,7 +586,7 @@ def perform_transcript(
             glossary=glossary,
         )
 
-    drafts, notes = draft_segments(outcome.outcomes, decimation=context.decimation)
+    drafts, notes, dropped = draft_segments(outcome.outcomes, decimation=context.decimation)
     decided = collapse(
         drafts,
         graph,
@@ -615,6 +615,23 @@ def perform_transcript(
     for decision in records.decisions:
         builder.record_decision(
             Decision(code=decision.code, subject=decision.subject, detail=decision.detail)
+        )
+    for item in dropped:
+        # A report decision rather than a records field: it describes what the *assembly*
+        # discarded, which is not part of the transcript's content (diagnostic 9).
+        builder.record_decision(
+            Decision(
+                code="transcript_words_dropped",
+                subject=item.track_id,
+                detail=(
+                    f"{item.count} word(s) fell inside request padding but inside no "
+                    f"ownership interval and are not in the transcript (ADR-0020)."
+                ),
+                details={
+                    "dropped_request_word_pairs": str(item.count),
+                    "nearest_candidates": ",".join(item.candidate_ids),
+                },
+            )
         )
     return records, cache
 

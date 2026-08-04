@@ -69,7 +69,13 @@ def an_outcome(
 
 
 def draft(*outcomes: RequestOutcome) -> Any:
-    return draft_segments(tuple(outcomes), decimation=DECIMATION)
+    """The drafts and notes. Diagnostic 9's third return value has its own tests below."""
+    drafts, notes, _ = draft_segments(tuple(outcomes), decimation=DECIMATION)
+    return drafts, notes
+
+
+def dropped(*outcomes: RequestOutcome) -> Any:
+    return draft_segments(tuple(outcomes), decimation=DECIMATION)[2]
 
 
 class TestOneCandidatePerRequest:
@@ -434,7 +440,7 @@ class TestAWordBelongsToTheIntervalContainingItsStart:
         )
         # Starts 100 samples before the boundary and ends 100 after it.
         outcomes = (an_outcome(merged, "one two", (a_word(RATE - 100, "straddling"),)),)
-        drafts, _ = draft_segments(outcomes, decimation=DECIMATION)
+        drafts, _, _ = draft_segments(outcomes, decimation=DECIMATION)
 
         assert [(draft.candidate_ids, [w.text for w in draft.words]) for draft in drafts] == [
             (("cand-a",), ["straddling"])
@@ -463,3 +469,112 @@ class TestAWordBelongsToTheIntervalContainingItsStart:
         (draft,) = draft_segments(outcomes, decimation=DECIMATION)[0]
 
         assert [word.text for word in draft.words] == ["yes", "yes"]
+
+
+class TestDroppedWordsAreCounted:
+    """Diagnostic 9. ADR-0020 rule 2 is right and it was invisible.
+
+    A word inside a request's padding but inside no ownership interval belongs to nobody and
+    is discarded — which is what stops padding from becoming content. On the 2026-08-02
+    capture that silently removed the opening word of five of eleven segments, and the
+    transcript read as ordinary prose. Nothing here changes the behaviour; it makes the
+    number visible, which is what turns `activity.vad.pad_ms` from a guess into a
+    measurement on the first real session.
+    """
+
+    def test_a_word_just_before_its_interval_is_counted_once(self) -> None:
+        """50 ms early, which is the shape a detector starting a moment late produces."""
+        early = RATE - RATE // 20
+        plan = a_plan("req-1", (an_ownership("cand-a", RATE, RATE * 2),))
+        outcome = an_outcome(plan, "we should go", (a_word(early, "we"), a_word(RATE, "should")))
+
+        found = dropped(outcome)
+        assert [(item.track_id, item.count) for item in found] == [("tx-a", 1)]
+        assert found[0].candidate_ids == ("cand-a",)
+
+        # And the note an operator actually sees carries the count.
+        _, notes = draft(outcome)
+        assert [note.code for note in notes] == ["words_dropped_outside_ownership"]
+        assert "1 word(s)" in notes[0].message
+
+    def test_nothing_is_dropped_when_every_word_is_owned(self) -> None:
+        plan = a_plan("req-1", (an_ownership("cand-a", RATE, RATE * 2),))
+        outcome = an_outcome(plan, "we should go", (a_word(RATE, "we"), a_word(RATE + 500, "go")))
+        assert dropped(outcome) == ()
+        assert draft(outcome)[1] == []
+
+    def test_a_merged_request_owning_two_candidates_drops_nothing(self) -> None:
+        """The reason this is computed per *outcome* rather than inside `_owned_words`.
+
+        That function runs once per candidate group and sees only that group's intervals, so
+        counting there would call every word of group B a drop while assembling group A —
+        a diagnostic that fired on every merged request, which is the ordinary case with six
+        lavs in a room.
+        """
+        plan = a_plan(
+            "req-1",
+            (
+                an_ownership("cand-a", RATE, RATE * 2),
+                an_ownership("cand-b", RATE * 2, RATE * 3),
+            ),
+        )
+        outcome = an_outcome(
+            plan,
+            "mine yours",
+            (a_word(RATE + 10, "mine"), a_word(RATE * 2 + 10, "yours")),
+        )
+        assert dropped(outcome) == ()
+
+    def test_a_word_in_the_gap_between_two_candidates_is_a_real_drop(self) -> None:
+        """Padding covers the gap; no interval does. That word is genuinely gone."""
+        plan = a_plan(
+            "req-1",
+            (
+                an_ownership("cand-a", RATE, RATE * 2),
+                an_ownership("cand-b", RATE * 3, RATE * 4),
+            ),
+        )
+        outcome = an_outcome(
+            plan,
+            "mine cough yours",
+            (
+                a_word(RATE + 10, "mine"),
+                a_word(RATE * 2 + 500, "cough"),
+                a_word(RATE * 3 + 10, "yours"),
+            ),
+        )
+        found = dropped(outcome)
+        assert [(item.track_id, item.count) for item in found] == [("tx-a", 1)]
+        # Nearest by distance: the gap word sits 500 samples past cand-a's end and 11 500
+        # before cand-b's start.
+        assert found[0].candidate_ids == ("cand-a",)
+
+    def test_one_padding_word_two_requests_both_drop_counts_twice(self) -> None:
+        """The metric is dropped `(request, word)` pairs, and it says so.
+
+        Two requests whose padding both reaches the same moment each lost a word. Collapsing
+        that to one would need a rule for when two words at slightly different times are the
+        same word — which is precisely the judgement this measurement must not quietly make
+        on the operator's behalf.
+        """
+        stray = RATE * 2 + 200
+        outcomes = (
+            an_outcome(
+                a_plan("req-1", (an_ownership("cand-a", RATE, RATE * 2),)),
+                "left",
+                (a_word(stray, "cough"),),
+            ),
+            an_outcome(
+                a_plan("req-2", (an_ownership("cand-b", RATE * 3, RATE * 4),)),
+                "right",
+                (a_word(stray, "cough"),),
+            ),
+        )
+        found = dropped(*outcomes)
+        assert [(item.track_id, item.count) for item in found] == [("tx-a", 2)]
+        assert found[0].candidate_ids == ("cand-a", "cand-b")
+
+    def test_a_wordless_outcome_drops_nothing(self) -> None:
+        """No word times came back at all, so no word was assigned or discarded."""
+        plan = a_plan("req-1", (an_ownership("cand-a", RATE, RATE * 2),))
+        assert dropped(an_outcome(plan, "no word times", alignment_status="segment_only")) == ()

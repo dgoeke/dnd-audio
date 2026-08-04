@@ -35,7 +35,7 @@ from dnd_audio.transcript.asr import RequestOutcome, without_boundary_repeat
 from dnd_audio.transcript.normalize import normalize_text
 from dnd_audio.transcript.requests import Ownership
 
-__all__ = ["SegmentDraft", "draft_segments"]
+__all__ = ["DroppedWords", "SegmentDraft", "draft_segments"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,10 +59,30 @@ class SegmentDraft:
     truncation_submissions: int
 
 
+@dataclass(frozen=True, slots=True)
+class DroppedWords:
+    """Words one track's requests returned that no ownership interval claimed.
+
+    ADR-0020's rule 2, made visible. The behaviour it describes is right — padding must not
+    become content — but until M8 it happened in silence: on the 2026-08-02 capture five of
+    eleven segments lost their opening word and the transcript read as plausible prose.
+    """
+
+    track_id: str
+    #: Dropped ``(request, word)`` pairs, not distinct words. One padding word that two
+    #: overlapping requests both return and both drop is counted twice, because two requests
+    #: each lost a word — and because deduplicating would need a rule for when two words at
+    #: slightly different times are the same word, which is exactly what this metric must not
+    #: quietly assume.
+    count: int
+    #: The candidates nearest the dropped words, so an operator can find the segments.
+    candidate_ids: tuple[str, ...]
+
+
 def draft_segments(
     outcomes: tuple[RequestOutcome, ...], *, decimation: int
-) -> tuple[list[SegmentDraft], list[TranscriptNote]]:
-    """Every retained candidate's draft segment, in canonical order, plus what to warn about."""
+) -> tuple[list[SegmentDraft], list[TranscriptNote], tuple[DroppedWords, ...]]:
+    """Every retained candidate's draft segment, in canonical order, plus what to report."""
     groups = _grouped_candidates(outcomes)
     contributions = _contributions(outcomes, groups)
 
@@ -76,7 +96,79 @@ def draft_segments(
         drafts.append(draft)
 
     drafts.sort(key=lambda item: (item.start_sample, item.track_id, item.candidate_ids))
-    return drafts, [*_notes(empty), *_alignment_notes(drafts)]
+    dropped = _dropped_words(outcomes)
+    return (
+        drafts,
+        [*_notes(empty), *_alignment_notes(drafts), *_dropped_notes(dropped)],
+        dropped,
+    )
+
+
+def _dropped_words(outcomes: tuple[RequestOutcome, ...]) -> tuple[DroppedWords, ...]:
+    """Per outcome, the words it returned that none of *its own* intervals owns.
+
+    **Per outcome, not per candidate group**, and that is the whole design. `_owned_words`
+    runs once per group and sees only that group's intervals, so a word legitimately owned by
+    group B would look dropped while group A was being assembled — a diagnostic that reported
+    false positives on every merged request would be worse than none.
+    """
+    counts: dict[str, int] = {}
+    nearest: dict[str, set[str]] = {}
+    for outcome in outcomes:
+        intervals = outcome.plan.ownership
+        if not outcome.words or not intervals:
+            continue
+        track_id = outcome.plan.track_id
+        for word in outcome.words:
+            if any(
+                piece.start_sample <= word.start_sample < piece.end_sample for piece in intervals
+            ):
+                continue
+            counts[track_id] = counts.get(track_id, 0) + 1
+            nearest.setdefault(track_id, set()).add(_nearest_candidate(word, intervals))
+    return tuple(
+        DroppedWords(
+            track_id=track_id,
+            count=count,
+            candidate_ids=tuple(sorted(nearest[track_id])),
+        )
+        for track_id, count in sorted(counts.items())
+    )
+
+
+def _nearest_candidate(word: TranscribedWord, intervals: tuple[Ownership, ...]) -> str:
+    """Whose segment most likely lost this word.
+
+    A dropped word is almost always just outside one interval's edge — the opening word of an
+    utterance the detector started a moment late — so naming the nearest candidate points an
+    operator at the segment that reads wrong, rather than at every candidate in the request.
+    """
+    return min(
+        intervals,
+        key=lambda piece: (
+            max(piece.start_sample - word.start_sample, word.start_sample - piece.end_sample, 0),
+            piece.candidate_id,
+        ),
+    ).candidate_id
+
+
+def _dropped_notes(dropped: tuple[DroppedWords, ...]) -> list[TranscriptNote]:
+    return [
+        TranscriptNote(
+            code="words_dropped_outside_ownership",
+            message=(
+                f"{item.count} word(s) returned for {item.track_id} started inside a request's "
+                f"padding but inside no ownership interval, so they are not in the transcript "
+                f"(ADR-0020). The behaviour is unchanged and correct — padding must not become "
+                f"content — but until now it happened in silence, and on the 2026-08-02 capture "
+                f"five of eleven segments lost their opening word that way. Counted as "
+                f"(request, word) pairs. This is the measurement that turns activity.vad.pad_ms "
+                f"from a guess into a number."
+            ),
+            path=item.track_id,
+        )
+        for item in dropped
+    ]
 
 
 def _grouped_candidates(outcomes: tuple[RequestOutcome, ...]) -> set[tuple[str, ...]]:
