@@ -50,6 +50,11 @@ multi-hour clock stability, which is H2.
       transmitters; confirm the recording indicator on each after starting.
 - [ ] Start the transmitters a few seconds apart.
 - [ ] Each wearer states their transmitter label, then speaks alone for several seconds.
+- [ ] Each wearer then repeats a short, logged phrase beginning with a hard onset (`Testing`,
+      `Pick`, `Take`, or equivalent), with the intended `track_id` written in the recording
+      log. Include both a clean pause before the phrase and a quick handoff from the preceding
+      speaker. This distinguishes a direct-source opening word from the same word in another
+      lav's padding; a dropped-word count alone cannot do that (**OQ-017**, **OQ-027**).
 - [ ] One deliberate two-person overlap.
 - [ ] Turn one transmitter off, wait several seconds, turn it back on, record again.
 - [ ] A distinctive three-clap pattern near the start and near the end.

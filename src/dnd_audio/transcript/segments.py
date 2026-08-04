@@ -25,7 +25,9 @@ sample can land up to two samples before the candidate starts.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
+from typing import Literal
 
 from dnd_audio.artifacts.records import TranscriptNote, WordRecord
 from dnd_audio.artifacts.transcript import AlignmentStatus
@@ -77,6 +79,25 @@ class DroppedWords:
     count: int
     #: The candidates nearest the dropped words, so an operator can find the segments.
     candidate_ids: tuple[str, ...]
+    #: Starts before versus at/after the nearest half-open ownership interval. The two
+    #: counts sum to ``count`` and distinguish a late-opening detector from a candidate
+    #: that ended too soon.
+    before_ownership_count: int
+    after_ownership_count: int
+    #: Position in the request's returned word list. A leading word is where the aligner's
+    #: request-boundary bias can act (OQ-027); a non-leading word needs another explanation.
+    leading_word_count: int
+    nonleading_word_count: int
+    #: ``(minimum additional derivative samples, count)`` in ascending distance order.
+    #: For an after-edge word this includes the one sample needed to cross a half-open end.
+    #: Holding the current request result fixed, this is the exact ownership expansion that
+    #: would include the word — not a claim that the word *should* be included.
+    edge_distance_derivative_samples: tuple[tuple[int, int], ...]
+
+    @property
+    def max_edge_distance_derivative_samples(self) -> int:
+        """The farthest dropped start from its nearest ownership edge."""
+        return self.edge_distance_derivative_samples[-1][0]
 
 
 def draft_segments(
@@ -112,44 +133,60 @@ def _dropped_words(outcomes: tuple[RequestOutcome, ...]) -> tuple[DroppedWords, 
     group B would look dropped while group A was being assembled — a diagnostic that reported
     false positives on every merged request would be worse than none.
     """
-    counts: dict[str, int] = {}
-    nearest: dict[str, set[str]] = {}
+    observations: dict[str, list[tuple[Ownership, Literal["before", "after"], int, bool]]] = {}
     for outcome in outcomes:
         intervals = outcome.plan.ownership
         if not outcome.words or not intervals:
             continue
         track_id = outcome.plan.track_id
-        for word in outcome.words:
+        for index, word in enumerate(outcome.words):
             if any(
                 piece.start_sample <= word.start_sample < piece.end_sample for piece in intervals
             ):
                 continue
-            counts[track_id] = counts.get(track_id, 0) + 1
-            nearest.setdefault(track_id, set()).add(_nearest_candidate(word, intervals))
+            piece, side, distance = _nearest_edge(word, intervals)
+            observations.setdefault(track_id, []).append((piece, side, distance, index == 0))
     return tuple(
         DroppedWords(
             track_id=track_id,
-            count=count,
-            candidate_ids=tuple(sorted(nearest[track_id])),
+            count=len(items),
+            candidate_ids=tuple(sorted({piece.candidate_id for piece, _, _, _ in items})),
+            before_ownership_count=sum(side == "before" for _, side, _, _ in items),
+            after_ownership_count=sum(side == "after" for _, side, _, _ in items),
+            leading_word_count=sum(leading for _, _, _, leading in items),
+            nonleading_word_count=sum(not leading for _, _, _, leading in items),
+            edge_distance_derivative_samples=tuple(
+                sorted(Counter(distance for _, _, distance, _ in items).items())
+            ),
         )
-        for track_id, count in sorted(counts.items())
+        for track_id, items in sorted(observations.items())
     )
 
 
-def _nearest_candidate(word: TranscribedWord, intervals: tuple[Ownership, ...]) -> str:
-    """Whose segment most likely lost this word.
+def _nearest_edge(
+    word: TranscribedWord, intervals: tuple[Ownership, ...]
+) -> tuple[Ownership, Literal["before", "after"], int]:
+    """Whose segment is nearest, on which side, and by how many derivative samples.
 
     A dropped word is almost always just outside one interval's edge — the opening word of an
     utterance the detector started a moment late — so naming the nearest candidate points an
     operator at the segment that reads wrong, rather than at every candidate in the request.
+
+    Distance is the minimum outward expansion that would make the word's **start** owned while
+    holding this request result fixed. Because ownership is half-open, a word starting exactly
+    at an interval's end needs one additional sample, not zero.
     """
-    return min(
-        intervals,
-        key=lambda piece: (
-            max(piece.start_sample - word.start_sample, word.start_sample - piece.end_sample, 0),
-            piece.candidate_id,
-        ),
-    ).candidate_id
+    measured: list[tuple[int, str, Literal["before", "after"], Ownership]] = []
+    for piece in intervals:
+        if word.start_sample < piece.start_sample:
+            side: Literal["before", "after"] = "before"
+            distance = piece.start_sample - word.start_sample
+        else:
+            side = "after"
+            distance = word.start_sample - piece.end_sample + 1
+        measured.append((distance, piece.candidate_id, side, piece))
+    distance, _, side, piece = min(measured)
+    return piece, side, distance
 
 
 def _dropped_notes(dropped: tuple[DroppedWords, ...]) -> list[TranscriptNote]:
@@ -159,11 +196,14 @@ def _dropped_notes(dropped: tuple[DroppedWords, ...]) -> list[TranscriptNote]:
             message=(
                 f"{item.count} word(s) returned for {item.track_id} started inside a request's "
                 f"padding but inside no ownership interval, so they are not in the transcript "
-                f"(ADR-0020). The behaviour is unchanged and correct — padding must not become "
-                f"content — but until now it happened in silence, and on the 2026-08-02 capture "
-                f"five of eleven segments lost their opening word that way. Counted as "
-                f"(request, word) pairs. This is the measurement that turns activity.vad.pad_ms "
-                f"from a guess into a number."
+                f"(ADR-0020). {item.leading_word_count} were the request's leading returned "
+                f"word; {item.before_ownership_count} started before and "
+                f"{item.after_ownership_count} after the nearest interval. The farthest start "
+                f"needs {item.max_edge_distance_derivative_samples} additional derivative "
+                f"sample(s) of ownership to be included, holding this model result fixed. "
+                f"Counted as (request, word) pairs. This is boundary geometry, not evidence "
+                f"that every dropped word should become content: a weak lav's padding can "
+                f"contain another speaker's words."
             ),
             path=item.track_id,
         )

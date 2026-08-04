@@ -7,14 +7,12 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 
 ## Right now
 
-- **Current milestone:** M8 — real-session readiness (**in progress**, branch
-  `milestone/M8-real-session-readiness`). H1 is still the
-  oldest outstanding item, but M8 is what makes recording it worth doing: the
-  2026-08-03 `samples` jam-capture run found seven structural defects, one of which can cost a
-  whole session and one of which corrupts both deliverables at once.
+- **Current milestone:** H1 — hardware fixture (**not started**; the M8 branch is complete and
+  ready to merge).
 - **Branch:** `main`
-- **Last closed milestone:** M6b — Qwen adapter
-- **Gate status at HEAD:** passes, zero skips (8 checks, 2294 tests)
+- **Last closed milestone:** M8 — real-session readiness
+- **Gate status at HEAD:** passes, zero skips (8 checks, 2 360 tests); the same default suite
+  passes from `.venv-rocm`.
 - **Blocked on:** **real recordings, and nothing else.** Every remaining open question that
   blocks anything needs audio rather than code. The MVP's code path is complete: `inspect`,
   `ingest`, `activity`, `mix`, `transcribe` and `process` all run end to end, and
@@ -36,63 +34,38 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
   instead of the code, plus an adapter that started HIP before checking for weights. It is
   the single highest-yield thing to do that no automation does for you.
 
-  **H1 is the oldest outstanding item and is now the only thing gating progress.** The
-  2026-08-02 sample probe answered **OQ-001, OQ-002, OQ-004 and OQ-005**; **OQ-004's
-  assumption is false on both halves** — DJI's `bext.time_reference` is not samples since
-  midnight and is frame-quantized to 33.3 ms. `rg 'OQ-004'` finds every site. **OQ-007**
-  (`ingest` refuses real 24-bit `_orig` files, with a reason that is wrong for 24-bit
-  specifically) is likewise recorded and not fixed.
+  **M8 closed every structural defect the jam capture found.** Real 24-bit `orig` sources now
+  ingest bit-exactly; `time_reference` is a frame-quantized recorder-domain counter rather
+  than invented midnight; wall-clock tags are descriptive only; a source-quantum rounding
+  overlap places cleanly; and `sync_qa` compares acoustic and metadata offsets while keeping
+  constant offset, drift, weak evidence and no signal distinct. The activity reference uses
+  attributed winners with an overlap-only fallback, the mix warning names its real inputs,
+  and three-way duplicates resolve best-source-first under a separately versioned assembly
+  semantic.
 
-  **The timing model is no longer the largest outstanding risk — as of 2026-08-03 it is a
-  bounded relabelling.** A jam verification capture
-  (`docs/fixtures/2026-08-03-jam-verification.md`) answered the two questions that decided
-  it:
+  **The diagnostics now make H1/H2 evidence rather than a listening anecdote.** Per-track
+  activity counts and references are explicit. Every dropped `(request, word)` pair reports
+  exact edge-distance geometry, side and word position. OQ-027's initial seconds-scale causal
+  claim was corrected: production damage is bounded by the 500 ms request padding.
 
-  - **OQ-023 — the jam reaches the files.** Two receivers started 5.28 s apart; their
-    independently written `time_reference` values agree on that offset to **17–30 ms**,
-    inside one 30 fps frame, verified against audio cross-correlation. Cross-receiver
-    placement is free from metadata. The absolute value is still meaningless, and still
-    does not matter — `session_position` is a subtraction.
-  - **OQ-006 — the clocks are stable.** Relative sample-clock drift across all six
-    transmitter pairs measures **≈1 ppm**, bounded ±3 ppm on a 30 s baseline. Projected over
-    a 4-hour session that is 14–43 ms: **the same size as or smaller than the quantization
-    already present at file start.** The cross-track error budget does not grow materially
-    with session length, which is what made "each transmitter is an independent recorder
-    placed by timecode" viable. H2 still owes the long baseline.
+  **The 30/50/100 ms real-model A/B did not produce a new default.** At 30 ms there were
+  30 dropped pairs and 10 rendered segments; at 50, 26 and 12; at 100, 21 and 12. The 100 ms
+  run retained all four known direct-source openings, but also retained more wrong-track/short
+  fragments and worsened two speech-reference clamps by up to 1.44 dB. `vad.pad_ms` stays at
+  30. H1 records hard-onset phrases against intended track ids and compares 30 with 100; H2 or
+  a real table decides.
 
-  Total cross-track budget: ~33 ms fixed + ~15–45 ms drift ≈ **80 ms worst case**, against
-  syllables of 150–250 ms and lav-geometry spread of 16–48 ms that is already present. The
-  one consumer it could hurt is a mix stage that *sums* correlated tracks; M5's automix ducks
-  rather than sums, and that is worth not breaking.
-
-  **Two corrections this capture forced.** **OQ-024**: the receiver's frame-rate setting does
-  **not** reach an `orig` file — a receiver set to 60 fps wrote `TIMECODE_RATE 30/1` on
-  1600-sample boundaries like the 30 fps unit beside it, so the 60 fps instruction has been
-  retracted from H1 and 33.3 ms is the floor. And **`bext.origination_time` must never anchor
-  a cross-receiver offset**: the two receivers' wall clocks were **48.7 s apart** while their
-  timecode agreed to under a frame. Nothing in the code stops that use today; the guard
-  belongs with OQ-004's other scoped M1/M2 work.
-
-  **The highest-value code left is a verifier, not a fix.** A *failed* jam produces files that
-  look perfectly normal — the 2026-08-02 probe is proof — and nothing at capture or ingest
-  time flags it. `session.sync_qa` already correlates tracks; what it does not do is compare
-  its measured offset against what `time_reference` predicts and fail loudly on disagreement.
-  That turns an invisible operator ritual into a pipeline assertion. **OQ-025** asks whether a
-  deliberate acoustic sync signal (a chirp, not a sine) should feed it, and concludes: keep
-  the jam as the alignment mechanism, spend the effort on the verifier.
+  **The jam/timing result remains strong.** Two receivers started 5.28 s apart and their
+  independently written references agree on that offset to 17–30 ms, inside one 30 fps frame
+  (**OQ-023**). Relative sample-clock drift measured ≈1 ppm, bounded ±3 ppm over 30 s
+  (**OQ-006**); H2 still owes the long baseline. A receiver set to 60 fps still wrote 30 fps
+  quantum boundaries (**OQ-024**), and two receivers' wall clocks were 48.7 s apart while the
+  jammed counter agreed — the case M8 now guards against.
 
   What H1 still owes: OQ-003's counter across a power cycle, OQ-007's `orig`/`edit` pairing,
   **OQ-015** (receiver displays read against wall clock — unrecoverable afterwards), the
   **third receiver** (OQ-012 is answered for two), six transmitters, and real speech at a
   real table. Breadth and operational questions — no longer an existential one.
-
-  **M6b added a defect to H1's list that only a real model could have found.** The model
-  hears an utterance's first word and the transcript does not contain it: the aligner places
-  it a few tens of milliseconds before the VAD candidate's ownership interval begins, and
-  M4's rule correctly drops it. Five of eleven segments lost their opening word on the sample
-  capture. `activity.vad.pad_ms` = 30 is M3's number chosen against synthetic audio,
-  registered under **OQ-017**, and a real table is what should move it. **Nothing raises or
-  warns** — the symptom is prose that reads fine and is missing a word.
 
   **OQ-008 answered** (M6a): `torch 2.9.1+rocm7.13.0` (HIP `7.13.99004-3309c6114a`) on
   `Radeon 8060S Graphics` / `gfx1151`, bfloat16 and float32 both exact.
@@ -123,7 +96,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | M5  | Automix                    | closed      | `d282688` |
 | M6a | ROCm environment           | closed      | `f5c6632` |
 | M6b | Qwen adapter               | closed      | `07cebdb` |
-| M8  | Real-session readiness     | verified    | —         |
+| M8  | Real-session readiness     | closed      | —         |
 | H1  | Hardware fixture (2 min)   | not started | —         |
 | H2  | Drift soak / first session | not started | —         |
 | M7  | Archival (sketch)          | sketch      | —         |
@@ -299,13 +272,9 @@ on arrival is already built: `inspect` names the strategy, the evidence and the 
 *by OQ id* in every manifest, so answering several of these is reading one manifest rather
 than writing an analysis. `tests/test_qwen_smoke.py` discovers `samples/*.wav` by glob, so
 dropping better recordings in re-runs every OQ-018 and OQ-022 measurement M6b took, without
-a code change.
-
-**If code is wanted before the recordings arrive**, the two known defects are both recorded
-and both deliberately unscheduled: **OQ-004's timing model** (the largest known piece of
-outstanding work in the project — `rg 'OQ-004'` finds every site) and **OQ-007** (`ingest`
-refuses real 24-bit `_orig` files with a reason that is wrong for 24-bit specifically).
-Neither should be attempted without deciding first what the real fixture is expected to say.
+a code change. Keep the first pass at `activity.vad.pad_ms: 30`, compare 100 ms against the
+logged hard-onset phrases, and score direct-source retention and wrong-track content together;
+the M8 A/B proved that neither dropped-word count nor segment count is a loss function alone.
 
 **`pytest-xdist` parallelism is done** (2026-08-03), outside any milestone because it
 touches every milestone's tests. **The suite went from 120 s to ~30 s and the whole gate

@@ -491,11 +491,19 @@ class TestDroppedWordsAreCounted:
         found = dropped(outcome)
         assert [(item.track_id, item.count) for item in found] == [("tx-a", 1)]
         assert found[0].candidate_ids == ("cand-a",)
+        assert found[0].before_ownership_count == 1
+        assert found[0].after_ownership_count == 0
+        assert found[0].leading_word_count == 1
+        assert found[0].nonleading_word_count == 0
+        assert found[0].edge_distance_derivative_samples == ((RATE // 20, 1),)
+        assert found[0].max_edge_distance_derivative_samples == RATE // 20
 
         # And the note an operator actually sees carries the count.
         _, notes = draft(outcome)
         assert [note.code for note in notes] == ["words_dropped_outside_ownership"]
         assert "1 word(s)" in notes[0].message
+        assert "1 were the request's leading returned word" in notes[0].message
+        assert f"needs {RATE // 20} additional derivative sample(s)" in notes[0].message
 
     def test_nothing_is_dropped_when_every_word_is_owned(self) -> None:
         plan = a_plan("req-1", (an_ownership("cand-a", RATE, RATE * 2),))
@@ -548,6 +556,12 @@ class TestDroppedWordsAreCounted:
         # Nearest by distance: the gap word sits 500 samples past cand-a's end and 11 500
         # before cand-b's start.
         assert found[0].candidate_ids == ("cand-a",)
+        assert found[0].before_ownership_count == 0
+        assert found[0].after_ownership_count == 1
+        assert found[0].leading_word_count == 0
+        assert found[0].nonleading_word_count == 1
+        # A half-open end needs one more sample than the distance to the edge itself.
+        assert found[0].edge_distance_derivative_samples == ((501, 1),)
 
     def test_one_padding_word_two_requests_both_drop_counts_twice(self) -> None:
         """The metric is dropped `(request, word)` pairs, and it says so.
@@ -573,6 +587,32 @@ class TestDroppedWordsAreCounted:
         found = dropped(*outcomes)
         assert [(item.track_id, item.count) for item in found] == [("tx-a", 2)]
         assert found[0].candidate_ids == ("cand-a", "cand-b")
+        assert found[0].before_ownership_count == 1
+        assert found[0].after_ownership_count == 1
+        assert found[0].leading_word_count == 2
+        assert found[0].nonleading_word_count == 0
+        assert found[0].edge_distance_derivative_samples == ((201, 1), (RATE - 200, 1))
+
+    def test_the_distance_histogram_is_sorted_and_counts_repeated_distances(self) -> None:
+        plan = a_plan("req-1", (an_ownership("cand-a", RATE, RATE * 2),))
+        outcome = an_outcome(
+            plan,
+            "one two three",
+            (
+                a_word(RATE - 800, "one"),
+                a_word(RATE - 800, "two"),
+                a_word(RATE * 2 + 99, "three"),
+            ),
+        )
+
+        (found,) = dropped(outcome)
+        assert found.count == 3
+        assert found.edge_distance_derivative_samples == ((100, 1), (800, 2))
+        assert found.max_edge_distance_derivative_samples == 800
+        assert found.before_ownership_count == 2
+        assert found.after_ownership_count == 1
+        assert found.leading_word_count == 1
+        assert found.nonleading_word_count == 2
 
     def test_a_wordless_outcome_drops_nothing(self) -> None:
         """No word times came back at all, so no word was assigned or discarded."""

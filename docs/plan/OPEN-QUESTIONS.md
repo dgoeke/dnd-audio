@@ -1098,16 +1098,17 @@ with the reason.
 
 ## OQ-027 — Does the aligner absorb a window's lead-in into its first word?
 
-**Assumption:** Yes, and only the first word — every interior word's start is trustworthy to
-well inside a syllable.
+**Assumption:** A request's first aligned word can absorb its lead-in, while every interior
+word's start is trustworthy to well inside a syllable. **The consequence is bounded by the
+request planner's own padding**: a returned word cannot begin before audio the request did not
+contain. The first version of this entry missed that bound and wrongly concluded that raising
+`activity.vad.pad_ms` could not fix the observed drops.
 **Why it matters:** `transcript/segments.py::_owned_words` assigns a word to the ownership
 interval containing its **start** (ADR-0020). A first word whose start is dragged to the
-window start falls outside every interval and is silently dropped, which is precisely what
-M8's diagnostic 9 now counts. So this is a live cause of the symptom that motivated diagnostic
-9 — five of eleven segments losing their opening word on the 2026-08-02 capture — and it is
-*not* the one that was assumed. The assumed cause was `activity.vad.pad_ms` being too small
-(**OQ-017**); this is the aligner placing the word wrongly regardless of the padding, and
-raising `pad_ms` would not fix it.
+window start falls outside every interval and is counted by M8's diagnostic 9. But a count
+combines two populations: an opening word the best-source candidate genuinely lost, and words
+heard in the padding of a weaker bleed/tail candidate that should not automatically become
+content. A pad sweep that calls both populations "recovered" tunes toward wrong attribution.
 
 **Measured 2026-08-03**, during M8's verify phase, over all four recordings in `samples/`
 (`tests/test_qwen_smoke.py::TestOq018TimestampStability`):
@@ -1134,14 +1135,72 @@ not less.
 and a stretched word still overlaps the short one — 16/16 paired on the affected recording. So
 duplicates are still recognized; it is ownership, not collapse, that this reaches.
 
-**Evidence:** A real session, where the same measurement runs over utterances that begin after
-genuine speech rather than after a capture's lead-in. If the effect is confined to a request's
-*first* word it is cheap to correct at the seam — clamp a leading word's start to its own end
-minus a plausible word length, or re-request without the lead-in — but which of those is right
-depends on whether it also happens mid-request after a long pause, which these four recordings
-cannot show: each holds one continuous utterance.
-**Needs:** H1/H2 · **Blocks:** moving `activity.vad.pad_ms` on the strength of diagnostic 9's
-count, since some of that count is this rather than padding · **Status:** open
+**The real end-to-end requests put a much tighter bound on the consequence** (M8 follow-up,
+2026-08-03). Reconstructed offline from the ASR cache and the exact request plans, all 30
+dropped `(request, word)` pairs were within the configured 500 ms transcript padding:
+
+| minimum additional ownership, holding the response fixed | pairs |
+| --- | ---: |
+| 320 derivative samples (20 ms) | 12 |
+| 1 600 (100 ms) | 3 |
+| 2 880 (180 ms) | 5 |
+| 3 073 (192 ms, after a half-open end) | 1 |
+| 4 160 (260 ms) | 1 |
+| 5 440 (340 ms) | 4 |
+| 6 720 (420 ms) | 1 |
+| 6 913 (432 ms, after a half-open end) | 1 |
+| 8 000 (500 ms) | 2 |
+
+Fifteen were the request's leading returned word. More importantly, the apparent direct
+candidate for each announced microphone — the highest source score in that solo interval —
+lost opening words only in the 20 ms bucket. Moving `activity.vad.pad_ms` from 30 to 50 ms is
+therefore the one useful A/B comparison this capture identifies. The larger buckets are
+mostly weaker copies or candidates that detected only an utterance's tail; widening ownership
+over them can create more wrong-track content even though it reduces the counter.
+
+The 6.16 s smoke-test outlier remains real evidence about the aligner, but not about the
+end-to-end loss: that hand-built request supplied 6.16 s of lead-in. Production requests
+supply at most `transcript.pad_ms`, so the planner clamps the damage to that width.
+
+**The 30/50/100 ms real-model A/B then showed why the cached curve is sensitivity evidence,
+not a prediction** (isolated scratch sessions, same source bytes and defaults otherwise):
+
+| `activity.vad.pad_ms` | dropped pairs | leading | drafts / collapsed / rendered | direct scripted opening content |
+| ---: | ---: | ---: | ---: | --- |
+| 30 | 30 | 15 | 15 / 5 / 10 | all four announced microphone phrases lose opening content |
+| 50 | 26 | 13 | 17 / 5 / 12 | the first three still lose their opening; `Finally` appears but `here's` does not |
+| 100 | 21 | 10 | 17 / 5 / 12 | all four openings are present on the apparent direct track; the fourth is split across two candidates |
+
+Candidate structure did not move: 18 candidates, 17 retained, one suppressed at all three
+values, and five drafts collapsed every time. What moved was the model response and ownership:
+the 50 ms run did **not** simply claim the baseline's twelve 20 ms misses. Changing the
+activity pad also moves the request window, so the aligner returned different starts; twelve
+new 20 ms misses remained at 50 ms. At 100 ms only five remained. This is OQ-027 acting inside
+the 500 ms bound, not evidence that the bound was absent.
+
+Wider ownership also made both previously wordless retained candidates emit segments. That
+recovered useful direct words at 100 ms, but also produced a second `Okay` on another track and
+left more wrong-track fragments. The duplicate-collapse count stayed flat. Therefore neither
+"dropped pairs" nor "rendered segments" is a loss function by itself.
+
+Holding the **30 ms responses fixed**, the offline counterfactual is deliberately labelled
+"newly owned", not "recovered": 12 pairs at 50 or 100 ms, 15 at 150 or 200, 21 at 250, 22 at
+300, 26 at 400, 28 at 500, and all 30 at 530 ms. Its disagreement with the actual 50/100 runs
+is the result: a full run must validate any candidate value because request timing changes the
+aligner output.
+
+The mix stayed ceiling-limited and essentially unchanged in level, but the speech references
+on the two quiet tracks moved downward as ownership widened (by 0.30/0.46 dB at 50 ms and
+1.07/1.44 dB at 100 ms), making their existing +6 dB correction clamps more severe. This is a
+second reason the pad cannot be tuned from transcript drops alone.
+
+**Evidence still needed:** A multi-wearer table capture, where ground truth distinguishes a
+direct-source onset from a bleed copy and the same measurement covers utterances after real
+turn gaps. If the first-word effect persists beyond the request-padding bound, correction at
+the aligner seam can be reconsidered; these files provide no evidence for that extra machinery.
+**Needs:** H1/H2 · **Blocks:** committing a new `activity.vad.pad_ms` default without
+multi-wearer evidence; it no longer blocks a 30/50 ms A/B on this capture · **Status:** open,
+with the production consequence bounded and the earlier causal claim corrected
 
 **Raised by M8's verify phase.** The `host_smoke` suite failed from `.venv-rocm` after
 `samples/` was replaced during M8's start phase — a 6160 ms outlier against a 1000 ms bound.

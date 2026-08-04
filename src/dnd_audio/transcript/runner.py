@@ -630,6 +630,17 @@ def perform_transcript(
                 details={
                     "dropped_request_word_pairs": str(item.count),
                     "nearest_candidates": ",".join(item.candidate_ids),
+                    "before_ownership_count": str(item.before_ownership_count),
+                    "after_ownership_count": str(item.after_ownership_count),
+                    "leading_word_count": str(item.leading_word_count),
+                    "nonleading_word_count": str(item.nonleading_word_count),
+                    "max_edge_distance_derivative_samples": str(
+                        item.max_edge_distance_derivative_samples
+                    ),
+                    "edge_distance_derivative_samples_histogram": ",".join(
+                        f"{distance}:{count}"
+                        for distance, count in item.edge_distance_derivative_samples
+                    ),
                 },
             )
         )

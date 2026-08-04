@@ -180,8 +180,12 @@ ownership interval, silently, by design (ADR-0020). On the 2026-08-02 capture fi
 segments lost their opening word and **nothing raised or warned** — the transcript read as
 plausible prose. Count them per track, report the total, and name the affected segments.
 
-This is what turns `activity.vad.pad_ms` from a guess into a measurement on the first real
-session, without changing it now.
+Count alone did not turn `activity.vad.pad_ms` into a measurement: the first end-to-end run
+still needed cache archaeology to distinguish a word 20 ms before an interval from one 500 ms
+away. The diagnostic therefore also records, in integer derivative samples, the distance to
+the nearest half-open ownership edge, before versus after that edge, and leading versus
+non-leading position in the request's returned word list. These are geometry, not a loss
+function — a weak lav's padding can contain another speaker's words.
 
 ## Completion gate
 
@@ -236,7 +240,9 @@ session, without changing it now.
       named. A fixture with a word starting 50 ms before its ownership interval reports
       exactly one dropped word. The metric is **defined** — dropped `(request, word)` pairs —
       and tested over a merged outcome owning two candidate groups, a true padding-only word,
-      and the same padding word returned by two overlapping requests.
+      and the same padding word returned by two overlapping requests. The report also carries
+      the exact edge-distance histogram in derivative samples, before/after counts, and
+      leading/non-leading counts; a composed-run test proves those fields reach the report.
 - [ ] A fixture reproducing the jam capture's acoustics is checked in — **synthetic audio
       calibrated from the measurements** (direct ≈ −39 dBFS, bleed ≈ −56, floor ≈ −66,
       17.4 dB rejection), not committed session audio (INV-06, and H1's no-audio rule).
@@ -466,7 +472,7 @@ reproduces the defect and the fixed code does not.
 | **6** the clamp warning names the real cause | The calibrated fixture no longer clamps; a fixture that legitimately does carries the candidate count |
 | **7** decided and recorded | The A/B/C case asserting C survives alone, mutation-checked by reverting the sort; ADR |
 | **8** defect 1 reproducible from the artifact alone | A test that reads `work/activity.json` for the calibrated fixture and derives the defect with no audio measurement |
-| **9** exactly one dropped word | A fixture with a word starting 50 ms before its ownership interval; zero on the canonical fixture; plus a merged outcome owning two candidate groups (no false drops), a true padding-only word, and one padding word returned by two overlapping requests |
+| **9** exactly one dropped word, with usable geometry | A fixture with a word starting 50 ms before its ownership interval; zero on the canonical fixture; plus a merged outcome owning two candidate groups (no false drops), a true padding-only word, one padding word returned by two overlapping requests, exact half-open edge distances, and a composed run asserting the report fields |
 | Fixture checked in, no session audio | `bleed_dominated_session()`; `.gitignore` already refuses `*.wav` |
 | INV-02 / INV-01 | Byte-stability across two runs for all six deterministic artifacts; **plus** the report's provenance and decision subsections asserted semantically identical cold and warm, since the report itself is exempt as a whole and the new decisions live there; the five composed runners already parametrized in `test_raw_guard.py` |
 | The spec agrees with the code | `dnd-audio-ingestion-agent-spec.md` amended in the same commits — `orig` is not always 32-bit float, `time_reference` is not samples since midnight, origins are not calendar-day based. Swept on `midnight`, `calendar`, `day origin` and `absolute timecode` as well as `rg 'OQ-004'`, because a false claim carrying no citation is exactly what the id search cannot find. `manifest.schema.json` regenerated alongside `timeline.schema.json` |
@@ -524,20 +530,114 @@ their reasons.
 
 ## Closeout
 
-_Filled in during the close phase. Leave the headings; they are the checklist._
-
 ### What works end to end
+
+The 2026-08-03 jam capture now runs through `process` unchanged: 24-bit and float sources
+ingest together, BWF references place chunks in the recorder's domain rather than an invented
+midnight domain, frame-quantized chunk boundaries tolerate one source quantum, wall-clock tags
+cannot move a receiver, and `sync_qa` distinguishes offset, drift, weak evidence and no signal.
+
+Activity computes a two-pass speech reference from attributed winners with the overlap-only
+fallback the plan review required. The calibrated 17.4 dB bleed fixture suppresses the copy
+without deleting genuine overlap. The mix warning names the measured reference and candidate
+population. Transcript duplicate chains resolve best-source-first under a separately versioned
+assembly semantic, so changing collapse never invalidates Qwen inference.
+
+The two new diagnostics are usable from artifacts alone. Each track records candidate,
+reference, retained and suppressed counts. A dropped `(request, word)` pair records its nearest
+candidate, exact half-open edge-distance histogram on the derivative grid, before/after side,
+and leading/non-leading position. The 30/50/100 ms real-model A/B proved why all of those are
+needed: a count alone combines true direct-source onset loss with words in weaker lav padding.
 
 ### Tests and commands run, with results
 
+- `direnv exec . ./scripts/gate.sh` — **8 checks, 2 360 passed, zero skips; gate passed**.
+- `nix run .#fhs -- -c 'UV_PROJECT_ENVIRONMENT=.venv-rocm uv run --no-sync pytest -m
+  "not host_smoke and not allow_network" -q'` — **2 360 passed** from the ROCm environment.
+- Focused transcript suite in-process — **77 passed**; Ruff and mypy clean.
+- Three isolated real-model `process` runs at `activity.vad.pad_ms` 30, 50 and 100 — all
+  completed with MP3, transcript and report, and each run's raw guard passed.
+- Fixed-response counterfactual through 600 ms, reconstructed from the 30 ms ASR cache and
+  exact request plans — recorded under OQ-027, explicitly as newly owned pairs rather than
+  recovered truth.
+
+The first sandboxed gate attempt failed only in the five tests that deliberately create
+sockets: the execution sandbox refused socket creation before the project's network guard
+could. Re-running the identical gate in the normal project environment passed all 2 360.
+
 ### Decisions made (→ ADRs)
+
+- **ADR-0029** — attributed-winner two-pass speech references, with a conservative fallback
+  for a speaker whose every utterance overlaps.
+- **ADR-0030** — exactly convertible integer PCM, admitting 24-bit and keeping unsupported
+  integer formats refused for their actual reason.
+- **ADR-0031** — recorder origin rather than midnight, source-quantum overlap tolerance, and
+  descriptive wall-clock tags; timeline schema version 2.
+- **ADR-0032** — best-source-first duplicate chain resolution and the ASR/assembly semantic
+  version split.
+
+No threshold default changed. In particular `activity.vad.pad_ms` remains 30 ms: 100 ms is a
+candidate for the multi-wearer capture, not a value this one-operator recording can establish.
 
 ### Assumptions made and open questions raised
 
+- **OQ-026 raised:** whether DJI's recorder counter wraps at all, and with what period. The
+  spec-required 24-hour unwrap remains until hardware disproves it rather than being deleted on
+  a hypothesis.
+- **OQ-027 raised, then narrowed after the end-to-end reconstruction:** the aligner's first
+  word can absorb request lead-in, but production damage is bounded by `transcript.pad_ms`.
+  All 30 observed drops were within 500 ms; the earlier claim of an unbounded seconds-scale
+  consequence was wrong and is corrected in the ledger.
+- **OQ-017 remains open.** The A/B gives a candidate range and demonstrates the tradeoff; it
+  does not provide multi-speaker ground truth.
+
 ### Notes for future implementors
+
+**Do not optimize the dropped-word count.** On the baseline, apparent direct-source openings
+all sat in the 20 ms fixed-response bucket, but so did words on weaker copies. The actual 50 ms
+rerun retained only four fewer drops because moving the activity edge also moved the request
+window and therefore the aligner's timestamps. At 100 ms all four known direct openings were
+present, while a second `Okay` and more fragments also survived. Cached geometry is a
+sensitivity curve; every candidate value needs one real-model run.
+
+`vad.pad_ms` is not transcript-only. Candidate structure stayed at 18/17/1 across the A/B,
+but wider intervals changed candidate statistics and pushed the two quiet-track speech
+references down by as much as 1.44 dB, worsening their +6 dB mix correction clamps. Score the
+activity artifact, transcript and mix together.
+
+The listening extracts and complete scratch table are beside the isolated sessions under the
+operator's `dnd-audio-pad-ab-20260803/` scratch directory; they are intentionally untracked and
+reproducible from the source session. H1's recipe now logs unique hard-onset phrases against
+intended track ids so the next measurement can label benefit and cost rather than infer them
+from source score.
 
 ### Deviations from this charter, and why
 
+- The plan review's overlap-only-speaker case required a fallback population in the two-pass
+  reference; using winners unconditionally would have deleted the speaker the fix was meant to
+  protect.
+- The BWF 24-hour wrap was retained under OQ-026 rather than removed. The existing capability
+  is spec-required and a real DJI session never reaches the ambiguous inference path.
+- Diagnostic 9 grew after verify. Its original count met the written gate but failed its stated
+  purpose on the first real run: choosing a pad still required reconstructing edge distances
+  from cache. Exact geometry and a composed report test close that usability gap.
+- The 30/50/100 study was kept out of the default. M8 explicitly excluded threshold tuning;
+  the study bounds the candidate and improves H1/H2, while respecting that exclusion.
+
 ### Downstream charters updated
 
+- **H1** carries the third receiver, power-cycle and `orig`/`edit` evidence, plus logged
+  hard-onset phrases, short handoffs and known track identity for OQ-017/OQ-027.
+- **H2** still owns long-baseline drift, first-session disk use, natural truncation and
+  duplicate-text calibration.
+- **OPEN-QUESTIONS.md** records OQ-026 and OQ-027, the corrected bound, the real A/B and the
+  fixed-response counterfactual.
+- The product spec, affected ADRs, schemas and later charter wording were amended alongside
+  the structural fixes; no code/spec disagreement remains.
+
 ### Next smallest step
+
+Record and process **H1**. The software path is complete and the remaining decisions need
+multi-wearer audio or receiver-display observations that cannot be reconstructed later. Keep
+`activity.vad.pad_ms` at 30 for the baseline, run 100 ms as the one candidate comparison, and
+do not commit either result until direct-source and overlap ground truth are scored.

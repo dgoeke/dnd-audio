@@ -19,7 +19,7 @@ import pytest
 
 from dnd_audio.artifacts.records import TranscriptRecords
 from dnd_audio.artifacts.report import OverallStatus, StageName, StageStatus
-from dnd_audio.determinism import sha256_file
+from dnd_audio.determinism import sha256_file, write_json_atomic
 from dnd_audio.errors import ExitCode
 from dnd_audio.fixtures import FixtureTruth
 from dnd_audio.interfaces import TranscriptionResult
@@ -135,6 +135,47 @@ class TestTheReport:
         assert identity["asr_max_new_tokens"] == "1024"
         assert identity["asr_language"] == "English"
         assert len(identity["asr_variant"]) == 64
+
+    def test_dropped_word_geometry_reaches_the_report(
+        self, canonical_fixture: FixtureTruth
+    ) -> None:
+        """Diagnostic 9 carries the number needed to evaluate ``vad.pad_ms``.
+
+        The fake's first word begins 66 ms before the declared speech. The detector's 32 ms
+        frame grid plus its 30 ms pad put ownership 46 ms before that declaration, so the
+        returned word sits exactly 20 ms — 320 derivative samples — before ownership. The
+        report must retain that geometry rather than only a count that cannot distinguish a
+        20 ms onset from a 500 ms bleed copy.
+        """
+        path = canonical_fixture.session_dir / "fake-models.json"
+        document = json.loads(path.read_text(encoding="utf-8"))
+        direct = next(
+            utterance
+            for utterance in document["asr"]
+            if utterance["track_id"] == "tx-a" and utterance["utterance_id"].startswith("utt_tx-a_")
+        )
+        direct["words"][0]["start_sample"] -= 66 * document["sample_rate"] // 1000
+        write_json_atomic(path, document)
+
+        result = run_transcribe(canonical_fixture.session_dir, fake_models=True)
+
+        (decision,) = [
+            item
+            for item in result.report.decisions
+            if item.code == "transcript_words_dropped" and item.subject == "tx-a"
+        ]
+        details = dict(decision.details)
+        nearest = details.pop("nearest_candidates")
+        assert nearest.startswith("cand_tx-a_")
+        assert details == {
+            "after_ownership_count": "0",
+            "before_ownership_count": "1",
+            "dropped_request_word_pairs": "1",
+            "edge_distance_derivative_samples_histogram": "320:1",
+            "leading_word_count": "1",
+            "max_edge_distance_derivative_samples": "320",
+            "nonleading_word_count": "0",
+        }
 
     def test_report_records_the_whole_asr_stack(self, canonical_fixture: FixtureTruth) -> None:
         """The completion gate's list, end to end through the production wiring.
