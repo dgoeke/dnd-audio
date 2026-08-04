@@ -180,6 +180,12 @@ class FixtureChunk:
     #: Defaults to the session rate. Set it to 44100 to build the nonconforming source
     #: M1 warns about and M2 rejects.
     sample_rate: int | None = None
+    #: Floor this chunk's written `bext.time_reference` to a multiple of this many samples,
+    #: the way real hardware does. OQ-004 measured every DJI reference as a multiple of
+    #: 1600, which means a chunk after a switch-off reports a start *earlier* than where its
+    #: audio really begins — and therefore overlapping the chunk before it. Every other
+    #: fixture here is sample-exact by construction, which is why nothing caught that.
+    quantize_reference_samples: int | None = None
     #: What the transmitter was set to write. `pcm_s24le` is not hypothetical — it is what
     #: two of four kits produced in the 2026-08-02 probe from a per-transmitter setting the
     #: operator had not matched (ADR-0030), and it is per *chunk* because that is how the
@@ -694,6 +700,10 @@ def _write_chunk(
     # `time_reference` is at the file's own rate, which is why a nonconforming 44.1 kHz
     # chunk cannot simply reuse the session-rate number.
     time_reference = (zero + chunk.start_sample) * rate // spec.sample_rate
+    if chunk.quantize_reference_samples is not None:
+        # Floored, not rounded: a counter that ticks once a frame reports the last tick it
+        # saw, so the reported start is never later than the real one.
+        time_reference -= time_reference % chunk.quantize_reference_samples
 
     broadcast: BroadcastMetadata | None = None
     if chunk.timecode_source in ("bext", "both"):

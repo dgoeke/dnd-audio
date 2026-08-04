@@ -548,6 +548,13 @@
       "additionalProperties": false,
       "description": "How to interpret the timecode embedded in the source files.",
       "properties": {
+        "bwf_reference_quantum_samples": {
+          "default": 1600,
+          "maximum": 48000,
+          "minimum": 1,
+          "title": "Bwf Reference Quantum Samples",
+          "type": "integer"
+        },
         "chunk_overlap_policy": {
           "default": "reject",
           "enum": [

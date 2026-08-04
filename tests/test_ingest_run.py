@@ -29,12 +29,15 @@ from dnd_audio.artifacts.manifest import Manifest
 from dnd_audio.errors import ExitCode
 from dnd_audio.fixtures import FixtureSession, FixtureTruth, build_session
 from dnd_audio.fixtures.variants import (
+    BWF_REFERENCE_QUANTUM_SAMPLES,
+    QUANTIZED_BACKWARD_SAMPLES,
     drop_frame_session,
     inconsistent_rate_session,
     mixed_format_session,
     no_origin_session,
     nonconforming_rate_session,
     overlapping_session,
+    quantized_reference_session,
     rollover_session,
 )
 from dnd_audio.timeline import CANONICAL_SAMPLE_RATE, TIMELINE_RELATIVE_PATH
@@ -255,6 +258,51 @@ class TestRefusalsHappenBeforeConstruction:
         stages = _stages(result)
         assert stages["inspect"]["status"] == "failed"
         assert stages["reconstruct"]["status"] == "failed"
+
+
+class TestAQuantizedReferenceCounter:
+    """Defect 2b, end to end: a real recorder's `bext` counter ticks once a frame.
+
+    Unit coverage lives in `test_layout.py`; this is here because the claim is about what
+    `ingest` does to a session directory, and because the previous behaviour was a *failed
+    run* rather than a misplaced sample.
+    """
+
+    def test_a_second_chunk_rounded_backward_places_where_its_audio_is(
+        self, a_session: Callable[[FixtureSession], FixtureTruth]
+    ) -> None:
+        truth = a_session(quantized_reference_session())
+        second = sorted(truth.for_track("tx-a"), key=lambda c: c.start_sample)[1]
+        # The fixture really did write a reference that under-reports its own start.
+        assert second.time_reference % BWF_REFERENCE_QUANTUM_SAMPLES == 0
+
+        result = run_ingest(truth.session_dir)
+        assert result.exit_code is ExitCode.OK, _error_codes(result)
+        assert result.timeline is not None
+
+        track = next(t for t in result.timeline.tracks if t.track_id == "tx-a")
+        audio = [segment for segment in track.segments if segment.kind == "audio"]
+        assert [segment.session_start_sample for segment in audio] == [
+            chunk.start_sample
+            for chunk in sorted(truth.for_track("tx-a"), key=lambda c: c.start_sample)
+        ]
+        assert audio[1].shift_samples == QUANTIZED_BACKWARD_SAMPLES
+
+    def test_calling_the_counter_sample_exact_fails_the_session(
+        self, a_session: Callable[[FixtureSession], FixtureTruth]
+    ) -> None:
+        """The behaviour before M8, reachable by configuration — and the proof that the
+        fixture exercises the tolerance rather than passing for some other reason."""
+        truth = a_session(quantized_reference_session())
+        document = yaml.safe_load((truth.session_dir / "session.yaml").read_text())
+        document["timecode"]["bwf_reference_quantum_samples"] = 1
+        (truth.session_dir / "session.yaml").write_text(
+            yaml.safe_dump(document, sort_keys=True), encoding="utf-8"
+        )
+
+        result = run_ingest(truth.session_dir)
+        assert result.exit_code is not ExitCode.OK
+        assert "chunk_overlap" in _error_codes(result)
 
 
 class TestAMixedFormatSession:

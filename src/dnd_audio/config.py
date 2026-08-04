@@ -141,6 +141,13 @@ class TimecodeConfig(_Strict):
     #: ordinary contiguous chunks routinely appear to overlap by less than a frame.
     #: Neither value discards a sample.
     chunk_overlap_policy: ChunkOverlapPolicy = "reject"
+    #: How coarsely this hardware writes `bext.time_reference`, in samples at the file's own
+    #: rate. **Not derivable from the file**: FFprobe does not surface the iXML that declares
+    #: the frame rate, and OQ-024 showed the receiver's configured rate does not reach an
+    #: `orig` file at all — so it is configuration with a measured default. 1600 samples is
+    #: what OQ-004 measured on the DJI Mic 3 at 48 kHz, one frame at 30 fps. A recorder that
+    #: really is sample-exact is stated as 1, which restores the pre-M8 behaviour exactly.
+    bwf_reference_quantum_samples: int = Field(default=1600, ge=1, le=48000)
 
     @model_validator(mode="after")
     def _check_origin(self) -> TimecodeConfig:

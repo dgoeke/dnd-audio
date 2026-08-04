@@ -286,7 +286,11 @@ def _resolve_overlap(
     """
     overlap = placed_end - evidence_start
     tolerance = quantization_tolerance_samples(
-        previous.evidence, item.evidence, frame_rate, CANONICAL_SAMPLE_RATE
+        previous.evidence,
+        item.evidence,
+        frame_rate,
+        CANONICAL_SAMPLE_RATE,
+        bwf_quantum_samples=config.timecode.bwf_reference_quantum_samples,
     )
 
     if overlap <= tolerance:

@@ -283,7 +283,8 @@ class TestOverlaps:
         """Two sample-exact chunks overlapping by 1000 samples is a real overlap.
 
         The session is at 29.97, where a frame is 1602 samples, so a tolerance read from
-        the *session* would wave this through. Read from the *pair*, it is refused.
+        the *session* would wave this through. Read from the *pair* — here a recorder
+        declared sample-exact — it is refused.
         """
         with pytest.raises(LayoutError, match="1-sample tolerance"):
             lay_out(
@@ -298,7 +299,56 @@ class TestOverlaps:
                     ]
                 },
                 frame_rate="29.97F",
+                bwf_reference_quantum_samples=1,
             )
+
+    def test_a_bwf_reference_rounded_backward_by_its_own_quantum_places_cleanly(self) -> None:
+        """The defect that would have failed a real four-hour session on its second chunk.
+
+        DJI writes `bext.time_reference` in steps of 1600 samples (OQ-004), so the chunk
+        after a switch-off reports a start *earlier* than where it really begins — here by
+        800 samples, into audio the previous chunk already occupies. Reading the field's
+        units rather than its measured behaviour makes that a material overlap, and
+        `chunk_overlap_policy` defaults to `reject`, so the session fails outright.
+
+        Every fixture in this repository writes sample-exact references, and the jam
+        capture has one chunk per track, which is why nothing caught it.
+        """
+        layouts, decisions, warnings = lay_out(
+            {
+                "tx-a": [
+                    source("raw/tx-a/one.wav", bwf(19 * 3600 * RATE), n_samples=2 * SECOND),
+                    source(
+                        "raw/tx-a/two.wav",
+                        bwf(19 * 3600 * RATE + 2 * SECOND - 800),
+                        n_samples=SECOND,
+                    ),
+                ]
+            }
+        )
+        assert segments_of(layouts, "tx-a") == [
+            ("audio", 0, 2 * SECOND),
+            ("audio", 2 * SECOND, SECOND),
+        ]
+        assert not warnings
+        assert [d.code for d in decisions if d.code == "chunk_overlap_quantization"]
+
+    def test_an_overlap_beyond_that_quantum_is_still_fatal(self) -> None:
+        """The tolerance widened by one frame, not into a licence to ignore overlaps."""
+        with pytest.raises(LayoutError, match="1600-sample tolerance") as caught:
+            lay_out(
+                {
+                    "tx-a": [
+                        source("raw/tx-a/one.wav", bwf(19 * 3600 * RATE), n_samples=2 * SECOND),
+                        source(
+                            "raw/tx-a/two.wav",
+                            bwf(19 * 3600 * RATE + 2 * SECOND - 1601),
+                            n_samples=SECOND,
+                        ),
+                    ]
+                }
+            )
+        assert caught.value.code == "chunk_overlap"
 
 
 class TestRefusalsHappenFirst:

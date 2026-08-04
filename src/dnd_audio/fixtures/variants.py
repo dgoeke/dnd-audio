@@ -26,8 +26,10 @@ from dnd_audio.fixtures.session import (
 )
 
 __all__ = [
+    "BWF_REFERENCE_QUANTUM_SAMPLES",
     "DELAYED_BLEED_SAMPLES",
     "DRIFT_END_SHIFT_SAMPLES",
+    "QUANTIZED_BACKWARD_SAMPLES",
     "delayed_bleed_session",
     "drift_session",
     "drop_frame_session",
@@ -37,6 +39,7 @@ __all__ = [
     "no_origin_session",
     "nonconforming_rate_session",
     "overlapping_session",
+    "quantized_reference_session",
     "rollover_session",
 ]
 
@@ -132,9 +135,10 @@ def inconsistent_rate_session() -> FixtureSession:
 def overlapping_session() -> FixtureSession:
     """Two chunks of one track claiming the same half-second.
 
-    Far beyond any quantization tolerance — both starts come from `bext`, where the
-    tolerance is a single sample — so it exercises `chunk_overlap_policy` rather than the
-    automatic nudge.
+    Half a second, which is two orders of magnitude beyond any quantization the evidence
+    could produce — so it exercises `chunk_overlap_policy` rather than the automatic nudge.
+    Its counterpart is :func:`quantized_reference_session`, which overlaps by less than one
+    reference tick and must place cleanly.
     """
     return FixtureSession(
         session_id="overlapping",
@@ -285,6 +289,59 @@ def dated_session(day: dt.date) -> FixtureSession:
         tracks=_two_tracks(
             (FixtureChunk(start_sample=0, n_samples=_SECOND, sequence=1),),
             (FixtureChunk(start_sample=_SECOND, n_samples=_SECOND, sequence=1),),
+        ),
+    )
+
+
+#: What DJI's `bext.time_reference` counter actually steps by, measured (OQ-004).
+BWF_REFERENCE_QUANTUM_SAMPLES: Final = 1600
+
+#: How far :func:`quantized_reference_session`'s second chunk therefore reports itself
+#: early. Deliberately not a round fraction of the quantum, so a test cannot pass by
+#: coincidence: 300000 mod 1600 is 800.
+QUANTIZED_BACKWARD_SAMPLES: Final = 800
+
+
+def quantized_reference_session() -> FixtureSession:
+    """One track, two contiguous chunks, and a reference counter that ticks once a frame.
+
+    The second chunk starts exactly where the first ends, but its written reference is
+    floored to a multiple of :data:`BWF_REFERENCE_QUANTUM_SAMPLES` — so it *claims* to
+    start :data:`QUANTIZED_BACKWARD_SAMPLES` earlier, inside audio the first chunk already
+    holds. Reading `time_reference` as sample-exact makes that a material overlap, and
+    `chunk_overlap_policy` defaults to `reject`, so a perfectly ordinary session fails on
+    its second chunk.
+
+    Every other fixture here writes sample-exact references and the jam capture has one
+    chunk per track, which is the whole reason this went unnoticed until M8.
+    """
+    first = 300_000
+    return FixtureSession(
+        session_id="quantized-reference",
+        title="Quantized reference",
+        tracks=_two_tracks(
+            (
+                FixtureChunk(
+                    start_sample=0,
+                    n_samples=first,
+                    sequence=1,
+                    quantize_reference_samples=BWF_REFERENCE_QUANTUM_SAMPLES,
+                ),
+                FixtureChunk(
+                    start_sample=first,
+                    n_samples=_SECOND,
+                    sequence=2,
+                    quantize_reference_samples=BWF_REFERENCE_QUANTUM_SAMPLES,
+                ),
+            ),
+            (
+                FixtureChunk(
+                    start_sample=0,
+                    n_samples=first + _SECOND,
+                    sequence=1,
+                    quantize_reference_samples=BWF_REFERENCE_QUANTUM_SAMPLES,
+                ),
+            ),
         ),
     )
 

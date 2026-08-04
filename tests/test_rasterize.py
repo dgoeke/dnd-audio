@@ -34,9 +34,9 @@ from dnd_audio.timeline.rasterize import (
     SECONDS_PER_DAY,
     absolute_seconds,
     cycle_units,
+    evidence_quantum_samples,
     has_mixed_absolute_domains,
     is_absolute,
-    is_frame_quantized,
     quantization_tolerance_samples,
     relative_seconds,
     session_position,
@@ -327,9 +327,21 @@ class TestRollover:
 class TestQuantizationTolerance:
     """How large an overlap is explainable by rounding (ADR-0008, ADR-0010)."""
 
-    def test_two_sample_exact_starts_tolerate_one_sample(self) -> None:
-        tolerance = quantization_tolerance_samples(bwf(0), bwf(48000), FRAME_RATES["29.97F"], RATE)
-        assert tolerance == 1
+    def test_two_bwf_starts_tolerate_the_hardware_they_came_from(self) -> None:
+        """A sample count is not automatically sample-*exact* (OQ-004).
+
+        DJI's `time_reference` moves in steps of 1600 samples, so two chunks of one track
+        can overlap by up to that much from rounding alone. A recorder that really is
+        exact says so, and gets the old one-sample tolerance back.
+        """
+        coarse = quantization_tolerance_samples(
+            bwf(0), bwf(48000), FRAME_RATES["29.97F"], RATE, bwf_quantum_samples=1600
+        )
+        assert coarse == 1600
+        exact = quantization_tolerance_samples(
+            bwf(0), bwf(48000), FRAME_RATES["29.97F"], RATE, bwf_quantum_samples=1
+        )
+        assert exact == 1
 
     def test_a_timecode_start_tolerates_a_whole_frame(self) -> None:
         """1602 samples at 29.97, because the recorder's own rounding dominates ours."""
@@ -338,23 +350,33 @@ class TestQuantizationTolerance:
             timecode_record("00:00:01:00", "29.97F"),
             FRAME_RATES["29.97F"],
             RATE,
+            bwf_quantum_samples=1,
         )
         assert tolerance == 1602
 
     def test_one_timecode_start_is_enough_to_widen_the_tolerance(self) -> None:
         """The tolerance is the pair's worst resolution, not an average of the two."""
         tolerance = quantization_tolerance_samples(
-            bwf(0), timecode_record("00:00:01:00", "30F"), FRAME_RATES["30F"], RATE
+            bwf(0),
+            timecode_record("00:00:01:00", "30F"),
+            FRAME_RATES["30F"],
+            RATE,
+            bwf_quantum_samples=1,
         )
         assert tolerance == 1600
 
     def test_the_tolerance_is_a_property_of_the_pair_not_of_the_session(self) -> None:
-        """Two BWF chunks keep a one-sample tolerance even at a fractional session rate.
+        """Two exact chunks keep a one-sample tolerance even at a fractional session rate.
 
         Widening it because some *other* track uses timecodes would hide a real
         1602-sample overlap between two sample-exact chunks.
         """
-        assert quantization_tolerance_samples(bwf(0), bwf(1), FRAME_RATES["29.97DF"], RATE) == 1
+        assert (
+            quantization_tolerance_samples(
+                bwf(0), bwf(1), FRAME_RATES["29.97DF"], RATE, bwf_quantum_samples=1
+            )
+            == 1
+        )
 
 
 class TestDomainClassification:
@@ -363,10 +385,35 @@ class TestDomainClassification:
         assert is_absolute(timecode_record("00:00:00:00", "30F"))
         assert not is_absolute(SessionOffsetRecord(samples=0, sample_rate=RATE))
 
-    def test_only_timecodes_are_frame_quantized(self) -> None:
-        assert is_frame_quantized(timecode_record("00:00:00:00", "30F"))
-        assert not is_frame_quantized(bwf(0))
-        assert not is_frame_quantized(SessionOffsetRecord(samples=0, sample_rate=RATE))
+    def test_each_kind_of_evidence_states_its_own_resolution(self) -> None:
+        """A timecode's from its rate, a BWF reference's from configuration, an
+        operator's offset from the fact that they typed it."""
+        quantum = 1600
+
+        def measure(evidence: StartEvidenceRecord) -> int:
+            return evidence_quantum_samples(
+                evidence, FRAME_RATES["29.97F"], RATE, bwf_quantum_samples=quantum
+            )
+
+        assert measure(timecode_record("00:00:00:00", "29.97F")) == 1602
+        assert measure(bwf(0)) == quantum
+        assert measure(SessionOffsetRecord(samples=0, sample_rate=RATE)) == 1
+
+    def test_a_bwf_quantum_is_stated_at_the_files_rate_and_applied_at_the_sessions(
+        self,
+    ) -> None:
+        """1600 samples of a 44.1 kHz file is more than 1600 samples of session time.
+
+        Such a file is refused before layout, so nothing depends on this today — but the
+        function converts rather than assuming, and a silent unit mismatch here would move
+        every chunk of an affected track.
+        """
+        assert (
+            evidence_quantum_samples(
+                bwf(0, sample_rate=44100), FRAME_RATES["30F"], RATE, bwf_quantum_samples=1600
+            )
+            == 1742
+        )
 
     def test_mixed_domains_needs_both_absolute_kinds(self) -> None:
         timecode = timecode_record("00:00:00:00", "30F")

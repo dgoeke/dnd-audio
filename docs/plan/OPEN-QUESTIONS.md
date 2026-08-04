@@ -124,6 +124,19 @@ timing, which is what keeps this safe in the meantime: a wrong *epoch* shifts a 
 uniformly rather than scrambling it, and the clap-sync QA exists to catch the cross-receiver
 case.
 
+**The quantization half was acted on in M8 (2026-08-03), and it was not cosmetic.**
+`rasterize` treated a BWF reference as sample-*exact* because it is expressed in samples,
+giving two chunks of one track a **one-sample** overlap tolerance. A second chunk whose
+reference floors backward by up to 1599 samples — which is what a counter that ticks once a
+frame does at every switch-off — was therefore a *material* overlap, and
+`timecode.chunk_overlap_policy` defaults to `reject`. An ordinary four-hour session with
+several chunks per track would have failed outright, on correct evidence. The tolerance now
+comes from `timecode.bwf_reference_quantum_samples`, default 1600; the value cannot be read
+from the file (**OQ-024**), so it is configuration with a measured default, and stating 1
+restores the old behaviour exactly. Nothing caught this because every fixture in the
+repository wrote sample-exact references and the jam capture has one chunk per track —
+`quantized_reference_session` now writes floored ones.
+
 ---
 
 **Reframed 2026-08-03, and the reframe shrinks the work considerably. A *shared* origin is

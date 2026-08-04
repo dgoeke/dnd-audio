@@ -56,9 +56,9 @@ __all__ = [
     "SECONDS_PER_DAY",
     "absolute_seconds",
     "cycle_units",
+    "evidence_quantum_samples",
     "has_mixed_absolute_domains",
     "is_absolute",
-    "is_frame_quantized",
     "quantization_tolerance_samples",
     "relative_seconds",
     "session_position",
@@ -85,15 +85,35 @@ def is_absolute(evidence: StartEvidenceRecord) -> bool:
     return not isinstance(evidence, SessionOffsetRecord)
 
 
-def is_frame_quantized(evidence: StartEvidenceRecord) -> bool:
-    """Whether this evidence's resolution is a frame rather than a sample.
+def evidence_quantum_samples(
+    evidence: StartEvidenceRecord,
+    frame_rate: FrameRate,
+    rate: int,
+    *,
+    bwf_quantum_samples: int,
+) -> int:
+    """This evidence's own resolution, in samples at ``rate``, rounded up.
 
-    A recorder that writes ``19:00:00:00`` may have started anywhere inside that frame, so
-    a timecode's own quantization — 1602 samples at 29.97 fps — dwarfs the single-sample
-    rounding this module introduces. That difference is what makes the overlap tolerance a
-    property of the evidence pair rather than a constant.
+    A recorder that writes ``19:00:00:00`` may have started anywhere inside that frame, so a
+    timecode's own quantization — 1602 samples at 29.97 fps — dwarfs the single-sample
+    rounding this module introduces.
+
+    **A BWF sample reference is not automatically finer.** It is a sample count and looks
+    exact, but on this hardware it moves in steps of a whole frame: OQ-004 measured every
+    `time_reference` in the sample captures as a multiple of 1600 samples. Believing the
+    field's units rather than its measured behaviour is what makes an ordinary second chunk
+    look like a material overlap, since it rounds *backward* into the chunk before it. The
+    quantum cannot be read from the file (OQ-024), so it is configuration —
+    ``timecode.bwf_reference_quantum_samples``.
+
+    A session-relative offset is an operator's assertion and is exact by construction.
     """
-    return isinstance(evidence, TimecodeRecord)
+    if isinstance(evidence, TimecodeRecord):
+        return math.ceil(Fraction(rate) / frame_rate.rate)
+    if isinstance(evidence, BwfSampleReferenceRecord):
+        # Stated at the file's own rate, applied at the session's.
+        return math.ceil(Fraction(bwf_quantum_samples * rate, evidence.sample_rate))
+    return 1
 
 
 def cycle_units(evidence: StartEvidenceRecord, frame_rate: FrameRate) -> int | None:
@@ -186,26 +206,32 @@ def session_position(
 
 
 def quantization_tolerance_samples(
-    first: StartEvidenceRecord, second: StartEvidenceRecord, frame_rate: FrameRate, rate: int
+    first: StartEvidenceRecord,
+    second: StartEvidenceRecord,
+    frame_rate: FrameRate,
+    rate: int,
+    *,
+    bwf_quantum_samples: int,
 ) -> int:
     """The largest overlap between two chunks explainable by rounding rather than by audio.
 
-    One sample when both starts came from sample-exact evidence — the only error available
-    is :func:`session_position`'s single rounding. One whole frame, rounded up, when either
-    came from a timecode, because the recorder's own quantization is then three orders of
-    magnitude larger than ours.
+    The coarser of the two chunks' own quanta, and never less than one sample — the single
+    rounding :func:`session_position` introduces is always available as an explanation.
 
-    A property of the *pair*, not a global constant: a 1602-sample overlap between two
-    BWF-timed chunks is a real overlap the operator should see, and calling it rounding
-    because some other track uses timecodes would hide it (ADR-0008, ADR-0010).
+    A property of the *pair*, not a global constant: an overlap larger than either chunk's
+    evidence could have produced is a real overlap the operator should see, and calling it
+    rounding because some other track uses coarser evidence would hide it (ADR-0008,
+    ADR-0010).
     """
-    tolerance = 1
-    for evidence in (first, second):
-        if not is_frame_quantized(evidence):
-            continue
-        per_frame = Fraction(rate) / frame_rate.rate
-        tolerance = max(tolerance, math.ceil(per_frame))
-    return tolerance
+    return max(
+        1,
+        *(
+            evidence_quantum_samples(
+                evidence, frame_rate, rate, bwf_quantum_samples=bwf_quantum_samples
+            )
+            for evidence in (first, second)
+        ),
+    )
 
 
 def timecode_day_discrepancy_seconds(frame_rate: FrameRate) -> Fraction:
