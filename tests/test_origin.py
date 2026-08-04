@@ -31,7 +31,7 @@ from dnd_audio.timeline.rasterize import (
     SECONDS_PER_DAY,
     timecode_day_discrepancy_seconds,
 )
-from tests.manifests import bwf, config, config_for, manifest, offset, source, timecode
+from tests.manifests import asserted, bwf, config, config_for, manifest, offset, source, timecode
 
 RATE = CANONICAL_SAMPLE_RATE
 HOUR = 3600 * RATE
@@ -448,16 +448,24 @@ class TestRolloverWithoutAConfiguredOrigin:
         assert placed(found, "raw/tx-b/one.wav") == RATE
 
 
-class TestRecordedDatesBeatInference:
-    """When the files say which day they are, that is evidence and not a guess."""
+class TestOnlyAnOperatorsDateAssignsACycle:
+    """ADR-0031. A date the operator asserted is evidence; a date read from a file is not.
 
-    def test_matching_dates_mean_no_rollover(self) -> None:
+    The asymmetry is not fastidiousness. `bext.origination_date`/`origination_time` carry
+    the receiver's real-time clock, and on 2026-08-03 two receivers were measured **48.7 s
+    apart** while their timecode agreed to under one frame. This code applies day
+    differences in the coarsest unit there is — whole 24-hour cycles — so two clocks
+    straddling midnight would place their tracks a *day* apart on evidence known to be a
+    minute wrong.
+    """
+
+    def test_matching_asserted_dates_mean_no_rollover(self) -> None:
         day = dt.date(2026, 8, 15)
         found = determine_origin(
             manifest(
                 {
-                    "tx-a": [source("raw/tx-a/one.wav", bwf(23 * HOUR, date=day))],
-                    "tx-b": [source("raw/tx-b/one.wav", bwf(1 * HOUR, date=day))],
+                    "tx-a": [asserted("raw/tx-a/one.wav", timecode("23:00:00:00", date=day))],
+                    "tx-b": [asserted("raw/tx-b/one.wav", timecode("01:00:00:00", date=day))],
                 }
             ),
             config(),
@@ -467,7 +475,37 @@ class TestRecordedDatesBeatInference:
         assert placed(found, "raw/tx-b/one.wav") == 0
         assert placed(found, "raw/tx-a/one.wav") == 22 * HOUR
 
-    def test_differing_dates_are_applied_as_whole_cycles(self) -> None:
+    def test_differing_asserted_dates_are_applied_as_whole_cycles(self) -> None:
+        found = determine_origin(
+            manifest(
+                {
+                    "tx-a": [
+                        asserted(
+                            "raw/tx-a/one.wav",
+                            timecode("23:00:00:00", date=dt.date(2026, 8, 15)),
+                        )
+                    ],
+                    "tx-b": [
+                        asserted(
+                            "raw/tx-b/one.wav",
+                            timecode("01:00:00:00", date=dt.date(2026, 8, 16)),
+                        )
+                    ],
+                }
+            ),
+            config(),
+        )
+        assert placed(found, "raw/tx-a/one.wav") == 0
+        assert placed(found, "raw/tx-b/one.wav") == 2 * HOUR
+        assert any(d.code == "rollover_from_recorded_dates" for d in found.decisions)
+
+    def test_the_same_dates_read_from_the_files_assign_nothing(self) -> None:
+        """The mutation that matters: identical evidence, from the file rather than the
+        operator, must not produce a day of shift.
+
+        Inference takes over instead — it reads the counters themselves, involves no wall
+        clock, and here reaches the same answer by a route that cannot be a minute wrong.
+        """
         found = determine_origin(
             manifest(
                 {
@@ -477,16 +515,20 @@ class TestRecordedDatesBeatInference:
             ),
             config(),
         )
-        assert placed(found, "raw/tx-a/one.wav") == 0
-        assert placed(found, "raw/tx-b/one.wav") == 2 * HOUR
-        assert any(d.code == "rollover_from_recorded_dates" for d in found.decisions)
+        assert not [d for d in found.decisions if d.code == "rollover_from_recorded_dates"]
+        assert any(note.code == "midnight_rollover_inferred" for note in found.warnings)
 
-    def test_a_partially_dated_session_falls_back_to_inference(self) -> None:
+    def test_a_partially_asserted_session_falls_back_to_inference(self) -> None:
         """M1 produces exactly this: `bext` carries a date, an `ISMP` timecode does not."""
         found = determine_origin(
             manifest(
                 {
-                    "tx-a": [source("raw/tx-a/one.wav", bwf(19 * HOUR, date=dt.date(2026, 8, 15)))],
+                    "tx-a": [
+                        asserted(
+                            "raw/tx-a/one.wav",
+                            timecode("19:00:00:00", date=dt.date(2026, 8, 15)),
+                        )
+                    ],
                     "tx-b": [source("raw/tx-b/one.wav", timecode("20:00:00:00"))],
                 }
             ),
@@ -499,7 +541,14 @@ class TestRecordedDatesBeatInference:
         with pytest.raises(TimecodeError, match="cannot begin after its own") as caught:
             determine_origin(
                 manifest(
-                    {"tx-a": [source("raw/tx-a/one.wav", bwf(HOUR, date=dt.date(2026, 8, 15)))]}
+                    {
+                        "tx-a": [
+                            asserted(
+                                "raw/tx-a/one.wav",
+                                timecode("01:00:00:00", date=dt.date(2026, 8, 15)),
+                            )
+                        ]
+                    }
                 ),
                 config_for(("tx-a",), origin_date="2026-08-16"),
             )

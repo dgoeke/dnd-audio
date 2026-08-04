@@ -87,8 +87,14 @@ def source(
     channels: int = 1,
     role: str = "selected",
     with_container: bool = True,
+    strategy: str = "test",
 ) -> ManifestSource:
-    """One selected source, described exactly as M1 would describe it."""
+    """One selected source, described exactly as M1 would describe it.
+
+    ``strategy`` matters to more than provenance: only a `recovery_`-prefixed one is an
+    *operator assertion*, and only an operator assertion may put a session on a calendar
+    (ADR-0031). Use :func:`asserted` for that case rather than spelling the prefix out.
+    """
     container = (
         ContainerRecord(
             codec_name=codec,
@@ -111,8 +117,18 @@ def source(
         detail="built by tests/manifests.py",
         filename=FilenameHintsRecord(recognized=True, variant="orig"),
         container=container,
-        start_time=StartTimeRecord(strategy="test", evidence=evidence),
+        start_time=StartTimeRecord(strategy=strategy, evidence=evidence),
     )
+
+
+def asserted(path: str, evidence: StartEvidenceRecord, **fields: object) -> ManifestSource:
+    """A source whose time the *operator* supplied, via a recovery override.
+
+    The distinction is load-bearing rather than decorative: a date read from a file is the
+    receiver's real-time clock, which was measured 48.7 s adrift across two receivers, and
+    only an operator's date may assign a 24-hour cycle (ADR-0031).
+    """
+    return source(path, evidence, strategy="recovery_override_timecode", **fields)  # type: ignore[arg-type]
 
 
 def manifest(tracks: dict[str, list[ManifestSource]], *, session_id: str = "test") -> Manifest:

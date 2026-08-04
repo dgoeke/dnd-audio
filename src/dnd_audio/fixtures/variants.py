@@ -30,6 +30,7 @@ __all__ = [
     "DELAYED_BLEED_SAMPLES",
     "DRIFT_END_SHIFT_SAMPLES",
     "QUANTIZED_BACKWARD_SAMPLES",
+    "WALL_CLOCK_SKEW",
     "delayed_bleed_session",
     "drift_session",
     "drop_frame_session",
@@ -41,6 +42,7 @@ __all__ = [
     "overlapping_session",
     "quantized_reference_session",
     "rollover_session",
+    "wall_clock_skew_session",
 ]
 
 _SECOND: Final = 48000
@@ -300,6 +302,61 @@ BWF_REFERENCE_QUANTUM_SAMPLES: Final = 1600
 #: early. Deliberately not a round fraction of the quantum, so a test cannot pass by
 #: coincidence: 300000 mod 1600 is 800.
 QUANTIZED_BACKWARD_SAMPLES: Final = 800
+
+
+#: How far apart two receivers' real-time clocks were measured on 2026-08-03, while their
+#: timecode agreed to under one frame. Not a round number because it is a measurement.
+WALL_CLOCK_SKEW: Final = dt.timedelta(seconds=48.7)
+
+
+def wall_clock_skew_session(skew: dt.timedelta = dt.timedelta()) -> FixtureSession:
+    """Two receivers whose timecode agrees and whose wall clocks do not, across midnight.
+
+    Session zero is 30 seconds before midnight, so ``WALL_CLOCK_SKEW`` puts the second
+    receiver's `bext` origination date on the *following day* while both files carry the
+    same `time_reference`. That is the shape that would place two tracks a full 24 hours
+    apart if a date read from a file were allowed to assign a cycle (ADR-0031).
+
+    Filenames are pinned rather than derived, because a DJI name encodes the wall clock
+    too. Letting them move would make a placement comparison also a filename comparison,
+    and only one of those is the question.
+    """
+    return FixtureSession(
+        session_id="wall-clock-skew",
+        title="Wall clock skew",
+        session_zero_timecode="23:59:30:00",
+        tracks=(
+            _track(
+                "tx-a",
+                "alice",
+                (
+                    FixtureChunk(
+                        start_sample=0,
+                        n_samples=2 * _SECOND,
+                        sequence=1,
+                        filename="TX01_MIC001_20260815_235930_orig.wav",
+                    ),
+                ),
+            ),
+            FixtureTrack(
+                track_id="tx-b",
+                speaker_id="bob",
+                speaker_name="Bob",
+                receiver_id="rx-b",
+                receiver_channel=1,
+                tx_label="TX01",
+                wall_clock_offset=skew,
+                chunks=(
+                    FixtureChunk(
+                        start_sample=0,
+                        n_samples=2 * _SECOND,
+                        sequence=1,
+                        filename="TX02_MIC001_20260815_235930_orig.wav",
+                    ),
+                ),
+            ),
+        ),
+    )
 
 
 def quantized_reference_session() -> FixtureSession:

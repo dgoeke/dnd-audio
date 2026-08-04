@@ -248,12 +248,24 @@ def _resolve_cycles(
 def _cycles_from_dates(
     absolute: list[_Candidate], config: SessionConfig, decisions: list[TimelineDecision]
 ) -> dict[str, int] | None:
-    """Use the recorded origination dates, when every source has one.
+    """Use **operator-asserted** recording dates, when every source has one.
 
-    Evidence beats inference (INV-12). Returns ``None`` when any source lacks a date, which
-    is the case M1 routinely produces: a BWF ``bext`` chunk carries an origination date and
-    an ``INFO``/``ISMP`` timecode tag does not, so a session mixing the two is partially
-    dated and falls through to inference.
+    Evidence beats inference (INV-12) — but only evidence that is worth more than the
+    inference. A date read from a *file* is not. `bext.origination_date`/`origination_time`
+    carry the receiver's real-time clock, and on 2026-08-03 two receivers' clocks were
+    measured **48.7 s apart** while their timecode agreed to under one frame. This function
+    applies day differences as whole 24-hour cycles, which is the coarsest unit available:
+    two receivers whose clocks straddle midnight would be placed a *day* apart on evidence
+    known to be a minute wrong (ADR-0031).
+
+    So only an operator may assign a cycle, via a `recovery.source_time_overrides` entry's
+    `recording_date`. The strategy that produced the evidence is what distinguishes them —
+    the file's own timecode strategy also records a `recording_date`, descriptively, from
+    the same untrustworthy tag.
+
+    Returns ``None`` when any source lacks an asserted date, which is the ordinary case:
+    the session then falls through to inference, which reads the counters themselves and
+    involves no wall clock at all.
 
     Day differences are applied as whole cycles. At a fractional non-drop rate a timecode
     cycle is not a calendar day (OQ-015), so this is exact for a BWF reference and rests on
@@ -261,7 +273,7 @@ def _cycles_from_dates(
     """
     dates: dict[str, dt.date] = {}
     for item in absolute:
-        date = _date_of(item.evidence)
+        date = _asserted_date(item.source)
         if date is None:
             return None
         dates[item.source.relative_path] = date
@@ -649,10 +661,22 @@ def _day_text(date: dt.date | None) -> str:
     return date.isoformat() if date is not None else "an unstated date"
 
 
-def _date_of(evidence: StartEvidenceRecord) -> dt.date | None:
-    """The origination or recording date this evidence states, if any."""
-    for attribute in ("origination_date", "recording_date"):
-        date = getattr(evidence, attribute, None)
-        if isinstance(date, dt.date):
-            return date
-    return None
+#: A start-time strategy the *operator* supplied rather than the file. `starttime.py` names
+#: its recovery strategies with this prefix, and `StartTimeRecord.strategy` carries the name
+#: into the manifest — so no schema change was needed to tell the two halves apart.
+_OPERATOR_STRATEGY_PREFIX: Final = "recovery_"
+
+
+def _asserted_date(source: ManifestSource) -> dt.date | None:
+    """The recording date an **operator** stated for this source, if any (ADR-0031).
+
+    Deliberately not "any date this source carries". Both `origination_date` and the
+    timecode strategy's `recording_date` come from the receiver's real-time clock, which is
+    descriptive and demonstrably wrong across receivers; reading either here is what would
+    let a 48.7-second clock disagreement become a 24-hour placement error.
+    """
+    start = source.start_time
+    if start is None or not start.strategy.startswith(_OPERATOR_STRATEGY_PREFIX):
+        return None
+    date = getattr(start.evidence, "recording_date", None)
+    return date if isinstance(date, dt.date) else None

@@ -31,6 +31,7 @@ from dnd_audio.fixtures import FixtureSession, FixtureTruth, build_session
 from dnd_audio.fixtures.variants import (
     BWF_REFERENCE_QUANTUM_SAMPLES,
     QUANTIZED_BACKWARD_SAMPLES,
+    WALL_CLOCK_SKEW,
     drop_frame_session,
     inconsistent_rate_session,
     mixed_format_session,
@@ -39,6 +40,7 @@ from dnd_audio.fixtures.variants import (
     overlapping_session,
     quantized_reference_session,
     rollover_session,
+    wall_clock_skew_session,
 )
 from dnd_audio.timeline import CANONICAL_SAMPLE_RATE, TIMELINE_RELATIVE_PATH
 from dnd_audio.timeline.runner import IngestResult, run_ingest
@@ -258,6 +260,101 @@ class TestRefusalsHappenBeforeConstruction:
         stages = _stages(result)
         assert stages["inspect"]["status"] == "failed"
         assert stages["reconstruct"]["status"] == "failed"
+
+
+def _placement_only(document: dict[str, Any]) -> dict[str, Any]:
+    """A timeline with exactly the fields that hash the source bytes removed.
+
+    Two sessions that differ only in their `bext` date tags are still two different sets of
+    bytes, so `manifest_sha256` and each segment's `source_sha256` must differ — those are
+    doing their job. Everything else is placement, and none of it may move. Listing the
+    exclusions here rather than comparing a hand-picked subset keeps the claim maximal: any
+    field added to this artifact in future is compared by default.
+    """
+    content_addressed = {"manifest_sha256", "source_sha256", "cache_key", "relative_path"}
+
+    def prune(node: Any) -> Any:
+        if isinstance(node, dict):
+            return {
+                key: prune(value)
+                for key, value in node.items()
+                if key not in content_addressed
+                # A source's own path is placement, not addressing; only the derivative
+                # cache's path is derived from a hash.
+                or (key == "relative_path" and str(value).startswith("raw/"))
+            }
+        if isinstance(node, list):
+            return [prune(item) for item in node]
+        return node
+
+    pruned: dict[str, Any] = prune(document)
+    return pruned
+
+
+class TestWallClockNeverAnchorsPlacement:
+    """ADR-0031, measured: two receivers 48.7 s apart with timecode agreeing to a frame.
+
+    `bext.origination_date`/`origination_time` carry the receiver's real-time clock, and on
+    2026-08-03 two of them disagreed by nearly a minute while their jammed timecode agreed
+    to under one frame. `_cycles_from_dates` applied recorded dates as whole 24-hour cycles,
+    so a pair straddling midnight would have been placed a *day* apart on evidence known to
+    be a minute wrong.
+    """
+
+    def test_a_48_second_wall_clock_disagreement_across_midnight_changes_no_placement(
+        self, tmp_path: Path
+    ) -> None:
+        agreed = build_session(wall_clock_skew_session(), tmp_path / "agreed")
+        skewed = build_session(wall_clock_skew_session(WALL_CLOCK_SKEW), tmp_path / "skewed")
+
+        assert run_ingest(agreed.session_dir).exit_code is ExitCode.OK
+        assert run_ingest(skewed.session_dir).exit_code is ExitCode.OK
+
+        # The fixture really did write the disagreement — otherwise the comparison below
+        # would be two identical sessions agreeing about nothing in particular.
+        manifests = [
+            Manifest.model_validate_json(
+                (session / "work/manifest.json").read_text(encoding="utf-8")
+            )
+            for session in (agreed.session_dir, skewed.session_dir)
+        ]
+        recorded = [
+            {
+                track.track_id: getattr(source.start_time.evidence, "origination_date", None)
+                for track in built.tracks
+                for source in track.sources
+                if source.start_time is not None
+            }
+            for built in manifests
+        ]
+        assert len(set(recorded[0].values())) == 1, "the control session must agree with itself"
+        assert len(set(recorded[1].values())) == 2, "the skewed session must straddle midnight"
+
+        first = json.loads(
+            (agreed.session_dir / TIMELINE_RELATIVE_PATH).read_text(encoding="utf-8")
+        )
+        second = json.loads(
+            (skewed.session_dir / TIMELINE_RELATIVE_PATH).read_text(encoding="utf-8")
+        )
+        assert first["manifest_sha256"] != second["manifest_sha256"]
+        assert json.dumps(_placement_only(first), sort_keys=True) == json.dumps(
+            _placement_only(second), sort_keys=True
+        )
+
+    def test_nothing_in_the_pipeline_reads_the_creation_time_tag(self) -> None:
+        """FFprobe surfaces the same wall clock twice, as `date` and as `creation_time`.
+
+        The second has never been read, which is why no rule was needed to stop it. A rule
+        is needed now that the first is known untrustworthy — otherwise the obvious fix for
+        a missing date is to reach for its twin.
+        """
+        root = Path(__file__).resolve().parent.parent / "src"
+        offenders = [
+            path
+            for path in sorted(root.rglob("*.py"))
+            if "creation_time" in path.read_text(encoding="utf-8")
+        ]
+        assert offenders == []
 
 
 class TestAQuantizedReferenceCounter:

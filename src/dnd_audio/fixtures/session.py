@@ -215,6 +215,13 @@ class FixtureTrack:
     #: When false the directory is created but left empty, which is how an absent
     #: player is distinguished from a configured one.
     write_files: bool = True
+    #: How far this receiver's real-time clock is from the session's, for the `bext`
+    #: origination date and time only. Two receivers were measured **48.7 s apart** while
+    #: their timecode agreed to under one frame (ADR-0031), so a fixture has to be able to
+    #: express a wall clock that disagrees with a timecode that does not. Nothing else in
+    #: the fixture moves: the audio, the sample positions and the `time_reference` are
+    #: unchanged, which is the whole point.
+    wall_clock_offset: dt.timedelta = dt.timedelta()
 
 
 @dataclass(frozen=True, slots=True)
@@ -684,7 +691,7 @@ def _write_chunk(
     events: tuple[_Event, ...],
 ) -> WrittenChunk:
     rate = chunk.sample_rate or spec.sample_rate
-    start_wall = _wall_clock(spec, chunk.start_sample)
+    start_wall = _wall_clock(spec, chunk.start_sample) + track.wall_clock_offset
     name = chunk.filename or dji_filename(track.tx_label, chunk.sequence, start_wall, chunk.variant)
     relative = f"raw/{track.track_id}/{name}"
     path = directory / relative
@@ -709,7 +716,10 @@ def _write_chunk(
     if chunk.timecode_source in ("bext", "both"):
         broadcast = BroadcastMetadata(
             time_reference=time_reference,
-            origination_date=spec.origin_date,
+            # Both halves of one instant. Taking the date from the session and the time
+            # from the chunk would put 00:00:00 on the day before it happened, which is
+            # exactly the shape `wall_clock_skew_session` exists to write deliberately.
+            origination_date=start_wall.date(),
             origination_time=start_wall.time(),
             description=f"{track.tx_label} {track.track_id}",
             originator="DJI",
