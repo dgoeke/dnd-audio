@@ -105,7 +105,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | M6a | ROCm environment           | closed      | `f5c6632` |
 | M6b | Qwen adapter               | closed      | `07cebdb` |
 | M8  | Real-session readiness     | closed      | `8ad15e3` |
-| M9  | Transcript assembly quality | closed      | —         |
+| M9  | Transcript assembly quality | closed      | `d3e2cbb` |
 | H1  | Hardware fixture (2 min)   | not started | —         |
 | H2  | Drift soak / first session | not started | —         |
 | M7  | Archival (sketch)          | sketch      | —         |
