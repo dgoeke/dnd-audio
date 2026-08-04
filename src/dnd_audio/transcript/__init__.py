@@ -79,4 +79,7 @@ TRANSCRIPT_SEMANTICS_VERSION: Final = 1
 #:
 #: **2 (M8):** duplicate pairs resolve in order of descending source score, so the survivor of
 #: a three-way mutual duplicate is the copy the evidence prefers (ADR-0032).
-TRANSCRIPT_ASSEMBLY_SEMANTICS_VERSION: Final = 2
+#:
+#: **3 (M9):** bounded transcript-only ownership grace, a second contained-fragment collapse
+#: pass, and public presentation turns over granular records (ADR-0033, ADR-0034).
+TRANSCRIPT_ASSEMBLY_SEMANTICS_VERSION: Final = 3

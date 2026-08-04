@@ -243,6 +243,141 @@ class TestShortUtterancesNeverCollapseOnText:
         assert run(drafts, graph).verdicts[1].decision == "duplicate"
 
 
+class TestContainedFragmentsAreASeparateConservativeRule:
+    CONTAINER = "Finally here's the fourth microphone"
+    FRAGMENT = "the fourth microphone"
+
+    def test_a_compelling_proper_fragment_collapses_and_names_its_rule(self) -> None:
+        drafts, graph = two_tracks(
+            first_text=self.CONTAINER,
+            second_text=self.FRAGMENT,
+            first_score=900,
+            second_score=500,
+            correlation=100,
+        )
+        result = run(drafts, graph)
+        assert [item.decision for item in result.verdicts] == ["retained", "duplicate"]
+        assert result.decisions[0].code == "contained_fragment_collapsed"
+        assert "properly contained" in result.decisions[0].detail
+
+    def test_genuine_overlap_with_unrelated_text_survives(self) -> None:
+        drafts, graph = two_tracks(
+            first_text=self.CONTAINER,
+            second_text="No, I was answering somebody else",
+            first_score=900,
+            second_score=500,
+        )
+        assert [item.decision for item in run(drafts, graph).verdicts] == [
+            "retained",
+            "retained",
+        ]
+
+    def test_noncontiguous_words_are_not_containment(self) -> None:
+        drafts, graph = two_tracks(
+            first_text=self.CONTAINER,
+            second_text="Finally fourth microphone",
+            first_score=900,
+            second_score=500,
+        )
+        assert [item.decision for item in run(drafts, graph).verdicts] == [
+            "retained",
+            "retained",
+        ]
+
+    def test_absent_graph_evidence_keeps_the_fragment(self) -> None:
+        drafts, graph = two_tracks(
+            first_text=self.CONTAINER,
+            second_text=self.FRAGMENT,
+            first_score=900,
+            second_score=500,
+            evidence=False,
+        )
+        assert [item.decision for item in run(drafts, graph).verdicts] == [
+            "retained",
+            "retained",
+        ]
+
+    def test_weak_dominance_keeps_the_fragment(self) -> None:
+        drafts, graph = two_tracks(
+            first_text=self.CONTAINER,
+            second_text=self.FRAGMENT,
+            first_score=800,
+            second_score=550,
+        )
+        assert [item.decision for item in run(drafts, graph).verdicts] == [
+            "retained",
+            "retained",
+        ]
+
+    def test_the_shorter_better_source_cannot_delete_the_containing_text(self) -> None:
+        drafts, graph = two_tracks(
+            first_text=self.CONTAINER,
+            second_text=self.FRAGMENT,
+            first_score=500,
+            second_score=900,
+        )
+        assert [item.decision for item in run(drafts, graph).verdicts] == [
+            "retained",
+            "retained",
+        ]
+
+    def test_exact_yes_and_okay_remain_protected_even_under_extreme_dominance(self) -> None:
+        for text in ("Yes", "Okay"):
+            drafts, graph = two_tracks(
+                first_text=text,
+                second_text=text,
+                first_score=950,
+                second_score=100,
+            )
+            assert [item.decision for item in run(drafts, graph).verdicts] == [
+                "retained",
+                "retained",
+            ]
+
+    def test_legacy_similarity_finishes_before_containment(self) -> None:
+        """A→B containment must not preempt the old C→B similarity decision.
+
+        The first-pass B→C decision remains visible even though the second pass then collapses
+        C into A. The resulting terminating audit chain is the concrete M9 plan-review
+        counterexample: running containment pair-by-pair would have skipped B→C altogether.
+        """
+        texts = {
+            "tx-a": "alpha we should go home omega",
+            "tx-b": "we should go home",
+            "tx-c": "we should go home",
+        }
+        scores = {"tx-a": 900, "tx-b": 400, "tx-c": 500}
+        candidates = [
+            a_candidate(
+                track,
+                RATE,
+                RATE * 2,
+                score=score,
+                evidence=[
+                    an_evidence(candidate_id(other, RATE), other, 900)
+                    for other in scores
+                    if other != track
+                ],
+            )
+            for track, score in scores.items()
+        ]
+        drafts = [a_draft(track, RATE, RATE * 2, texts[track]) for track in scores]
+
+        result = run(drafts, a_graph(candidates, list(scores)))
+
+        assert [item.decision for item in result.verdicts] == [
+            "retained",
+            "duplicate",
+            "duplicate",
+        ]
+        assert result.verdicts[1].duplicate_of_segment_id == segment_id(2)
+        assert result.verdicts[2].duplicate_of_segment_id == segment_id(0)
+        assert [item.code for item in result.decisions] == [
+            "contained_fragment_collapsed",
+            "duplicate_collapsed",
+        ]
+
+
 class TestTheSurvivorIsTheBestSourceScore:
     def test_the_higher_scoring_track_wins(self) -> None:
         drafts, graph = two_tracks(first_score=600, second_score=900)

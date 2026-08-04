@@ -108,3 +108,11 @@ collapse ordering, and nothing for ASR, because M8 changes nothing about what is
 - The observed four-way group collapsed correctly under the old ordering too. This change is
   insurance against a shape that real audio is now known to be capable of producing, not a fix
   for a wrong transcript anyone has seen.
+
+## M9 amendment
+
+ADR-0033 adds one narrow terminating-chain exception. The complete similarity pass still
+records its original winner, but that first-pass survivor may later lose under the separately
+auditable `contained_fragment` rule. Such a chain is valid only when every intermediate is
+itself marked `contained_fragment`, the chain is acyclic, and it ends at a retained segment.
+Arbitrary similarity-collapse chains remain invalid.

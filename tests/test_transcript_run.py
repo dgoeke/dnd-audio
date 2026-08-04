@@ -16,6 +16,7 @@ from typing import Any
 import jsonschema
 import numpy as np
 import pytest
+import yaml
 
 from dnd_audio.artifacts.records import TranscriptRecords
 from dnd_audio.artifacts.report import OverallStatus, StageName, StageStatus
@@ -32,6 +33,7 @@ from dnd_audio.transcript import (
     TRANSCRIPT_MARKDOWN_RELATIVE_PATH,
     TRANSCRIPT_SEMANTICS_VERSION,
 )
+from dnd_audio.transcript.cache import AsrCache
 from dnd_audio.transcript.runner import TranscriberBundle, run_render, run_transcribe
 from tests.conftest import UNINSTALLED_REVISION
 
@@ -141,9 +143,10 @@ class TestTheReport:
     ) -> None:
         """Diagnostic 9 carries the number needed to evaluate ``vad.pad_ms``.
 
-        The fake's first word begins 66 ms before the declared speech. The detector's 32 ms
+        The fake's first word begins 67 ms before the declared speech. The detector's 32 ms
         frame grid plus its 30 ms pad put ownership 46 ms before that declaration, so the
-        returned word sits exactly 20 ms — 320 derivative samples — before ownership. The
+        returned word sits 21 ms before activity and one millisecond — 16 derivative samples
+        — before M9's 20 ms effective ownership. The
         report must retain that geometry rather than only a count that cannot distinguish a
         20 ms onset from a 500 ms bleed copy.
         """
@@ -154,7 +157,7 @@ class TestTheReport:
             for utterance in document["asr"]
             if utterance["track_id"] == "tx-a" and utterance["utterance_id"].startswith("utt_tx-a_")
         )
-        direct["words"][0]["start_sample"] -= 66 * document["sample_rate"] // 1000
+        direct["words"][0]["start_sample"] -= 67 * document["sample_rate"] // 1000
         write_json_atomic(path, document)
 
         result = run_transcribe(canonical_fixture.session_dir, fake_models=True)
@@ -171,9 +174,9 @@ class TestTheReport:
             "after_ownership_count": "0",
             "before_ownership_count": "1",
             "dropped_request_word_pairs": "1",
-            "edge_distance_derivative_samples_histogram": "320:1",
+            "edge_distance_derivative_samples_histogram": "16:1",
             "leading_word_count": "1",
-            "max_edge_distance_derivative_samples": "320",
+            "max_edge_distance_derivative_samples": "16",
             "nonleading_word_count": "0",
         }
 
@@ -296,7 +299,7 @@ class TestTheReport:
             provenance["transcript_assembly_semantics_version"]
             == TRANSCRIPT_ASSEMBLY_SEMANTICS_VERSION
         )
-        assert TRANSCRIPT_ASSEMBLY_SEMANTICS_VERSION >= 2, "M8 moved collapse"
+        assert TRANSCRIPT_ASSEMBLY_SEMANTICS_VERSION >= 3, "M9 moved assembly"
 
     def test_every_deliverable_is_hashed(self, transcribed: Any) -> None:
         result, _ = transcribed
@@ -339,10 +342,36 @@ class TestRerun:
         self, canonical_fixture: FixtureTruth
     ) -> None:
         session_dir = canonical_fixture.session_dir
-        run_transcribe(session_dir, fake_models=True)
-        second = run_transcribe(session_dir, fake_models=True)
-        assert second.report.telemetry.cache_misses == 0
-        assert second.report.telemetry.cache_hits > 0
+        first = run_transcribe(session_dir, fake_models=True)
+        cache_dir = session_dir / ASR_DIRNAME
+        before = {path.name: sha256_file(path) for path in sorted(cache_dir.glob("*.json"))}
+        planned_submissions = len([name for name in before if not name.endswith(".raw.json")])
+        assert planned_submissions > 0
+
+        # An assembly-only configuration change must regenerate records/views without moving
+        # request audio or expensive inference (ADR-0033, INV-08).
+        config_path = session_dir / "session.yaml"
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        config.setdefault("transcript", {})["leading_ownership_grace_ms"] = 40
+        config_path.write_text(yaml.safe_dump(config, sort_keys=True), encoding="utf-8")
+        asr_hits: list[bool] = []
+        original_get = AsrCache.get
+
+        def watched_get(cache: AsrCache, key: str) -> Any:
+            found = original_get(cache, key)
+            asr_hits.append(found is not None)
+            return found
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(AsrCache, "get", watched_get)
+            second = run_transcribe(session_dir, fake_models=True)
+        after = {path.name: sha256_file(path) for path in sorted(cache_dir.glob("*.json"))}
+
+        assert asr_hits == [True] * planned_submissions
+        assert after == before
+        assert first.records is not None
+        assert second.records is not None
+        assert second.records.config_hash != first.records.config_hash
 
     def test_no_cache_re_runs_without_changing_the_answer(
         self, canonical_fixture: FixtureTruth

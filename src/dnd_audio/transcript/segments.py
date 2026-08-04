@@ -18,9 +18,8 @@ counted into one warning rather than one per candidate, so an operator can see t
 happened without reading six hundred lines about it.
 
 Times cross to the canonical 48 kHz grid here and nowhere else in this package, through
-`to_source_sample`, and are clamped into the candidate's own bounds — the graph's 48 kHz
-interval *covers* its derivative one, so an unclamped conversion of the very first derivative
-sample can land up to two samples before the candidate starts.
+`to_source_sample`, and are clamped into the effective transcript bounds. The original
+candidate bounds remain beside them as separate audit evidence (ADR-0033).
 """
 
 from __future__ import annotations
@@ -35,9 +34,37 @@ from dnd_audio.interfaces import TranscribedWord
 from dnd_audio.timeline.resample import to_source_sample
 from dnd_audio.transcript.asr import RequestOutcome, without_boundary_repeat
 from dnd_audio.transcript.normalize import normalize_text
-from dnd_audio.transcript.requests import Ownership
 
-__all__ = ["DroppedWords", "SegmentDraft", "draft_segments"]
+__all__ = ["DroppedWords", "OwnershipPiece", "SegmentDraft", "draft_segments"]
+
+
+@dataclass(frozen=True, slots=True)
+class OwnershipPiece:
+    """One activity interval and the post-ASR interval that may claim its words.
+
+    Piece-specific rather than aggregate because one alignment-fallback segment can span
+    several candidates and gaps. Keeping the request and submitted bounds beside each piece
+    makes every grace clamp auditable without rewriting the original plan (ADR-0033).
+    """
+
+    candidate_id: str
+    request_id: str
+    activity_start_derivative_sample: int
+    activity_end_derivative_sample: int
+    effective_start_derivative_sample: int
+    effective_end_derivative_sample: int
+    submitted_start_derivative_sample: int
+    submitted_end_derivative_sample: int
+    activity_start_sample: int
+    activity_end_sample: int
+    effective_start_sample: int
+    effective_end_sample: int
+
+
+@dataclass(frozen=True, slots=True)
+class _AssemblyOutcome:
+    outcome: RequestOutcome
+    ownership: tuple[OwnershipPiece, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +86,9 @@ class SegmentDraft:
     alignment_status: AlignmentStatus
     request_ids: tuple[str, ...]
     truncation_submissions: int
+    #: Candidate/piece-specific original and effective ownership (ADR-0033). Empty only in
+    #: hand-built legacy test drafts that never become a new records artifact.
+    ownership_pieces: tuple[OwnershipPiece, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,11 +131,14 @@ class DroppedWords:
 
 
 def draft_segments(
-    outcomes: tuple[RequestOutcome, ...], *, decimation: int
+    outcomes: tuple[RequestOutcome, ...], *, decimation: int, leading_grace_samples: int = 0
 ) -> tuple[list[SegmentDraft], list[TranscriptNote], tuple[DroppedWords, ...]]:
     """Every retained candidate's draft segment, in canonical order, plus what to report."""
-    groups = _grouped_candidates(outcomes)
-    contributions = _contributions(outcomes, groups)
+    assembled = _effective_ownership(
+        outcomes, decimation=decimation, leading_grace_samples=leading_grace_samples
+    )
+    groups = _grouped_candidates(assembled)
+    contributions = _contributions(assembled, groups)
 
     drafts: list[SegmentDraft] = []
     empty = 0
@@ -117,7 +150,7 @@ def draft_segments(
         drafts.append(draft)
 
     drafts.sort(key=lambda item: (item.start_sample, item.track_id, item.candidate_ids))
-    dropped = _dropped_words(outcomes)
+    dropped = _dropped_words(assembled)
     return (
         drafts,
         [*_notes(empty), *_alignment_notes(drafts), *_dropped_notes(dropped)],
@@ -125,7 +158,79 @@ def draft_segments(
     )
 
 
-def _dropped_words(outcomes: tuple[RequestOutcome, ...]) -> tuple[DroppedWords, ...]:
+def _effective_ownership(
+    outcomes: tuple[RequestOutcome, ...], *, decimation: int, leading_grace_samples: int
+) -> tuple[_AssemblyOutcome, ...]:
+    """Canonical post-ASR ownership, globally clipped on each track (ADR-0033, OQ-027)."""
+    if leading_grace_samples < 0:
+        message = f"leading ownership grace must not be negative, got {leading_grace_samples}"
+        raise ValueError(message)
+
+    entries = sorted(
+        (
+            (
+                outcome.plan.track_id,
+                piece.start_sample,
+                piece.end_sample,
+                outcome.plan.request_id,
+                piece.candidate_id,
+                outcome_index,
+                piece_index,
+                outcome,
+                piece,
+            )
+            for outcome_index, outcome in enumerate(outcomes)
+            for piece_index, piece in enumerate(outcome.plan.ownership)
+        ),
+        key=lambda item: item[:7],
+    )
+    by_outcome: list[list[OwnershipPiece | None]] = [
+        [None] * len(outcome.plan.ownership) for outcome in outcomes
+    ]
+    previous_end: dict[str, int] = {}
+    for track_id, _, _, _, _, outcome_index, piece_index, outcome, piece in entries:
+        predecessor = previous_end.get(track_id, 0)
+        if piece.start_sample < predecessor:
+            message = (
+                f"activity ownership overlaps on {track_id}: {piece.candidate_id} starts at "
+                f"{piece.start_sample} before the preceding half-open end {predecessor}"
+            )
+            raise ValueError(message)
+        effective_start = max(
+            outcome.plan.padded_start_sample,
+            predecessor,
+            piece.start_sample - leading_grace_samples,
+        )
+        by_outcome[outcome_index][piece_index] = OwnershipPiece(
+            candidate_id=piece.candidate_id,
+            request_id=outcome.plan.request_id,
+            activity_start_derivative_sample=piece.start_sample,
+            activity_end_derivative_sample=piece.end_sample,
+            effective_start_derivative_sample=effective_start,
+            effective_end_derivative_sample=piece.end_sample,
+            submitted_start_derivative_sample=outcome.plan.padded_start_sample,
+            submitted_end_derivative_sample=outcome.plan.padded_end_sample,
+            activity_start_sample=piece.session_start_sample,
+            activity_end_sample=piece.session_end_sample,
+            effective_start_sample=(
+                piece.session_start_sample
+                if effective_start == piece.start_sample
+                else to_source_sample(effective_start, decimation)
+            ),
+            effective_end_sample=piece.session_end_sample,
+        )
+        previous_end[track_id] = piece.end_sample
+
+    return tuple(
+        _AssemblyOutcome(
+            outcome=outcome,
+            ownership=tuple(piece for piece in by_outcome[index] if piece is not None),
+        )
+        for index, outcome in enumerate(outcomes)
+    )
+
+
+def _dropped_words(outcomes: tuple[_AssemblyOutcome, ...]) -> tuple[DroppedWords, ...]:
     """Per outcome, the words it returned that none of *its own* intervals owns.
 
     **Per outcome, not per candidate group**, and that is the whole design. `_owned_words`
@@ -133,15 +238,19 @@ def _dropped_words(outcomes: tuple[RequestOutcome, ...]) -> tuple[DroppedWords, 
     group B would look dropped while group A was being assembled — a diagnostic that reported
     false positives on every merged request would be worse than none.
     """
-    observations: dict[str, list[tuple[Ownership, Literal["before", "after"], int, bool]]] = {}
-    for outcome in outcomes:
-        intervals = outcome.plan.ownership
+    observations: dict[str, list[tuple[OwnershipPiece, Literal["before", "after"], int, bool]]] = {}
+    for assembled in outcomes:
+        outcome = assembled.outcome
+        intervals = assembled.ownership
         if not outcome.words or not intervals:
             continue
         track_id = outcome.plan.track_id
         for index, word in enumerate(outcome.words):
             if any(
-                piece.start_sample <= word.start_sample < piece.end_sample for piece in intervals
+                piece.effective_start_derivative_sample
+                <= word.start_sample
+                < piece.effective_end_derivative_sample
+                for piece in intervals
             ):
                 continue
             piece, side, distance = _nearest_edge(word, intervals)
@@ -164,8 +273,8 @@ def _dropped_words(outcomes: tuple[RequestOutcome, ...]) -> tuple[DroppedWords, 
 
 
 def _nearest_edge(
-    word: TranscribedWord, intervals: tuple[Ownership, ...]
-) -> tuple[Ownership, Literal["before", "after"], int]:
+    word: TranscribedWord, intervals: tuple[OwnershipPiece, ...]
+) -> tuple[OwnershipPiece, Literal["before", "after"], int]:
     """Whose segment is nearest, on which side, and by how many derivative samples.
 
     A dropped word is almost always just outside one interval's edge — the opening word of an
@@ -176,14 +285,14 @@ def _nearest_edge(
     holding this request result fixed. Because ownership is half-open, a word starting exactly
     at an interval's end needs one additional sample, not zero.
     """
-    measured: list[tuple[int, str, Literal["before", "after"], Ownership]] = []
+    measured: list[tuple[int, str, Literal["before", "after"], OwnershipPiece]] = []
     for piece in intervals:
-        if word.start_sample < piece.start_sample:
+        if word.start_sample < piece.effective_start_derivative_sample:
             side: Literal["before", "after"] = "before"
-            distance = piece.start_sample - word.start_sample
+            distance = piece.effective_start_derivative_sample - word.start_sample
         else:
             side = "after"
-            distance = word.start_sample - piece.end_sample + 1
+            distance = word.start_sample - piece.effective_end_derivative_sample + 1
         measured.append((distance, piece.candidate_id, side, piece))
     distance, _, side, piece = min(measured)
     return piece, side, distance
@@ -211,7 +320,7 @@ def _dropped_notes(dropped: tuple[DroppedWords, ...]) -> list[TranscriptNote]:
     ]
 
 
-def _grouped_candidates(outcomes: tuple[RequestOutcome, ...]) -> set[tuple[str, ...]]:
+def _grouped_candidates(outcomes: tuple[_AssemblyOutcome, ...]) -> set[tuple[str, ...]]:
     """Which candidates must share a segment, as sorted tuples of candidate id.
 
     A candidate is its own group unless a wordless outcome covered it together with others:
@@ -220,8 +329,9 @@ def _grouped_candidates(outcomes: tuple[RequestOutcome, ...]) -> set[tuple[str, 
     different neighbour by each of them.
     """
     groups: dict[str, tuple[str, ...]] = {}
-    for outcome in outcomes:
-        owned = _ordered({item.candidate_id for item in outcome.plan.ownership})
+    for assembled in outcomes:
+        outcome = assembled.outcome
+        owned = _ordered({item.candidate_id for item in assembled.ownership})
         for candidate in owned:
             groups.setdefault(candidate, (candidate,))
         if outcome.words or len(owned) < 2:
@@ -233,34 +343,34 @@ def _grouped_candidates(outcomes: tuple[RequestOutcome, ...]) -> set[tuple[str, 
 
 
 def _contributions(
-    outcomes: tuple[RequestOutcome, ...], groups: set[tuple[str, ...]]
-) -> dict[tuple[str, ...], list[RequestOutcome]]:
+    outcomes: tuple[_AssemblyOutcome, ...], groups: set[tuple[str, ...]]
+) -> dict[tuple[str, ...], list[_AssemblyOutcome]]:
     """Every outcome touching each group, in the order the requests were submitted."""
     by_candidate = {candidate: group for group in groups for candidate in group}
-    found: dict[tuple[str, ...], list[RequestOutcome]] = {group: [] for group in groups}
+    found: dict[tuple[str, ...], list[_AssemblyOutcome]] = {group: [] for group in groups}
     for outcome in outcomes:
-        touched = {by_candidate[item.candidate_id] for item in outcome.plan.ownership}
+        touched = {by_candidate[item.candidate_id] for item in outcome.ownership}
         for group in sorted(touched):
             found[group].append(outcome)
     return found
 
 
 def _draft(
-    candidates: tuple[str, ...], outcomes: list[RequestOutcome], *, decimation: int
+    candidates: tuple[str, ...], outcomes: list[_AssemblyOutcome], *, decimation: int
 ) -> SegmentDraft | None:
     """One group's segment, or ``None`` when the model found nothing in it."""
     pieces = [
         item
         for outcome in outcomes
-        for item in outcome.plan.ownership
+        for item in outcome.ownership
         if item.candidate_id in set(candidates)
     ]
     if not pieces:  # pragma: no cover - a group exists only because an outcome owned it
         return None
 
-    ownership_start = min(item.session_start_sample for item in pieces)
-    ownership_end = max(item.session_end_sample for item in pieces)
-    aligned = all(outcome.alignment_status == "aligned" for outcome in outcomes)
+    ownership_start = min(item.activity_start_sample for item in pieces)
+    ownership_end = max(item.activity_end_sample for item in pieces)
+    aligned = all(outcome.outcome.alignment_status == "aligned" for outcome in outcomes)
 
     if aligned:
         words = _owned_words(candidates, outcomes, decimation=decimation)
@@ -269,7 +379,7 @@ def _draft(
             return None
         return SegmentDraft(
             candidate_ids=candidates,
-            track_id=outcomes[0].plan.track_id,
+            track_id=outcomes[0].outcome.plan.track_id,
             start_sample=min(word.start_sample for word in words),
             end_sample=max(word.end_sample for word in words),
             ownership_start_sample=ownership_start,
@@ -278,15 +388,16 @@ def _draft(
             words=tuple(words),
             alignment_status="aligned",
             request_ids=_ordered_ids(outcomes),
-            truncation_submissions=sum(o.truncation_submissions for o in outcomes),
+            truncation_submissions=sum(o.outcome.truncation_submissions for o in outcomes),
+            ownership_pieces=tuple(pieces),
         )
 
-    text = normalize_text(" ".join(outcome.text for outcome in outcomes))
+    text = normalize_text(" ".join(outcome.outcome.text for outcome in outcomes))
     if not text:
         return None
     return SegmentDraft(
         candidate_ids=candidates,
-        track_id=outcomes[0].plan.track_id,
+        track_id=outcomes[0].outcome.plan.track_id,
         start_sample=ownership_start,
         end_sample=ownership_end,
         ownership_start_sample=ownership_start,
@@ -297,16 +408,17 @@ def _draft(
         # thing the spec wants warned about, and a mixture that included one is one.
         alignment_status=(
             "segment_only"
-            if any(outcome.alignment_status == "segment_only" for outcome in outcomes)
+            if any(outcome.outcome.alignment_status == "segment_only" for outcome in outcomes)
             else "not_attempted"
         ),
         request_ids=_ordered_ids(outcomes),
-        truncation_submissions=sum(o.truncation_submissions for o in outcomes),
+        truncation_submissions=sum(o.outcome.truncation_submissions for o in outcomes),
+        ownership_pieces=tuple(pieces),
     )
 
 
 def _owned_words(
-    candidates: tuple[str, ...], outcomes: list[RequestOutcome], *, decimation: int
+    candidates: tuple[str, ...], outcomes: list[_AssemblyOutcome], *, decimation: int
 ) -> list[WordRecord]:
     """The words this group owns, on the 48 kHz grid, in order.
 
@@ -328,30 +440,40 @@ def _owned_words(
                 piece,
                 tuple(
                     word
-                    for word in outcome.words
-                    if piece.start_sample <= word.start_sample < piece.end_sample
+                    for word in outcome.outcome.words
+                    if piece.effective_start_derivative_sample
+                    <= word.start_sample
+                    < piece.effective_end_derivative_sample
                 ),
             )
             for outcome in outcomes
-            for piece in outcome.plan.ownership
+            for piece in outcome.ownership
             if piece.candidate_id in wanted
         ),
-        key=lambda item: (item[0].start_sample, item[0].end_sample),
+        key=lambda item: (
+            item[0].effective_start_derivative_sample,
+            item[0].effective_end_derivative_sample,
+            item[0].request_id,
+        ),
     )
 
     found: list[WordRecord] = []
-    previous: tuple[Ownership, tuple[TranscribedWord, ...]] | None = None
+    previous: tuple[OwnershipPiece, tuple[TranscribedWord, ...]] | None = None
     for piece, words in owned:
         # Only across a boundary the two pieces actually share. Two pieces separated by
         # silence are two utterances, and a word repeated across a gap is a word said twice.
-        if previous is not None and previous[0].end_sample == piece.start_sample:
+        if (
+            previous is not None
+            and previous[0].effective_end_derivative_sample
+            == piece.effective_start_derivative_sample
+        ):
             words = without_boundary_repeat(previous[1], words)
         found.extend(_record(word, piece, decimation=decimation) for word in words)
         previous = (piece, words)
     return sorted(found, key=lambda word: (word.start_sample, word.end_sample))
 
 
-def _record(word: TranscribedWord, piece: Ownership, *, decimation: int) -> WordRecord:
+def _record(word: TranscribedWord, piece: OwnershipPiece, *, decimation: int) -> WordRecord:
     """One word on the session grid, clamped into the interval that owns it.
 
     The clamp is not cosmetic. A candidate's 48 kHz interval *covers* its derivative one, so
@@ -360,18 +482,18 @@ def _record(word: TranscribedWord, piece: Ownership, *, decimation: int) -> Word
     the records artifact refuses, correctly.
     """
     start = min(
-        max(to_source_sample(word.start_sample, decimation), piece.session_start_sample),
-        piece.session_end_sample - 1,
+        max(to_source_sample(word.start_sample, decimation), piece.effective_start_sample),
+        piece.effective_end_sample - 1,
     )
     end = max(to_source_sample(max(word.end_sample, word.start_sample + 1), decimation), start + 1)
     return WordRecord(start_sample=start, end_sample=end, text=word.text)
 
 
-def _ordered_ids(outcomes: list[RequestOutcome]) -> tuple[str, ...]:
+def _ordered_ids(outcomes: list[_AssemblyOutcome]) -> tuple[str, ...]:
     """Every contributing request id, first occurrence first, without repeats."""
     seen: dict[str, None] = {}
     for outcome in outcomes:
-        for request_id in outcome.request_ids:
+        for request_id in outcome.outcome.request_ids:
             seen.setdefault(request_id, None)
     return tuple(seen)
 

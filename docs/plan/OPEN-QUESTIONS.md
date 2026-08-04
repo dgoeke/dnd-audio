@@ -694,7 +694,7 @@ them once text confirms. That handoff behaving as designed on real audio is itse
 enough to see a distribution rather than 14 candidates.
 
 ## OQ-018 — What do Qwen3-ASR and its aligner need at a request boundary?
-**Assumption:** Four guesses, each of which M4 has to make a number out of before any model
+**Assumption:** Five guesses, the first four of which M4 had to make a number out of before any model
 exists to check it against:
 
 1. **Padding.** `transcript.pad_ms` of audio on each side of an ownership interval is enough
@@ -715,6 +715,10 @@ exists to check it against:
    distribution — how differently it transcribes the same utterance heard on two lavs. Set
    too high, real duplicates survive; too low, two people who happened to say the same thing
    are collapsed into one.
+5. **Presentation gaps.** `transcript.presentation_join_gap_ms` distinguishes one turn split
+   across adjacent candidate records from two statements that happened to share an ASR batch.
+   A 350 ms default clears the measured 320 ms word gap, but one operator announcing microphones
+   is not a conversational distribution.
 
 **Why it matters:** Every one of these is a property of a model this milestone deliberately
 does not have. They shape what is submitted, what is stitched, and what is deleted — and (4)
@@ -727,9 +731,9 @@ truncated response and observe both the finish signal and whether a split resolv
 needs a real session, or at minimum a real recording of one utterance heard on two
 transmitters — the same evidence OQ-017 waits on, from the text side rather than the acoustic
 one.
-**Needs:** H1/H2 or the first real session · **Blocks:** nothing — M4 is correct under the
+**Needs:** H1/H2 or the first real session · **Blocks:** nothing — M4/M9 are correct under the
 configured values · **Status:** **items 1–3 answered** (M6b, 2026-08-03, measured against the
-real model); **item 4 open**, and so is whether a low-energy split beats a midpoint — both
+real model); **items 4–5 open**, and so is whether a low-energy split beats a midpoint — all
 need speech this capture does not contain
 
 **Raised before the constants landed, by M4's plan review.** The plan promised that every
@@ -816,6 +820,20 @@ Two things follow, and neither is M6b's to act on:
   on 47 seconds of it would be over-fitting to a microphone test. A real table is what should
   move it, and when it does, the symptom to look for is a transcript quietly missing the first
   word of an utterance rather than anything that raises.
+
+**M9 contained-fragment and presentation evidence (2026-08-04).** Holding the production
+30 ms activity graph and cached responses fixed, a proper contiguous-word containment rule
+removed the remaining long/suffix bleed only when the longer survivor was acoustically
+preferred, graph evidence existed, overlap was substantial, and the source margin reached
+300/1000. The threshold is therefore separate from ordinary similarity collapse's 100/1000.
+It remains provisional: this corpus has no genuine multi-speaker overlap. Its two exact `Okay`
+copies (648/1000 correlation, only 39/1000 source separation) remain protected, as do all equal
+short utterances.
+
+The same result left one intended same-track turn in two records with a 320 ms word gap. M9's
+350 ms presentation default is the smallest rounded threshold above it, with shared request
+lineage as an additional prerequisite. H1/H2 must test pauses and genuine overlap before either
+default is treated as calibrated conversation evidence. Item 4 and item 5 remain **open**.
 
 ## OQ-019 — What do the automix constants need to be at a real table?
 **Assumption:** Six numbers, each of which M5 has to choose before anyone has heard a mix:
@@ -1207,3 +1225,16 @@ with the production consequence bounded and the earlier causal claim corrected
 The bound was not widened: it now applies to interior words, which is the population the claim
 was always about, and the first-word behaviour is asserted in its own right by
 `test_a_words_start_depends_on_how_much_lead_in_its_window_had`.
+
+**M9 transcript-only remedy (2026-08-04).** A second counterfactual kept the production
+30 ms activity graph, every request waveform, and every cached response fixed while extending
+only the leading ownership used by transcript assembly. **20 ms was the smallest useful
+value:** it recovered all four direct openings and reduced dropped `(request, word)` pairs
+from 30 to 18. The intended result was identical through 80 ms; at 100 ms three additional
+weak-track words were merely claimed. Unlike the activity-pad experiments, this changes no
+speech reference or mix.
+
+M9 therefore defaults `transcript.leading_ownership_grace_ms` to 20, bounded by submitted
+padding and the preceding same-track interval (ADR-0033). That is a conservative remedy for
+the measured failure, not an answer about all speakers or rooms. This entry remains **open**
+for H1/H2, and it still blocks changing `activity.vad.pad_ms` without multi-wearer evidence.

@@ -587,6 +587,12 @@ Implement a conservative two-stage attribution strategy:
    minimum text length plus cross-channel correlation or compelling source-dominance
    evidence. If overlapping tracks contain materially different text, or the
    duplicate evidence is ambiguous, retain both and mark them as overlapping speech.
+   As a separate conservative rule, a weaker segment may be collapsed when the
+   acoustically preferred segment properly contains its normalized words as a contiguous
+   sequence, the graph contains pairwise evidence, temporal overlap is substantial, and
+   source dominance is compelling. Run ordinary whole-text similarity collapse first so the
+   extra rule cannot change its decisions. Exact matching short utterances never qualify for
+   containment merely because they are equal (ADR-0033).
 
 Do not use a single global loudness comparison that always awards a time interval to
 the loudest person; that would erase a quieter speaker during real overlap. Source
@@ -638,6 +644,11 @@ Include enough leading/trailing padding for word recovery, then translate return
 timestamps back to session time. Keep an unpadded core/ownership interval for every
 request. When padded requests touch or overlap, assign words to core intervals and
 deterministically stitch boundaries so padding cannot duplicate words or utterances.
+After ASR, a separately configured small leading ownership grace may recover an aligned
+word placed just before an activity edge. Bound it by audio actually submitted, clip it
+against preceding half-open ownership on the same track, and preserve both the activity and
+effective per-piece intervals in normalized records. It changes assembly semantics, never
+activity, request audio, or ASR cache identity (ADR-0033).
 
 Force English by default, but keep language configurable. If `glossary.txt` exists,
 pass its text through Qwen's context parameter. Save the unmodified public
@@ -751,7 +762,9 @@ Use versioned schemas. A transcript JSON baseline:
         "asr_model": "Qwen/Qwen3-ASR-1.7B",
         "asr_model_revision": "<resolved Hugging Face commit>",
         "alignment_status": "aligned",
-        "source_candidate_id": "candidate_000456"
+        "source_candidate_id": "candidate_000456",
+        "source_candidate_ids": ["candidate_000456"],
+        "source_segment_ids": ["seg_000123"]
       }
     }
   ]
@@ -771,6 +784,13 @@ deterministically to millisecond precision. Define stable sorting tie-breakers a
 derive segment/candidate IDs deterministically from sorted source identity and time,
 not from task completion order. `overlap` means that a segment overlaps another
 retained, non-duplicate speaker segment by at least the configured overlap threshold.
+
+Normalized records remain candidate-granular and retain their audit trail. Public JSON and
+Markdown may coalesce adjacent compatible records into one presentation turn only under a
+separate bounded exact-sample gap and shared request lineage; batching alone does not define
+a conversational turn. Both public views must use the same grouping. Plural provenance names
+every source record and candidate, and `overlap` is recomputed over the resulting public
+intervals (ADR-0034).
 
 Render Markdown like:
 

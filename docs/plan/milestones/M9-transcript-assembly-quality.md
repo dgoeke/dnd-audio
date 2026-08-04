@@ -47,12 +47,13 @@ multi-speaker evidence can distinguish repetition from bleed.
       submitted padded bounds that constrain each occurrence. Aggregate ranges must not hide
       gaps, predecessor clipping, or retry seams; each aligned word start resolves to exactly
       one effective interval.
-- [ ] The existing three-condition similarity collapse produces the same survivor verdicts
-      and existing decision representation as before. It runs as a complete first global pass;
-      only its remaining survivors enter a separately auditable `contained_fragment` pass,
-      which requires substantial overlap, graph evidence, at least 300/1000 source-score
-      dominance, and proper contiguous normalized-word containment by the acoustically
-      preferred survivor.
+- [ ] The existing three-condition similarity collapse produces the same complete first-pass
+      survivor verdicts and decision representation as before. Only its remaining survivors
+      enter a separately auditable `contained_fragment` pass, which requires substantial
+      overlap, graph evidence, at least 300/1000 source-score dominance, and proper contiguous
+      normalized-word containment by the acoustically preferred survivor. If the second pass
+      removes a first-pass survivor, records preserve the original edge in an acyclic audit
+      chain that terminates at the retained contained-fragment winner.
 - [ ] Negative collapse tests retain genuine overlap, unrelated text, pairs with absent graph
       evidence, weak dominance, a shorter segment with the better source score, and exact short
       `Yes`/`Okay` matches.
@@ -121,7 +122,8 @@ multi-speaker evidence can distinguish repetition from bleed.
    existing similarity algorithm as the unchanged first global pass; only then run a second
    pass over its survivors for proper word-sequence containment, preferred-survivor direction,
    overlap, evidence, and the separately configured 300/1000 dominance floor. Persist the rule
-   name only for the new `contained_fragment` decision path.
+   name only for the new `contained_fragment` decision path, and preserve any completed
+   first-pass edge as a terminating audit chain if its survivor loses in the second pass.
 4. Build one presentation-turn iterator over retained records. Join only adjacent compatible
    records with shared request lineage and the separate exact-sample presentation-gap bound,
    keep the first record id as the public turn id, add optional additive lineage lists to public

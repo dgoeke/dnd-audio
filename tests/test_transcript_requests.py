@@ -331,6 +331,12 @@ class TestPlansCarryNoAudio:
         assert not hasattr(only, "audio")
         assert not hasattr(only, "samples")
 
+    def test_transcript_only_grace_cannot_change_a_request_plan(self) -> None:
+        candidate = a_candidate("tx-a", 48_000, 96_000)
+        baseline = plan([candidate], transcript=TranscriptConfig(leading_ownership_grace_ms=0))
+        changed = plan([candidate], transcript=TranscriptConfig(leading_ownership_grace_ms=80))
+        assert changed == baseline
+
 
 class TestMalformedPlansAreRefused:
     def test_a_request_must_own_something(self) -> None:

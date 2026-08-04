@@ -168,6 +168,7 @@ class TestAnOrdinaryRequest:
         cache = AsrCache(session_dir=tmp_path)
         run([plan], responses, tmp_path, cache=cache)
         cache.commit()
+        before = {path.name: path.read_bytes() for path in sorted(tmp_path.rglob("*.json"))}
 
         warm_cache = AsrCache(session_dir=tmp_path)
         transcriber = ScriptedTranscriber({})
@@ -175,6 +176,7 @@ class TestAnOrdinaryRequest:
         assert outcome.outcomes[0].text == "hi"
         assert transcriber.requests == []
         assert (warm_cache.hits, warm_cache.misses) == (1, 0)
+        assert {path.name: path.read_bytes() for path in sorted(tmp_path.rglob("*.json"))} == before
 
 
 class TestTruncation:

@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from dnd_audio.activity import PERMILLE
 from dnd_audio.artifacts.activity import ActivityGraph, CandidateEvidence
 from dnd_audio.artifacts.records import (
+    CollapseRule,
     RejectedAlternative,
     SegmentDecision,
     TranscriptDecision,
@@ -59,6 +60,7 @@ class SegmentVerdict:
 
     decision: SegmentDecision
     duplicate_of_segment_id: str | None
+    collapse_rule: CollapseRule | None
     overlap: bool
     rejected_alternatives: tuple[RejectedAlternative, ...]
 
@@ -124,6 +126,10 @@ def collapse(
 
     duplicate_of: dict[int, int] = {}
     absorbed: dict[int, list[_Comparison]] = {}
+    contained_losers: set[int] = set()
+    # The complete legacy algorithm is the first global pass. A containment edge cannot
+    # preempt an existing similarity decision merely because its winner scores higher
+    # (ADR-0033; M9 plan review finding 1).
     for comparison in comparisons:
         if comparison.winner in duplicate_of or comparison.loser in duplicate_of:
             continue
@@ -138,6 +144,16 @@ def collapse(
         duplicate_of[comparison.loser] = comparison.winner
         absorbed.setdefault(comparison.winner, []).append(comparison)
 
+    # Only survivors of the unchanged pass are eligible for the distinct conservative rule.
+    for comparison in comparisons:
+        if comparison.winner in duplicate_of or comparison.loser in duplicate_of:
+            continue
+        if not _is_contained_fragment(comparison, drafts, settings=settings):
+            continue
+        duplicate_of[comparison.loser] = comparison.winner
+        absorbed.setdefault(comparison.winner, []).append(comparison)
+        contained_losers.add(comparison.loser)
+
     return CollapseResult(
         verdicts=tuple(
             _verdict(
@@ -145,12 +161,13 @@ def collapse(
                 drafts,
                 duplicate_of=duplicate_of,
                 absorbed=absorbed,
+                contained_losers=contained_losers,
                 speakers=speakers,
                 overlap_min_samples=overlap_min_samples,
             )
             for index in range(len(drafts))
         ),
-        decisions=_decisions(drafts, absorbed),
+        decisions=_decisions(drafts, absorbed, contained_losers=contained_losers),
     )
 
 
@@ -286,6 +303,37 @@ def _is_duplicate(
     return comparison.correlation_permille is not None and (correlated or dominant)
 
 
+def _is_contained_fragment(
+    comparison: _Comparison, drafts: list[SegmentDraft], *, settings: DuplicateConfig
+) -> bool:
+    """The separate proper-containment rule, evaluated only after legacy collapse.
+
+    Exact short utterances are structurally excluded: proper containment requires the
+    acoustically preferred survivor to have strictly more normalized words (ADR-0033,
+    OQ-018).
+    """
+    winner, loser = drafts[comparison.winner], drafts[comparison.loser]
+    shorter = min(
+        winner.end_sample - winner.start_sample,
+        loser.end_sample - loser.start_sample,
+    )
+    required = round(settings.min_overlap_ratio * PERMILLE)
+    if comparison.overlap_samples * PERMILLE < required * shorter:
+        return False
+    if comparison.correlation_permille is None:
+        return False
+    if comparison.score_margin_permille < round(settings.contained_min_score_margin * PERMILLE):
+        return False
+    outer = comparison_key(winner.text).split()
+    inner = comparison_key(loser.text).split()
+    if not inner or len(outer) <= len(inner):
+        return False
+    # Contiguous, not a bag of words: collapsing may lose no unique normalized word.
+    return any(
+        outer[index : index + len(inner)] == inner for index in range(len(outer) - len(inner) + 1)
+    )
+
+
 def _long_enough(draft: SegmentDraft, settings: DuplicateConfig) -> bool:
     """Whether this text is long enough for similarity to mean anything at all."""
     return (
@@ -300,6 +348,7 @@ def _verdict(
     *,
     duplicate_of: dict[int, int],
     absorbed: dict[int, list[_Comparison]],
+    contained_losers: set[int],
     speakers: dict[str, str],
     overlap_min_samples: int,
 ) -> SegmentVerdict:
@@ -307,12 +356,17 @@ def _verdict(
         return SegmentVerdict(
             decision="duplicate",
             duplicate_of_segment_id=segment_id(duplicate_of[index]),
+            collapse_rule=("contained_fragment" if index in contained_losers else None),
             overlap=False,
-            rejected_alternatives=(),
+            rejected_alternatives=tuple(
+                _alternative(drafts[comparison.loser], comparison, speakers)
+                for comparison in sorted(absorbed.get(index, []), key=lambda item: item.loser)
+            ),
         )
     return SegmentVerdict(
         decision="retained",
         duplicate_of_segment_id=None,
+        collapse_rule=None,
         overlap=_overlaps_another_speaker(
             index,
             drafts,
@@ -371,22 +425,31 @@ def _alternative(
 
 
 def _decisions(
-    drafts: list[SegmentDraft], absorbed: dict[int, list[_Comparison]]
+    drafts: list[SegmentDraft],
+    absorbed: dict[int, list[_Comparison]],
+    *,
+    contained_losers: set[int],
 ) -> tuple[TranscriptDecision, ...]:
     """One auditable record per collapse, with the numbers that produced it."""
     found: list[TranscriptDecision] = []
     for winner, comparisons in sorted(absorbed.items()):
         for comparison in sorted(comparisons, key=lambda item: item.loser):
             loser = drafts[comparison.loser]
+            contained = comparison.loser in contained_losers
+            text_evidence = (
+                "the weaker normalized words are properly contained by the survivor, "
+                if contained
+                else (f"their normalized text matches at {comparison.similarity_permille}/1000, ")
+            )
             found.append(
                 TranscriptDecision(
-                    code="duplicate_collapsed",
+                    code=("contained_fragment_collapsed" if contained else "duplicate_collapsed"),
                     subject=segment_id(comparison.loser),
                     detail=(
                         f"{loser.track_id} at sample {loser.start_sample} was collapsed into "
                         f"{segment_id(winner)}: the two overlap by "
-                        f"{comparison.overlap_permille}/1000 of the shorter segment, their "
-                        f"normalized text matches at {comparison.similarity_permille}/1000, "
+                        f"{comparison.overlap_permille}/1000 of the shorter segment, "
+                        f"{text_evidence}"
                         f"and the activity graph's weakest correlation between their "
                         f"candidates is {comparison.correlation_permille}/1000 with a source "
                         f"score margin of {comparison.score_margin_permille}/1000."

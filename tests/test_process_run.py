@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 from dnd_audio.activity import ACTIVITY_RELATIVE_PATH
 from dnd_audio.activity.runner import perform_activity
@@ -130,6 +131,33 @@ class TestBothBranchesSucceed:
             path.name: sha256_file(path) for path in (session_dir / MIX_CACHE_DIRNAME).glob("*.wav")
         }
         assert together == alone
+
+    def test_an_assembly_only_setting_leaves_the_mix_intermediate_content_unchanged(
+        self, canonical_fixture: FixtureTruth
+    ) -> None:
+        """INV-09's artifact proof, not merely a projection or selected cache identity."""
+        from dnd_audio.determinism import sha256_file
+        from dnd_audio.mix import MIX_CACHE_DIRNAME
+
+        session_dir = canonical_fixture.session_dir
+        first = processed(canonical_fixture, use_cache=False)
+        before = {
+            path.name: sha256_file(path) for path in (session_dir / MIX_CACHE_DIRNAME).glob("*.wav")
+        }
+        assert first.exit_code is ExitCode.OK
+        assert before
+
+        config_path = session_dir / "session.yaml"
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        config.setdefault("transcript", {})["leading_ownership_grace_ms"] = 40
+        config_path.write_text(yaml.safe_dump(config, sort_keys=True), encoding="utf-8")
+
+        second = processed(canonical_fixture)
+        after = {
+            path.name: sha256_file(path) for path in (session_dir / MIX_CACHE_DIRNAME).glob("*.wav")
+        }
+        assert second.exit_code is ExitCode.OK
+        assert set(after.values()) == set(before.values())
 
 
 class TestATranscriptionFailureDoesNotCancelTheMix:

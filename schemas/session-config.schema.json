@@ -174,6 +174,13 @@
       "additionalProperties": false,
       "description": "When two tracks' segments are the same utterance heard twice (spec, Milestone 3).\n\nCollapse needs **all three** of substantial temporal overlap, strongly similar normalized\ntext, and supporting acoustic evidence — and the acoustic half comes from the activity\ngraph's own per-pair measurements rather than from a second correlator (ADR-0017).\n\nThe thresholds split by what settles them. The text ones are calibrated against *Qwen's*\nerror distribution — how differently one model transcribes the same utterance heard on two\nlavs (OQ-018). The acoustic ones are about a real room, which is OQ-017's question.",
       "properties": {
+        "contained_min_score_margin": {
+          "default": 0.3,
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "Contained Min Score Margin",
+          "type": "number"
+        },
         "min_correlation": {
           "default": 0.5,
           "exclusiveMinimum": 0.0,
@@ -690,6 +697,13 @@
         "duplicate": {
           "$ref": "#/$defs/DuplicateConfig"
         },
+        "leading_ownership_grace_ms": {
+          "default": 20,
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Leading Ownership Grace Ms",
+          "type": "integer"
+        },
         "max_truncation_retries": {
           "default": 4,
           "maximum": 32,
@@ -723,6 +737,13 @@
           "maximum": 10000,
           "minimum": 0,
           "title": "Pad Ms",
+          "type": "integer"
+        },
+        "presentation_join_gap_ms": {
+          "default": 350,
+          "maximum": 60000,
+          "minimum": 0,
+          "title": "Presentation Join Gap Ms",
           "type": "integer"
         }
       },

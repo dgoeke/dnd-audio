@@ -586,7 +586,13 @@ def perform_transcript(
             glossary=glossary,
         )
 
-    drafts, notes, dropped = draft_segments(outcome.outcomes, decimation=context.decimation)
+    drafts, notes, dropped = draft_segments(
+        outcome.outcomes,
+        decimation=context.decimation,
+        leading_grace_samples=(
+            config.transcript.leading_ownership_grace_ms * graph.derivative_sample_rate // 1000
+        ),
+    )
     decided = collapse(
         drafts,
         graph,

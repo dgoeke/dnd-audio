@@ -1,5 +1,87 @@
 {
   "$defs": {
+    "OwnershipPieceRecord": {
+      "additionalProperties": false,
+      "description": "Original and effective ownership for one request/candidate occurrence (ADR-0033).",
+      "properties": {
+        "activity_end_derivative_sample": {
+          "exclusiveMinimum": 0,
+          "title": "Activity End Derivative Sample",
+          "type": "integer"
+        },
+        "activity_end_sample": {
+          "exclusiveMinimum": 0,
+          "title": "Activity End Sample",
+          "type": "integer"
+        },
+        "activity_start_derivative_sample": {
+          "minimum": 0,
+          "title": "Activity Start Derivative Sample",
+          "type": "integer"
+        },
+        "activity_start_sample": {
+          "minimum": 0,
+          "title": "Activity Start Sample",
+          "type": "integer"
+        },
+        "candidate_id": {
+          "minLength": 1,
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "effective_end_derivative_sample": {
+          "exclusiveMinimum": 0,
+          "title": "Effective End Derivative Sample",
+          "type": "integer"
+        },
+        "effective_end_sample": {
+          "exclusiveMinimum": 0,
+          "title": "Effective End Sample",
+          "type": "integer"
+        },
+        "effective_start_derivative_sample": {
+          "minimum": 0,
+          "title": "Effective Start Derivative Sample",
+          "type": "integer"
+        },
+        "effective_start_sample": {
+          "minimum": 0,
+          "title": "Effective Start Sample",
+          "type": "integer"
+        },
+        "request_id": {
+          "minLength": 1,
+          "title": "Request Id",
+          "type": "string"
+        },
+        "submitted_end_derivative_sample": {
+          "exclusiveMinimum": 0,
+          "title": "Submitted End Derivative Sample",
+          "type": "integer"
+        },
+        "submitted_start_derivative_sample": {
+          "minimum": 0,
+          "title": "Submitted Start Derivative Sample",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "request_id",
+        "activity_start_derivative_sample",
+        "activity_end_derivative_sample",
+        "effective_start_derivative_sample",
+        "effective_end_derivative_sample",
+        "submitted_start_derivative_sample",
+        "submitted_end_derivative_sample",
+        "activity_start_sample",
+        "activity_end_sample",
+        "effective_start_sample",
+        "effective_end_sample"
+      ],
+      "title": "OwnershipPieceRecord",
+      "type": "object"
+    },
     "RejectedAlternative": {
       "additionalProperties": false,
       "description": "A segment collapsed into this one, and the evidence that condemned it.\n\nThe spec requires rejected alternatives to be recorded; recording only the id would make\nthe decision unauditable, which is the same argument ADR-0012 made for keeping the bleed\ngate's evidence per pair rather than summarized.",
@@ -154,6 +236,19 @@
           "title": "Alignment Status",
           "type": "string"
         },
+        "collapse_rule": {
+          "anyOf": [
+            {
+              "const": "contained_fragment",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Collapse Rule"
+        },
         "decision": {
           "enum": [
             "retained",
@@ -189,6 +284,21 @@
           "exclusiveMinimum": 0,
           "title": "Ownership End Sample",
           "type": "integer"
+        },
+        "ownership_pieces": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/OwnershipPieceRecord"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ownership Pieces"
         },
         "ownership_start_sample": {
           "minimum": 0,
@@ -624,6 +734,32 @@
       "minLength": 1,
       "title": "Language",
       "type": "string"
+    },
+    "overlap_min_samples": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Overlap Min Samples"
+    },
+    "presentation_join_gap_samples": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Presentation Join Gap Samples"
     },
     "provenance": {
       "$ref": "#/$defs/TranscriptRecordsProvenance"

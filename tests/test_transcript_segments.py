@@ -9,6 +9,7 @@ result that cannot be divided at all.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from dnd_audio.artifacts.transcript import AlignmentStatus
@@ -76,6 +77,12 @@ def draft(*outcomes: RequestOutcome) -> Any:
 
 def dropped(*outcomes: RequestOutcome) -> Any:
     return draft_segments(tuple(outcomes), decimation=DECIMATION)[2]
+
+
+def with_grace(grace_samples: int, *outcomes: RequestOutcome) -> Any:
+    return draft_segments(
+        tuple(outcomes), decimation=DECIMATION, leading_grace_samples=grace_samples
+    )
 
 
 class TestOneCandidatePerRequest:
@@ -156,6 +163,100 @@ class TestPaddingIsContextAndNotContent:
         drafts, _ = draft(outcome)
         (only,) = [item for item in drafts if item.words]
         assert only.candidate_ids == ("cand-b",)
+
+
+class TestLeadingOwnershipGrace:
+    """ADR-0033's post-ASR partition, including every boundary shape in M9's gate."""
+
+    def test_twenty_milliseconds_recovers_a_direct_opening(self) -> None:
+        plan = a_plan("req-1", (an_ownership("cand-a", RATE, RATE * 2),))
+        opening = a_word(RATE - 320, "Testing")
+        assert draft(an_outcome(plan, "Testing", (opening,)))[0] == []
+
+        drafts, notes, dropped_words = with_grace(320, an_outcome(plan, "Testing", (opening,)))
+        assert [item.text for item in drafts] == ["Testing"]
+        assert notes == []
+        assert dropped_words == ()
+        assert plan.ownership[0].start_sample == RATE, "assembly rewrote the ASR plan"
+
+    def test_the_smallest_useful_value_is_exact(self) -> None:
+        plan = a_plan("req-1", (an_ownership("cand-a", RATE, RATE * 2),))
+        opening = a_word(RATE - 320, "Testing")
+        assert with_grace(319, an_outcome(plan, "Testing", (opening,)))[0] == []
+        assert [
+            item.text for item in with_grace(320, an_outcome(plan, "Testing", (opening,)))[0]
+        ] == ["Testing"]
+
+    def test_grace_cannot_reach_before_submitted_padding(self) -> None:
+        original = a_plan("req-1", (an_ownership("cand-a", RATE, RATE * 2),))
+        plan = replace(original, padded_start_sample=RATE - 100)
+        word = a_word(RATE - 101, "outside")
+        drafts, _, dropped_words = with_grace(320, an_outcome(plan, "outside", (word,)))
+        assert drafts == []
+        assert dropped_words[0].edge_distance_derivative_samples == ((1, 1),)
+
+    def test_session_start_clips_without_an_empty_or_negative_interval(self) -> None:
+        ownership = an_ownership("cand-a", 100, 1000)
+        plan = replace(a_plan("req-1", (ownership,)), padded_start_sample=0)
+        (only,) = with_grace(320, an_outcome(plan, "start", (a_word(0, "start"),)))[0]
+        (piece,) = only.ownership_pieces
+        assert piece.effective_start_derivative_sample == 0
+        assert piece.effective_start_sample == 0
+
+    def test_a_gap_in_one_merged_request_can_donate_only_to_the_later_piece(self) -> None:
+        first = an_ownership("cand-a", RATE, RATE * 2)
+        second = an_ownership("cand-b", RATE * 2 + 640, RATE * 3)
+        plan = a_plan("req-1", (first, second))
+        outcome = an_outcome(
+            plan,
+            "one Finally",
+            (a_word(RATE + 10, "one"), a_word(second.start_sample - 320, "Finally")),
+        )
+        drafts = with_grace(320, outcome)[0]
+        assert [item.text for item in drafts] == ["one", "Finally"]
+        later = drafts[1].ownership_pieces[0]
+        assert later.effective_start_derivative_sample == second.start_sample - 320
+
+    def test_adjacent_candidates_keep_the_half_open_boundary_unique(self) -> None:
+        first = an_ownership("cand-a", RATE, RATE * 2)
+        second = an_ownership("cand-b", RATE * 2, RATE * 3)
+        plan = a_plan("req-1", (first, second))
+        drafts = with_grace(
+            320,
+            an_outcome(
+                plan,
+                "before edge",
+                (a_word(RATE * 2 - 1, "before"), a_word(RATE * 2, "edge")),
+            ),
+        )[0]
+        assert [item.text for item in drafts] == ["before", "edge"]
+        assert drafts[1].ownership_pieces[0].effective_start_derivative_sample == RATE * 2
+
+    def test_long_candidate_divisions_cannot_claim_the_boundary_word_twice(self) -> None:
+        first = a_plan("req-1.0", (an_ownership("cand-a", RATE, RATE * 2),))
+        second = a_plan("req-1.1", (an_ownership("cand-a", RATE * 2, RATE * 3),))
+        outcomes = (
+            an_outcome(first, "boundary", (a_word(RATE * 2 - 100, "boundary"),)),
+            an_outcome(second, "boundary", (a_word(RATE * 2 - 100, "boundary"),)),
+        )
+        drafts, _, dropped_words = with_grace(320, *outcomes)
+        assert [word.text for word in drafts[0].words] == ["boundary"]
+        assert sum(item.count for item in dropped_words) == 1
+        assert drafts[0].ownership_pieces[1].effective_start_derivative_sample == RATE * 2
+
+    def test_a_stitched_retry_keeps_parent_ownership_and_child_request_lineage(self) -> None:
+        plan = a_plan("req-1", (an_ownership("cand-a", RATE, RATE * 2),))
+        outcome = an_outcome(
+            plan,
+            "Testing",
+            (a_word(RATE - 320, "Testing"),),
+            request_ids=("req-1", "req-1.0", "req-1.1"),
+            truncation_submissions=2,
+        )
+        (drafted,) = with_grace(320, outcome)[0]
+        assert drafted.request_ids == ("req-1", "req-1.0", "req-1.1")
+        assert drafted.ownership_pieces[0].request_id == "req-1"
+        assert outcome.plan.ownership[0].start_sample == RATE
 
 
 class TestAMergedRequestComesBackApart:

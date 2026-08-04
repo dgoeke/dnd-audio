@@ -16,10 +16,12 @@ from dnd_audio.config import (
     _FIELD_SCOPES,
     CONFIG_SCHEMA_VERSION,
     BleedConfig,
+    DuplicateConfig,
     MixConfig,
     ScoringConfig,
     SessionConfig,
     StageScope,
+    TranscriptConfig,
     VadConfig,
     config_hash,
     load_session_config,
@@ -68,11 +70,20 @@ class TestValidSession:
         assert config.asr.max_new_tokens == 1024
 
         assert config.activity.correlation_max_lag_ms == 30
+        assert config.activity.vad.pad_ms == 30
+        assert config.activity.vad.merge_gap_ms == 200
+        assert config.transcript.leading_ownership_grace_ms == 20
+        assert config.transcript.presentation_join_gap_ms == 350
+        assert config.transcript.duplicate.contained_min_score_margin == 0.3
         assert config.mix.integrated_lufs == -16.0
         assert config.mix.true_peak_dbtp == -1.5
         assert config.mix.mp3_bitrate_kbps == 128
 
         assert config.recovery.allow_processed_audio is False
+
+        assert TranscriptConfig().leading_ownership_grace_ms == 20
+        assert TranscriptConfig().presentation_join_gap_ms == 350
+        assert DuplicateConfig().contained_min_score_margin == 0.3
         assert config.recovery.source_time_overrides == {}
 
     def test_track_identity_comes_from_the_configured_directory(self, raw: dict[str, Any]) -> None:

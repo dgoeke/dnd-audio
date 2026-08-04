@@ -43,6 +43,19 @@ session's start/end clap measurements.
         truncation is required, which needs one continuous utterance long enough to exhaust
         1024 generated tokens; forcing a low ceiling truncates everything and measures
         nothing about the split.
+      - **item 5**, presentation gaps — compare logged same-speaker pauses on both sides of
+        350 ms, including distinct statements sharing one ASR request and one intended turn
+        split near the boundary. Score granular records separately from public turns; request
+        batching is not turn evidence (ADR-0034).
+- [ ] **OQ-027's M9 remedy is checked over real multi-wearer speech.** With activity and cached
+      ASR fixed, compare 0/20/100 ms transcript-only leading grace against logged direct-source
+      hard onsets. Confirm recovered direct words, weak-track claims, piece ownership lineage,
+      request identities, activity and mix rather than using dropped-pair count alone.
+- [ ] Contained-fragment collapse is audited over the long recording: report every
+      `contained_fragment` decision and terminating chain, retain unrelated or genuinely
+      simultaneous speech, and include exact simultaneous `Yes`/`Okay` ground truth. A false
+      deletion requires a new software milestone, not an in-place H2 threshold tweak
+      (ADR-0033).
 
 ## Explicitly not in this milestone
 

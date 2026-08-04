@@ -23,11 +23,13 @@ line breaks the document rather than the sentence.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, replace
 from fractions import Fraction
 from typing import Final
 
-from dnd_audio.artifacts.records import SegmentRecord, TranscriptRecords
+from dnd_audio.artifacts.records import SegmentRecord, TranscriptRecords, WordRecord
 from dnd_audio.artifacts.transcript import (
+    AlignmentStatus,
     SegmentProvenance,
     Transcript,
     TranscriptSegment,
@@ -35,7 +37,14 @@ from dnd_audio.artifacts.transcript import (
 )
 from dnd_audio.determinism import public_seconds, to_milliseconds
 
-__all__ = ["MARKDOWN_ESCAPED", "build_transcript", "render_markdown", "timestamp"]
+__all__ = [
+    "MARKDOWN_ESCAPED",
+    "PresentationTurn",
+    "build_transcript",
+    "presentation_turns",
+    "render_markdown",
+    "timestamp",
+]
 
 #: Characters that would otherwise be read as Markdown. Deliberately not a general HTML
 #: escape: this is a Markdown document, and turning an ampersand into an entity would change
@@ -46,6 +55,113 @@ _ESCAPE = re.compile(f"([{re.escape(MARKDOWN_ESCAPED)}])")
 _WHITESPACE = re.compile(r"\s+")
 
 
+@dataclass(frozen=True, slots=True)
+class PresentationTurn:
+    """One public turn, with every granular record still named (ADR-0034)."""
+
+    segment_id: str
+    source_segment_ids: tuple[str, ...]
+    source_candidate_ids: tuple[str, ...]
+    request_ids: frozenset[str]
+    start_sample: int
+    end_sample: int
+    speaker_id: str
+    speaker_name: str
+    track_id: str
+    text: str
+    overlap: bool
+    words: tuple[WordRecord, ...]
+    alignment_status: AlignmentStatus
+
+
+def presentation_turns(records: TranscriptRecords) -> tuple[PresentationTurn, ...]:
+    """The shared JSON/Markdown view over granular retained records.
+
+    Legacy records have no presentation threshold and retain their original one-record-per-line
+    semantics. New records group first, then recompute public overlap over the resulting exact
+    intervals (ADR-0034, OQ-018).
+    """
+    turns: list[PresentationTurn] = []
+    for segment in records.retained():
+        current = _turn(segment)
+        if turns and _may_join(turns[-1], segment, records.presentation_join_gap_samples):
+            turns[-1] = _join(turns[-1], segment)
+        else:
+            turns.append(current)
+
+    if records.overlap_min_samples is None:
+        return tuple(turns)
+    return tuple(
+        replace(
+            turn,
+            overlap=any(
+                _public_overlap(turn, other, records.overlap_min_samples) for other in turns
+            ),
+        )
+        for turn in turns
+    )
+
+
+def _turn(segment: SegmentRecord) -> PresentationTurn:
+    return PresentationTurn(
+        segment_id=segment.segment_id,
+        source_segment_ids=(segment.segment_id,),
+        source_candidate_ids=tuple(segment.source_candidate_ids),
+        request_ids=frozenset(segment.request_ids),
+        start_sample=segment.start_sample,
+        end_sample=segment.end_sample,
+        speaker_id=segment.speaker_id,
+        speaker_name=segment.speaker_name,
+        track_id=segment.track_id,
+        text=segment.text,
+        overlap=segment.overlap,
+        words=tuple(segment.words),
+        alignment_status=segment.alignment_status,
+    )
+
+
+def _public_overlap(first: PresentationTurn, second: PresentationTurn, minimum: int) -> bool:
+    if first.speaker_id == second.speaker_id:
+        return False
+    shared = min(first.end_sample, second.end_sample) - max(first.start_sample, second.start_sample)
+    return shared > 0 and shared >= minimum
+
+
+def _may_join(
+    turn: PresentationTurn, segment: SegmentRecord, maximum_gap_samples: int | None
+) -> bool:
+    if maximum_gap_samples is None:
+        return False
+    gap = segment.start_sample - turn.end_sample
+    return (
+        turn.track_id == segment.track_id
+        and turn.speaker_id == segment.speaker_id
+        and turn.alignment_status == segment.alignment_status
+        and not turn.overlap
+        and not segment.overlap
+        and bool(turn.request_ids.intersection(segment.request_ids))
+        and 0 <= gap <= maximum_gap_samples
+    )
+
+
+def _join(turn: PresentationTurn, segment: SegmentRecord) -> PresentationTurn:
+    candidates = dict.fromkeys((*turn.source_candidate_ids, *segment.source_candidate_ids))
+    return replace(
+        turn,
+        source_segment_ids=(*turn.source_segment_ids, segment.segment_id),
+        source_candidate_ids=tuple(candidates),
+        request_ids=turn.request_ids.union(segment.request_ids),
+        end_sample=max(turn.end_sample, segment.end_sample),
+        text=" ".join(part for part in (turn.text, segment.text) if part),
+        words=tuple(
+            sorted(
+                (*turn.words, *segment.words),
+                key=lambda word: (word.start_sample, word.end_sample),
+            )
+        ),
+    )
+
+
 def build_transcript(records: TranscriptRecords) -> Transcript:
     """`transcript.json`, from the records and nothing else."""
     return Transcript(
@@ -53,11 +169,11 @@ def build_transcript(records: TranscriptRecords) -> Transcript:
         title=records.title,
         duration_s=_seconds(records.duration_samples, records.sample_rate),
         speakers=list(records.speakers),
-        segments=[_segment(segment, records) for segment in records.retained()],
+        segments=[_segment(turn, records) for turn in presentation_turns(records)],
     )
 
 
-def _segment(segment: SegmentRecord, records: TranscriptRecords) -> TranscriptSegment:
+def _segment(segment: PresentationTurn, records: TranscriptRecords) -> TranscriptSegment:
     transcriber = records.provenance.transcriber
     return TranscriptSegment(
         segment_id=segment.segment_id,
@@ -86,6 +202,8 @@ def _segment(segment: SegmentRecord, records: TranscriptRecords) -> TranscriptSe
             # (ADR-0017), and the several-candidate case is the wordless one the records
             # artifact records in full.
             source_candidate_id=segment.source_candidate_ids[0],
+            source_candidate_ids=list(segment.source_candidate_ids),
+            source_segment_ids=list(segment.source_segment_ids),
         ),
     )
 
@@ -99,11 +217,11 @@ def render_markdown(records: TranscriptRecords) -> str:
     turn nobody took.
     """
     lines = [f"# {_escape(records.title)}", ""]
-    lines.extend(_line(segment, records.sample_rate) for segment in records.retained())
+    lines.extend(_line(segment, records.sample_rate) for segment in presentation_turns(records))
     return "\n".join(lines) + "\n"
 
 
-def _line(segment: SegmentRecord, sample_rate: int) -> str:
+def _line(segment: PresentationTurn, sample_rate: int) -> str:
     marker = " [overlap]" if segment.overlap else ""
     stamp = timestamp(segment.start_sample, sample_rate)
     return f"**[{stamp}] {_escape(segment.speaker_name)}{marker}:** {_escape(segment.text)}\n"

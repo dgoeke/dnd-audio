@@ -19,6 +19,7 @@ import numpy as np
 from dnd_audio.activity import ACTIVITY_SEMANTICS_VERSION
 from dnd_audio.artifacts.activity import ActivityGraph, ActivityTrack
 from dnd_audio.artifacts.records import (
+    OwnershipPieceRecord,
     SegmentRecord,
     TranscriberIdentity,
     TranscriptDecision,
@@ -61,6 +62,10 @@ def build_records(
         activity_cache_key=graph.attribution_cache_key,
         sample_rate=graph.sample_rate,
         duration_samples=graph.duration_samples,
+        presentation_join_gap_samples=(
+            config.transcript.presentation_join_gap_ms * graph.sample_rate // 1000
+        ),
+        overlap_min_samples=config.transcript.overlap_min_ms * graph.sample_rate // 1000,
         speakers=[
             TranscriptSpeaker(
                 speaker_id=track.speaker_id,
@@ -106,10 +111,21 @@ def _segment(
         words=list(draft.words),
         alignment_status=draft.alignment_status,
         decision=verdict.decision,
+        collapse_rule=verdict.collapse_rule,
         duplicate_of_segment_id=verdict.duplicate_of_segment_id,
         overlap=verdict.overlap,
         source_candidate_ids=list(draft.candidate_ids),
         request_ids=list(draft.request_ids),
+        ownership_pieces=(
+            [
+                OwnershipPieceRecord(
+                    **{field: getattr(piece, field) for field in OwnershipPieceRecord.model_fields}
+                )
+                for piece in draft.ownership_pieces
+            ]
+            if draft.ownership_pieces
+            else None
+        ),
         truncation_submissions=draft.truncation_submissions,
         rejected_alternatives=list(verdict.rejected_alternatives),
     )

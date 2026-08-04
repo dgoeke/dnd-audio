@@ -55,7 +55,15 @@ multi-hour clock stability, which is H2.
       log. Include both a clean pause before the phrase and a quick handoff from the preceding
       speaker. This distinguishes a direct-source opening word from the same word in another
       lav's padding; a dropped-word count alone cannot do that (**OQ-017**, **OQ-027**).
-- [ ] One deliberate two-person overlap.
+- [ ] One deliberate two-person overlap. Include a logged exact short response such as `Yes`
+      or `Okay` spoken by both people at nearly the same time, plus one different-words
+      overlap. Preserve the granular records and public turns separately when evaluating the
+      result: the exact match must not disappear merely because correlation exists
+      (**OQ-018**, ADR-0033).
+- [ ] One wearer delivers two distinct statements on the same transmitter with controlled
+      pauses on both sides of 350 ms, and one intended turn is naturally split by a pause near
+      320--350 ms. Log the words and pause targets. This tests M9's presentation-only join
+      without treating a shared ASR batch as a conversational boundary (**OQ-018**, ADR-0034).
 - [ ] Turn one transmitter off, wait several seconds, turn it back on, record again.
 - [ ] A distinctive three-clap pattern near the start and near the end.
 - [ ] Export both `orig` and `edit` if dual-file mode is enabled.
@@ -114,6 +122,11 @@ they matter rather than merely that they were on a list:
   to retune a detector on, and a real table is. **The symptom to look for is a transcript
   quietly missing the first word of an utterance** — nothing raises, nothing warns, and the
   text reads as plausible prose.
+- **The M9 transcript-only control.** Keep the activity graph and cached ASR responses fixed
+  while comparing leading ownership grace at 0, 20 and 100 ms. Attribute each recovered word
+  to the logged direct wearer rather than scoring drops alone, and confirm the activity graph,
+  request identities and mix do not change. Inspect the piece-specific original/effective
+  ownership lineage in the granular records (**OQ-027**, ADR-0033).
 
 ## Partial evidence received — 2026-08-03 jam verification capture
 
@@ -157,6 +170,10 @@ verification stays in the recipe permanently rather than being a one-off (**OQ-0
 - [ ] `inspect` and `ingest` run cleanly on the real fixture, and the reconstructed
       timeline agrees with the recording log (start offsets, the power-cycle gap,
       the two clap positions).
+- [ ] The logged hard onsets, simultaneous exact-short overlap and controlled pauses are
+      compared against both granular transcript records and coalesced public turns. Any M9
+      threshold change is deferred to H2 or a separate software milestone; H1 records the
+      evidence without hiding transcript-semantic work inside this hardware fixture.
 - [ ] The full gate still passes; synthetic tests are not weakened to accommodate
       real data.
 

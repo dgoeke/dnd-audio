@@ -246,6 +246,189 @@ class TestOrderingAndIds:
         assert [speaker.speaker_id for speaker in document.speakers] == ["alice", "bob"]
 
 
+class TestPresentationTurns:
+    def test_json_and_markdown_join_the_same_adjacent_records_with_plural_lineage(self) -> None:
+        shared = "req_tx-a_shared"
+        first = a_segment(
+            0,
+            RATE,
+            RATE + 1000,
+            text="Finally",
+            request_ids=[shared],
+            source_candidate_ids=["cand-a"],
+        )
+        second = a_segment(
+            1,
+            RATE + 17_800,
+            RATE + 22_000,
+            text="here's the fourth microphone",
+            request_ids=[shared],
+            source_candidate_ids=["cand-b"],
+        )
+        granular = records(
+            segments=[first, second],
+            presentation_join_gap_samples=16_800,
+            overlap_min_samples=12_000,
+        )
+
+        (public,) = build_transcript(granular).segments
+        markdown = render_markdown(granular)
+        assert len(granular.retained()) == 2
+        assert public.text == "Finally here's the fourth microphone"
+        assert public.provenance.source_segment_ids == [segment_id(0), segment_id(1)]
+        assert public.provenance.source_candidate_ids == ["cand-a", "cand-b"]
+        assert markdown.count("**[") == 1
+        assert public.text in markdown
+
+    def test_request_batching_alone_cannot_join_across_the_presentation_gap(self) -> None:
+        shared = "req_tx-a_shared"
+        document = records(
+            segments=[
+                a_segment(0, RATE, RATE + 1000, text="one", request_ids=[shared]),
+                a_segment(
+                    1,
+                    RATE + 17_802,
+                    RATE + 20_000,
+                    text="two",
+                    request_ids=[shared],
+                ),
+            ],
+            presentation_join_gap_samples=16_800,
+            overlap_min_samples=12_000,
+        )
+        assert [item.text for item in build_transcript(document).segments] == ["one", "two"]
+
+    def test_a_shared_gap_without_shared_request_lineage_stays_granular(self) -> None:
+        document = records(
+            segments=[
+                a_segment(0, RATE, RATE + 1000, text="one", request_ids=["req-one"]),
+                a_segment(
+                    1,
+                    RATE + 2000,
+                    RATE + 3000,
+                    text="two",
+                    request_ids=["req-two"],
+                ),
+            ],
+            presentation_join_gap_samples=16_800,
+            overlap_min_samples=12_000,
+        )
+        assert len(build_transcript(document).segments) == 2
+
+    @pytest.mark.parametrize(
+        "second_change",
+        [
+            {"alignment_status": "segment_only"},
+            {"overlap": True},
+        ],
+    )
+    def test_incompatible_alignment_or_overlap_stays_granular(
+        self, second_change: dict[str, Any]
+    ) -> None:
+        shared = "req_tx-a_shared"
+        document = records(
+            segments=[
+                a_segment(0, RATE, RATE + 1000, text="one", request_ids=[shared]),
+                a_segment(
+                    1,
+                    RATE + 2000,
+                    RATE + 3000,
+                    text="two",
+                    request_ids=[shared],
+                    **second_change,
+                ),
+            ],
+            presentation_join_gap_samples=16_800,
+            overlap_min_samples=12_000,
+        )
+        assert len(build_transcript(document).segments) == 2
+
+    def test_an_intervening_speaker_prevents_joining(self) -> None:
+        shared = "req_tx-a_shared"
+        document = records(
+            segments=[
+                a_segment(0, RATE, RATE + 1000, text="one", request_ids=[shared]),
+                a_segment(
+                    1,
+                    RATE + 1500,
+                    RATE + 1800,
+                    track_id="tx-b",
+                    speaker_id="bob",
+                    speaker_name="Bob",
+                    text="interrupting",
+                    request_ids=["req-b"],
+                    source_candidate_ids=["cand-b"],
+                ),
+                a_segment(
+                    2,
+                    RATE + 2000,
+                    RATE + 3000,
+                    text="two",
+                    request_ids=[shared],
+                ),
+            ],
+            speakers=[a_speaker(), a_speaker("bob", "tx-b")],
+            presentation_join_gap_samples=16_800,
+            overlap_min_samples=12_000,
+        )
+        assert [item.text for item in build_transcript(document).segments] == [
+            "one",
+            "interrupting",
+            "two",
+        ]
+
+    def test_overlap_is_recomputed_when_another_speaker_spans_the_joined_gap(self) -> None:
+        bob = a_segment(
+            0,
+            0,
+            1200,
+            track_id="tx-b",
+            speaker_id="bob",
+            speaker_name="Bob",
+            text="a long turn",
+            request_ids=["req-b"],
+            source_candidate_ids=["cand-b"],
+        )
+        alice_one = a_segment(
+            1,
+            900,
+            950,
+            text="one",
+            request_ids=["req-a"],
+            source_candidate_ids=["cand-a1"],
+        )
+        alice_two = a_segment(
+            2,
+            1150,
+            1200,
+            text="two",
+            request_ids=["req-a"],
+            source_candidate_ids=["cand-a2"],
+        )
+        document = records(
+            segments=[bob, alice_one, alice_two],
+            speakers=[a_speaker(), a_speaker("bob", "tx-b")],
+            presentation_join_gap_samples=200,
+            overlap_min_samples=250,
+        )
+
+        turns = build_transcript(document).segments
+        assert [item.text for item in turns] == ["a long turn", "one two"]
+        assert [item.overlap for item in turns] == [True, True]
+        assert "Bob [overlap]" in render_markdown(document)
+        assert "Alice [overlap]" in render_markdown(document)
+
+    def test_legacy_records_without_thresholds_do_not_gain_new_grouping(self) -> None:
+        shared = "req_tx-a_shared"
+        document = records(
+            segments=[
+                a_segment(0, RATE, RATE + 1000, text="one", request_ids=[shared]),
+                a_segment(1, RATE + 1001, RATE + 2000, text="two", request_ids=[shared]),
+            ]
+        )
+        assert [item.text for item in build_transcript(document).segments] == ["one", "two"]
+
+
 class TestMarkdown:
     def test_it_renders_the_specs_format(self) -> None:
         rendered = render_markdown(

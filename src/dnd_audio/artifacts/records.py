@@ -41,6 +41,8 @@ from dnd_audio.artifacts.transcript import AlignmentStatus, TranscriptSpeaker
 
 __all__ = [
     "TRANSCRIPT_RECORDS_SCHEMA_VERSION",
+    "CollapseRule",
+    "OwnershipPieceRecord",
     "RejectedAlternative",
     "SegmentDecision",
     "SegmentRecord",
@@ -71,6 +73,7 @@ SignedPermille = Annotated[int, Field(ge=-1000, le=1000)]
 #: and stays here for the audit trail. There is deliberately no third value: a segment is
 #: either in the transcript or it is accounted for by one that is.
 SegmentDecision = Literal["retained", "duplicate"]
+CollapseRule = Literal["contained_fragment"]
 
 
 def segment_id(index: int) -> str:
@@ -214,6 +217,57 @@ class RejectedAlternative(_Artifact):
     score_margin_permille: SignedPermille
 
 
+class OwnershipPieceRecord(_Artifact):
+    """Original and effective ownership for one request/candidate occurrence (ADR-0033)."""
+
+    candidate_id: str = Field(min_length=1)
+    request_id: str = Field(min_length=1)
+    activity_start_derivative_sample: int = Field(ge=0)
+    activity_end_derivative_sample: int = Field(gt=0)
+    effective_start_derivative_sample: int = Field(ge=0)
+    effective_end_derivative_sample: int = Field(gt=0)
+    submitted_start_derivative_sample: int = Field(ge=0)
+    submitted_end_derivative_sample: int = Field(gt=0)
+    activity_start_sample: int = Field(ge=0)
+    activity_end_sample: int = Field(gt=0)
+    effective_start_sample: int = Field(ge=0)
+    effective_end_sample: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if self.activity_end_derivative_sample <= self.activity_start_derivative_sample:
+            message = f"ownership piece for {self.candidate_id} has an empty activity interval"
+            raise ValueError(message)
+        if self.effective_end_derivative_sample <= self.effective_start_derivative_sample:
+            message = f"ownership piece for {self.candidate_id} has an empty effective interval"
+            raise ValueError(message)
+        if self.submitted_end_derivative_sample <= self.submitted_start_derivative_sample:
+            message = f"ownership piece for {self.candidate_id} has an empty submitted interval"
+            raise ValueError(message)
+        if not (
+            self.submitted_start_derivative_sample
+            <= self.effective_start_derivative_sample
+            <= self.activity_start_derivative_sample
+            < self.activity_end_derivative_sample
+            == self.effective_end_derivative_sample
+            <= self.submitted_end_derivative_sample
+        ):
+            message = (
+                f"ownership piece for {self.candidate_id} is not a bounded leading-only "
+                "extension inside its submitted request"
+            )
+            raise ValueError(message)
+        if not (
+            self.effective_start_sample
+            <= self.activity_start_sample
+            < self.activity_end_sample
+            == self.effective_end_sample
+        ):
+            message = f"ownership piece for {self.candidate_id} has inconsistent session intervals"
+            raise ValueError(message)
+        return self
+
+
 class SegmentRecord(_Artifact):
     """One attributed utterance, normalized, with what was decided about it."""
 
@@ -233,6 +287,9 @@ class SegmentRecord(_Artifact):
     words: list[WordRecord] = Field(default_factory=list)
     alignment_status: AlignmentStatus
     decision: SegmentDecision
+    #: Why this segment itself was collapsed when it used M9's second pass. Legacy similarity
+    #: duplicates omit it, preserving their representation (ADR-0033).
+    collapse_rule: CollapseRule | None = None
     #: Set exactly when ``decision`` is ``duplicate``.
     duplicate_of_segment_id: SegmentId | None = None
     #: Overlaps another *retained, non-duplicate* segment of a different speaker by at least
@@ -245,6 +302,9 @@ class SegmentRecord(_Artifact):
     #: The ASR requests that produced it — more than one when a truncated response was split
     #: and stitched.
     request_ids: list[str] = Field(min_length=1)
+    #: Optional for schema-1 compatibility; every M9 assembly populates it. Unlike the
+    #: aggregate ownership range, this cannot hide gaps or grace clipping (ADR-0033).
+    ownership_pieces: list[OwnershipPieceRecord] | None = None
     #: Extra submissions spent resolving truncation for this segment's requests. Zero is the
     #: ordinary case and the number is here so "bounded" is checkable (ADR-0020).
     truncation_submissions: int = Field(default=0, ge=0)
@@ -260,12 +320,53 @@ class SegmentRecord(_Artifact):
             raise ValueError(message)
 
         for word in self.words:
-            if not self.ownership_start_sample <= word.start_sample < self.ownership_end_sample:
+            owned_count = (
+                sum(
+                    piece.effective_start_sample <= word.start_sample < piece.effective_end_sample
+                    for piece in self.ownership_pieces
+                )
+                if self.ownership_pieces is not None
+                else int(
+                    self.ownership_start_sample <= word.start_sample < self.ownership_end_sample
+                )
+            )
+            if owned_count != 1:
+                if self.ownership_pieces is None:
+                    message = (
+                        f"segment {self.segment_id} owns the word {word.text!r} starting at "
+                        f"{word.start_sample}, outside its ownership interval "
+                        f"[{self.ownership_start_sample}, {self.ownership_end_sample}). A word "
+                        f"belongs to the interval containing its start (ADR-0020)."
+                    )
+                else:
+                    message = (
+                        f"segment {self.segment_id} owns the word {word.text!r} starting at "
+                        f"{word.start_sample} through {owned_count} effective ownership pieces; "
+                        f"exactly one is required (ADR-0020, ADR-0033)."
+                    )
+                raise ValueError(message)
+
+        if self.ownership_pieces is not None:
+            piece_candidates = {piece.candidate_id for piece in self.ownership_pieces}
+            if piece_candidates != set(self.source_candidate_ids):
                 message = (
-                    f"segment {self.segment_id} owns the word {word.text!r} starting at "
-                    f"{word.start_sample}, outside its ownership interval "
-                    f"[{self.ownership_start_sample}, {self.ownership_end_sample}). A word "
-                    f"belongs to the interval containing its start (ADR-0020)."
+                    f"segment {self.segment_id}'s ownership pieces name candidates "
+                    f"{sorted(piece_candidates)}, not its source candidates "
+                    f"{sorted(self.source_candidate_ids)}"
+                )
+                raise ValueError(message)
+            if any(piece.request_id not in self.request_ids for piece in self.ownership_pieces):
+                message = f"segment {self.segment_id} has ownership from an unnamed request"
+                raise ValueError(message)
+            if (
+                min(piece.activity_start_sample for piece in self.ownership_pieces)
+                != self.ownership_start_sample
+                or max(piece.activity_end_sample for piece in self.ownership_pieces)
+                != self.ownership_end_sample
+            ):
+                message = (
+                    f"segment {self.segment_id}'s aggregate activity ownership disagrees with "
+                    "its piece-specific lineage"
                 )
                 raise ValueError(message)
 
@@ -277,6 +378,20 @@ class SegmentRecord(_Artifact):
             "rejected_alternatives",
             sorted(self.rejected_alternatives, key=lambda item: item.segment_id),
         )
+        if self.ownership_pieces is not None:
+            object.__setattr__(
+                self,
+                "ownership_pieces",
+                sorted(
+                    self.ownership_pieces,
+                    key=lambda item: (
+                        item.effective_start_derivative_sample,
+                        item.effective_end_derivative_sample,
+                        item.request_id,
+                        item.candidate_id,
+                    ),
+                ),
+            )
         return self._check_decision()
 
     def _check_decision(self) -> Self:
@@ -298,16 +413,20 @@ class SegmentRecord(_Artifact):
                     f"`overlap` is about retained, non-duplicate speakers."
                 )
                 raise ValueError(message)
-            if self.rejected_alternatives:
+            if self.rejected_alternatives and self.collapse_rule != "contained_fragment":
                 message = (
                     f"segment {self.segment_id} was itself collapsed and also claims to have "
-                    f"rejected alternatives"
+                    f"rejected alternatives without being a contained-fragment cluster "
+                    f"survivor"
                 )
                 raise ValueError(message)
             return self
 
         if self.duplicate_of_segment_id is not None:
             message = f"segment {self.segment_id} is retained but names a segment it duplicates"
+            raise ValueError(message)
+        if self.collapse_rule is not None:
+            message = f"segment {self.segment_id} is retained but carries a collapse rule"
             raise ValueError(message)
         return self
 
@@ -330,6 +449,10 @@ class TranscriptRecords(_Artifact):
     activity_cache_key: Sha256Hex
     sample_rate: int = Field(gt=0)
     duration_samples: int = Field(ge=0)
+    #: Exact render thresholds, additive for M9. Legacy records omit them and therefore keep
+    #: their one-record-per-public-segment rendering (ADR-0034).
+    presentation_join_gap_samples: int | None = Field(default=None, ge=0)
+    overlap_min_samples: int | None = Field(default=None, ge=0)
     speakers: list[TranscriptSpeaker] = Field(default_factory=list)
     segments: list[SegmentRecord] = Field(default_factory=list)
     warnings: list[TranscriptNote] = Field(default_factory=list)
@@ -372,6 +495,7 @@ class TranscriptRecords(_Artifact):
         known_ids = set(ids)
         known_speakers = {speaker.speaker_id for speaker in self.speakers}
         retained = {segment.segment_id for segment in self.retained()}
+        by_id = {segment.segment_id: segment for segment in self.segments}
 
         for segment in self.segments:
             if segment.speaker_id not in known_speakers:
@@ -386,10 +510,41 @@ class TranscriptRecords(_Artifact):
                     f"session's {self.duration_samples} aligned samples"
                 )
                 raise ValueError(message)
-            self._check_references(segment, known_ids, retained)
+            self._check_references(segment, known_ids, retained, by_id)
+        self._check_effective_partition()
+
+    def _check_effective_partition(self) -> None:
+        """No M9 ownership piece on one track can claim a derivative sample twice."""
+        by_track: dict[str, list[tuple[int, int, str]]] = {}
+        for segment in self.segments:
+            if segment.ownership_pieces is None:
+                continue
+            by_track.setdefault(segment.track_id, []).extend(
+                (
+                    piece.effective_start_derivative_sample,
+                    piece.effective_end_derivative_sample,
+                    segment.segment_id,
+                )
+                for piece in segment.ownership_pieces
+            )
+        for track_id, pieces in by_track.items():
+            previous_end = -1
+            for start, end, owner in sorted(pieces):
+                if start < previous_end:
+                    message = (
+                        f"effective ownership overlaps on {track_id}: {owner} starts at "
+                        f"{start} before the preceding half-open end {previous_end}"
+                    )
+                    raise ValueError(message)
+                previous_end = end
 
     @staticmethod
-    def _check_references(segment: SegmentRecord, known_ids: set[str], retained: set[str]) -> None:
+    def _check_references(
+        segment: SegmentRecord,
+        known_ids: set[str],
+        retained: set[str],
+        by_id: dict[str, SegmentRecord],
+    ) -> None:
         if segment.duplicate_of_segment_id is not None:
             if segment.duplicate_of_segment_id not in known_ids:
                 message = (
@@ -397,13 +552,31 @@ class TranscriptRecords(_Artifact):
                     f"{segment.duplicate_of_segment_id}, which is not in this document"
                 )
                 raise ValueError(message)
-            if segment.duplicate_of_segment_id not in retained:
-                message = (
-                    f"segment {segment.segment_id} was collapsed into "
-                    f"{segment.duplicate_of_segment_id}, which was itself collapsed. A chain "
-                    f"of duplicates has no surviving text at the end of it."
-                )
-                raise ValueError(message)
+            target_id = segment.duplicate_of_segment_id
+            seen = {segment.segment_id}
+            while target_id not in retained:
+                if target_id not in known_ids:
+                    message = (
+                        f"duplicate chain from {segment.segment_id} reaches {target_id}, "
+                        "which is not in this document"
+                    )
+                    raise ValueError(message)
+                target = by_id[target_id]
+                # Only M9's explicit second pass may turn a completed legacy survivor into an
+                # intermediate node. Arbitrary similarity chains remain forbidden (ADR-0032,
+                # ADR-0033).
+                if target.collapse_rule != "contained_fragment":
+                    message = (
+                        f"segment {segment.segment_id} was collapsed into {target_id}, which "
+                        f"was itself collapsed without the contained-fragment cluster rule. "
+                        f"A legacy chain has no proved surviving text at the end of it."
+                    )
+                    raise ValueError(message)
+                if target_id in seen or target.duplicate_of_segment_id is None:
+                    message = f"duplicate references from {segment.segment_id} form a cycle"
+                    raise ValueError(message)
+                seen.add(target_id)
+                target_id = target.duplicate_of_segment_id
 
         for alternative in segment.rejected_alternatives:
             if alternative.segment_id not in known_ids:

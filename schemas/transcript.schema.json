@@ -32,6 +32,37 @@
         "source_candidate_id": {
           "title": "Source Candidate Id",
           "type": "string"
+        },
+        "source_candidate_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Candidate Ids"
+        },
+        "source_segment_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "pattern": "^seg_\\d{6,}$",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Segment Ids"
         }
       },
       "required": [

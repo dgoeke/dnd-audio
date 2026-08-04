@@ -466,6 +466,11 @@ class DuplicateConfig(_Strict):
     #: Or compelling source dominance: how much better the winner's source score must be
     #: when the correlation alone is not decisive (OQ-017).
     min_score_margin: float = Field(default=0.1, gt=0.0, le=1.0)
+    #: The stricter source-score margin for a proper contained fragment. Separate from the
+    #: ordinary similarity margin because this rule admits text that is deliberately not a
+    #: whole-utterance match; 300/1000 is the conservative four-file measurement (ADR-0033,
+    #: OQ-018).
+    contained_min_score_margin: float = Field(default=0.3, gt=0.0, le=1.0)
 
 
 class TranscriptConfig(_Strict):
@@ -481,6 +486,10 @@ class TranscriptConfig(_Strict):
     #: content: a word inside it and inside no ownership interval is dropped (ADR-0020,
     #: OQ-018).
     pad_ms: int = Field(default=500, ge=0, le=10_000)
+    #: Transcript-only extension of each ownership piece's leading edge, applied after ASR
+    #: and bounded by the submitted request plus preceding same-track ownership. It never
+    #: changes activity or request identity (ADR-0033, OQ-027).
+    leading_ownership_grace_ms: int = Field(default=20, ge=0, le=10_000)
     #: Adjacent candidates on one track closer together than this are merged into one request.
     #: The audio merges; ownership does not (ADR-0017). Wider than `activity.vad.merge_gap_ms`,
     #: which is about not fragmenting a sentence; this one is about not paying a model's
@@ -490,6 +499,10 @@ class TranscriptConfig(_Strict):
     #: marked `overlap`. The spec defines the flag in terms of "at least the configured
     #: overlap threshold" and leaves the number to us (OQ-018).
     overlap_min_ms: int = Field(default=250, ge=0, le=60_000)
+    #: Maximum public gap between compatible same-track records that already share request
+    #: lineage. Independent from request batching: one saves model calls, this provisionally
+    #: represents one presentation turn (ADR-0034, OQ-018).
+    presentation_join_gap_ms: int = Field(default=350, ge=0, le=60_000)
     #: A **global budget of additional submissions** spent resolving one truncated request,
     #: not a recursion depth — depth doubles, and a depth of 3 would be fifteen calls
     #: (ADR-0020, OQ-018).

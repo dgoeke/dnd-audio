@@ -77,6 +77,10 @@ class SegmentProvenance(_Artifact):
     #: The pre-ASR activity candidate this segment was transcribed from. The link
     #: between the model-independent graph (INV-09) and the text.
     source_candidate_id: str
+    #: Plural lineage for a public turn coalesced from granular records. Optional additive
+    #: fields preserve schema-1 compatibility (ADR-0034).
+    source_candidate_ids: list[str] | None = None
+    source_segment_ids: list[SegmentId] | None = None
 
 
 class TranscriptSpeaker(_Artifact):

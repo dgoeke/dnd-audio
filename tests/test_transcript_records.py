@@ -20,6 +20,7 @@ from pydantic import ValidationError
 
 from dnd_audio.artifacts.records import (
     TRANSCRIPT_RECORDS_SCHEMA_VERSION,
+    OwnershipPieceRecord,
     RejectedAlternative,
     SegmentRecord,
     TranscriberIdentity,
@@ -86,6 +87,29 @@ def a_segment(
         "request_ids": ["req_tx-a_000000048000"],
     }
     return SegmentRecord(**{**fields, **overrides})
+
+
+def an_ownership_piece(
+    candidate: str = "cand_tx-a_000000048000",
+    request: str = "req_tx-a_000000048000",
+    activity_start: int = 16_000,
+    activity_end: int = 32_000,
+    effective_start: int = 15_680,
+) -> OwnershipPieceRecord:
+    return OwnershipPieceRecord(
+        candidate_id=candidate,
+        request_id=request,
+        activity_start_derivative_sample=activity_start,
+        activity_end_derivative_sample=activity_end,
+        effective_start_derivative_sample=effective_start,
+        effective_end_derivative_sample=activity_end,
+        submitted_start_derivative_sample=max(0, activity_start - 8_000),
+        submitted_end_derivative_sample=activity_end + 8_000,
+        activity_start_sample=activity_start * 3,
+        activity_end_sample=activity_end * 3,
+        effective_start_sample=effective_start * 3,
+        effective_end_sample=activity_end * 3,
+    )
 
 
 def records(**overrides: Any) -> TranscriptRecords:
@@ -196,6 +220,64 @@ class TestADecisionMustBeConsistentWithItsEvidence:
                 ]
             )
 
+    def test_a_contained_fragment_may_terminate_a_completed_legacy_cluster(self) -> None:
+        """The old B→C decision remains auditable when containment later makes C→A."""
+        alternative = RejectedAlternative(
+            segment_id=segment_id(2),
+            track_id="tx-a",
+            speaker_id="alice",
+            text="the fourth microphone",
+            overlap_permille=1000,
+            text_similarity_permille=1000,
+            correlation_permille=600,
+            score_margin_permille=100,
+        )
+        document = records(
+            segments=[
+                a_segment(0),
+                a_segment(
+                    1,
+                    240_000,
+                    288_000,
+                    decision="duplicate",
+                    collapse_rule="contained_fragment",
+                    duplicate_of_segment_id=segment_id(0),
+                    rejected_alternatives=[alternative],
+                ),
+                a_segment(
+                    2,
+                    360_000,
+                    408_000,
+                    decision="duplicate",
+                    duplicate_of_segment_id=segment_id(1),
+                ),
+            ]
+        )
+        assert [item.segment_id for item in document.retained()] == [segment_id(0)]
+
+    def test_a_contained_fragment_chain_must_not_end_at_an_unknown_segment(self) -> None:
+        with pytest.raises(ValidationError, match=r"duplicate chain.*not in this document"):
+            records(
+                segments=[
+                    a_segment(0, 50, 60),
+                    a_segment(
+                        1,
+                        30,
+                        40,
+                        decision="duplicate",
+                        collapse_rule="contained_fragment",
+                        duplicate_of_segment_id=segment_id(9),
+                    ),
+                    a_segment(
+                        2,
+                        10,
+                        20,
+                        decision="duplicate",
+                        duplicate_of_segment_id=segment_id(1),
+                    ),
+                ]
+            )
+
     def test_a_collapsed_segment_may_not_also_have_rejected_alternatives(self) -> None:
         alternative = RejectedAlternative(
             segment_id=segment_id(0),
@@ -237,6 +319,101 @@ class TestWordsBelongToTheIntervalThatOwnsThem:
     def test_an_empty_word_is_refused(self) -> None:
         with pytest.raises(ValidationError, match="spans an empty interval"):
             WordRecord(start_sample=50_000, end_sample=50_000, text="We")
+
+
+class TestEffectiveOwnershipLineage:
+    def test_a_recovered_word_before_activity_is_auditable(self) -> None:
+        word = WordRecord(start_sample=47_500, end_sample=49_000, text="Testing")
+        segment = a_segment(
+            0,
+            47_500,
+            96_000,
+            ownership_start_sample=48_000,
+            ownership_end_sample=96_000,
+            words=[word],
+            alignment_status="aligned",
+            ownership_pieces=[an_ownership_piece()],
+        )
+        assert segment.words[0].start_sample < segment.ownership_start_sample
+        assert segment.ownership_pieces is not None
+        assert segment.ownership_pieces[0].effective_start_sample == 47_040
+
+    def test_a_word_must_resolve_to_exactly_one_piece(self) -> None:
+        first = an_ownership_piece(activity_start=16_000, activity_end=24_000)
+        second = an_ownership_piece(
+            candidate="cand_tx-a_000000060000",
+            activity_start=20_000,
+            activity_end=32_000,
+            effective_start=19_000,
+        )
+        with pytest.raises(ValidationError, match="through 2 effective ownership pieces"):
+            a_segment(
+                0,
+                48_000,
+                96_000,
+                ownership_start_sample=48_000,
+                ownership_end_sample=96_000,
+                source_candidate_ids=[first.candidate_id, second.candidate_id],
+                words=[WordRecord(start_sample=61_000, end_sample=62_000, text="twice")],
+                alignment_status="aligned",
+                ownership_pieces=[first, second],
+            )
+
+    def test_piece_specific_lineage_exposes_a_wordless_merged_gap(self) -> None:
+        first = an_ownership_piece(activity_start=16_000, activity_end=20_000)
+        second = an_ownership_piece(
+            candidate="cand-tx-a-second",
+            activity_start=24_000,
+            activity_end=32_000,
+            effective_start=23_680,
+        )
+        segment = a_segment(
+            0,
+            48_000,
+            96_000,
+            source_candidate_ids=[first.candidate_id, second.candidate_id],
+            ownership_pieces=[first, second],
+        )
+        assert segment.ownership_pieces is not None
+        assert segment.ownership_pieces[0].activity_end_sample == 60_000
+        assert segment.ownership_pieces[1].activity_start_sample == 72_000
+
+    def test_grace_outside_submitted_audio_is_refused(self) -> None:
+        piece = an_ownership_piece().model_copy(
+            update={"submitted_start_derivative_sample": 15_900}
+        )
+        with pytest.raises(ValidationError, match="bounded leading-only extension"):
+            OwnershipPieceRecord.model_validate(piece.model_dump(mode="json"))
+
+    def test_effective_pieces_on_one_track_may_not_overlap_across_records(self) -> None:
+        first = an_ownership_piece(activity_start=16_000, activity_end=24_000)
+        second = an_ownership_piece(
+            candidate="cand_tx-a_000000069000",
+            request="req_tx-a_000000069000",
+            activity_start=23_000,
+            activity_end=32_000,
+            effective_start=22_680,
+        )
+        one = a_segment(
+            0,
+            48_000,
+            72_000,
+            ownership_start_sample=48_000,
+            ownership_end_sample=72_000,
+            ownership_pieces=[first],
+        )
+        two = a_segment(
+            1,
+            69_000,
+            96_000,
+            ownership_start_sample=69_000,
+            ownership_end_sample=96_000,
+            source_candidate_ids=[second.candidate_id],
+            request_ids=[second.request_id],
+            ownership_pieces=[second],
+        )
+        with pytest.raises(ValidationError, match="effective ownership overlaps"):
+            records(segments=[one, two])
 
 
 class TestTheDocumentDeclaresWhatItDescribes:
