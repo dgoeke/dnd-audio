@@ -437,12 +437,26 @@ rates: `23.98F` = 24000/1001 non-drop, `24F` = 24/1, `25F` = 25/1,
 syntax, such as a drop-frame separator at a non-drop rate. Do not represent
 fractional rates as binary floating-point during timestamp arithmetic.
 
-A BWF `time_reference` is a sample count since midnight at the file's sample rate;
-keep it as an integer and do not round it through a frame count. Define 24-hour wrap
-handling. `rollover_policy: infer_forward` may infer a single forward midnight
-rollover only when chunk sequence and session-span constraints make it unambiguous,
-and must record that decision. `timecode.origin_date` is the ISO calendar date of
-timecode day zero and must not be inferred from a date-looking `session_id`.
+A BWF `time_reference` is a sample count at the file's sample rate, counted from the
+**recorder's own timecode origin**. EBU Tech 3285 defines it as samples since
+midnight and this hardware does not honour that: the origin is device-local, is
+shared between receivers only by a jam, and is frame-quantized rather than
+sample-exact (OQ-004, OQ-023, ADR-0031). Placement is a subtraction, so a shared
+origin is sufficient and its position in the day is not needed. Keep the value as an
+integer and do not round it through a frame count; size the chunk-overlap tolerance
+by the recorder's quantum rather than by one sample.
+
+A date or time read *from a file* is descriptive only. It must never anchor a
+cross-receiver offset or assign a 24-hour cycle: two receivers' real-time clocks were
+measured 48.7 s apart while their timecode agreed to under one frame. Only an
+operator assertion — `timecode.origin_date`, or a source-time override's
+`recording_date` — may place a session on a calendar.
+
+Define 24-hour wrap handling. `rollover_policy: infer_forward` may infer a single
+forward rollover only when chunk sequence and session-span constraints make it
+unambiguous, and must record that decision. `timecode.origin_date` is the ISO
+calendar date of timecode day zero and must not be inferred from a date-looking
+`session_id`.
 `timecode.origin_timecode`, when non-null, is the absolute timecode corresponding to
 session time zero on `origin_date`; when null, session zero remains the earliest
 normalized valid source time. If forward rollover remains ambiguous, require a

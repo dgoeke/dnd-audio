@@ -8,8 +8,9 @@ Three shapes here are deliberate and each has a tempting wrong version:
 **Timing evidence is a discriminated union** (ADR-0006). A BWF sample reference, a
 timecode, and an operator's session-relative offset do not share a coordinate system —
 different units, different rates, different origins, and only one of them signed. One
-"start_samples" integer would be wrong for at least one of them in every session that
-does not begin at midnight, and would erase the distinction M2 needs to reconcile them.
+"start_samples" integer would be wrong for at least one of them in any session whose
+sources do not all start at their own origin, and would erase the distinction M2 needs to
+reconcile them.
 
 **Sources that nothing will read are still recorded** — ignored `edit` files,
 duplicates, and files found where no track is configured. The gate requires per-file
@@ -87,7 +88,11 @@ class RationalRate(_Artifact):
 
 
 class BwfSampleReferenceRecord(_Artifact):
-    """Samples since midnight, at the **file's own** sample rate.
+    """Samples from the recorder's own origin, at the **file's own** sample rate.
+
+    Not midnight, whatever EBU Tech 3285 says the field means: OQ-004 measured this
+    hardware writing a device-local count, and ADR-0031 records what follows. What matters
+    to placement is that receivers *share* the origin, which a jam supplies (OQ-023).
 
     The rate is recorded because it need not be the session's: a 44.1 kHz source counts
     44100ths of a second, and reading it as 48000ths misplaces the file by 8.75%.

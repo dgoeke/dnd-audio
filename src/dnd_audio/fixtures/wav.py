@@ -76,8 +76,10 @@ _FORMATS: Final[dict[SampleFormatName, tuple[int, int]]] = {
 class BroadcastMetadata:
     """The ``bext`` fields that matter to the timecode strategy chain.
 
-    ``time_reference`` is a sample count since midnight **at the file's own sample
-    rate**, per EBU Tech 3285. It is an integer here and stays one all the way through
+    ``time_reference`` is a sample count **at the file's own sample rate**. EBU Tech 3285
+    says it counts from midnight; DJI's hardware counts from the recorder's own origin
+    instead (OQ-004, ADR-0031), and this writer takes whatever it is given because the
+    fixtures need to express both. It is an integer here and stays one all the way through
     inspection: rounding it through a frame count is exactly what INV-04 forbids.
     """
 

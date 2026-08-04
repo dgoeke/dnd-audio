@@ -515,12 +515,16 @@ def _zero_domain(
     unwrapped: dict[str, Fraction],
     absolute: list[_Candidate],
 ) -> str:
-    """Which coordinate system session zero's day origin belongs to.
+    """Which coordinate system session zero's origin belongs to.
 
     Read from the evidence that actually produced zero rather than assumed. A derived zero
-    inherits the domain of the earliest source, because that source's day origin is the
-    one every position is measured against — and at a fractional non-drop rate the two
-    domains' origins are 86.4 seconds apart (OQ-015).
+    inherits the domain of the earliest source, because that source's origin is the one
+    every position is measured against — and the two absolute domains' 24-hour cycles are
+    not the same length at a fractional non-drop rate (OQ-015).
+
+    Neither domain's origin is real midnight. A BWF reference counts from the recorder's
+    own timecode origin (OQ-004, ADR-0031), and a timecode's ``00:00:00:00`` is 86.4 seconds
+    from a calendar day at 23.98F and 29.97F.
     """
     if configured is not None:
         return "timecode"
@@ -529,8 +533,8 @@ def _zero_domain(
     earliest = min(unwrapped, key=lambda path: unwrapped[path])
     for item in absolute:
         if item.source.relative_path == earliest:
-            return "timecode" if isinstance(item.evidence, TimecodeRecord) else "real_time"
-    return "real_time"
+            return "timecode" if isinstance(item.evidence, TimecodeRecord) else "recorder_epoch"
+    return "recorder_epoch"
 
 
 def _zero_record(
@@ -546,9 +550,9 @@ def _zero_record(
 
     ``shift`` is subtracted from the recorded origin. When a signed offset reached below
     the earliest absolute source the whole timeline moved later by that much, which means
-    session sample 0 is now *earlier* in the day than the source that used to define it —
-    and recording the unshifted origin would declare a time of day that sample 0 does not
-    have. Every mapping from a session sample back to wall clock would then be wrong by
+    session sample 0 is now *earlier* in its domain than the source that used to define it
+    — and recording the unshifted origin would declare a position that sample 0 does not
+    have. Every mapping from a session sample back into the domain would then be wrong by
     the shift, in a way nothing downstream could detect.
     """
     if zero_source == "configured_origin":
@@ -567,7 +571,7 @@ def _zero_record(
             domain="timecode",
             origin_date=config.timecode.origin_date,
             origin_timecode=config.timecode.origin_timecode,
-            since_day_origin_samples=to_samples(zero_seconds, CANONICAL_SAMPLE_RATE),
+            since_domain_origin_samples=to_samples(zero_seconds, CANONICAL_SAMPLE_RATE),
             detail=(
                 f"session zero is the configured origin {config.timecode.origin_timecode} "
                 f"at {frame_rate.label} on {_day_text(config.timecode.origin_date)}"
@@ -585,9 +589,9 @@ def _zero_record(
         )
     return SessionZero(
         source="earliest_source",
-        domain="timecode" if zero_domain == "timecode" else "real_time",
+        domain="timecode" if zero_domain == "timecode" else "recorder_epoch",
         origin_date=config.timecode.origin_date,
-        since_day_origin_samples=to_samples(zero_seconds, CANONICAL_SAMPLE_RATE) - shift,
+        since_domain_origin_samples=to_samples(zero_seconds, CANONICAL_SAMPLE_RATE) - shift,
         detail=("no origin was configured, so session zero is the earliest valid source start"),
     )
 

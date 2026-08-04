@@ -53,7 +53,7 @@ def bwf(
     sample_rate: int = CANONICAL_SAMPLE_RATE,
     date: dt.date | None = None,
 ) -> BwfSampleReferenceRecord:
-    """Samples since real midnight, at the file's own rate."""
+    """Samples from the recorder's own origin, at the file's own rate (ADR-0031)."""
     return BwfSampleReferenceRecord(samples=samples, sample_rate=sample_rate, origination_date=date)
 
 

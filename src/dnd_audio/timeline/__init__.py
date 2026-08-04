@@ -58,4 +58,4 @@ TIMELINE_DIRNAME: Final = "work/cache/audio"
 #: varied one module's version but not another's keeps serving the answer a fixed bug
 #: produced. Bump it for a behaviour change; the cost of being wrong is rebuilding
 #: derivatives that are regenerable by construction.
-TIMELINE_SEMANTICS_VERSION: Final = 1
+TIMELINE_SEMANTICS_VERSION: Final = 2

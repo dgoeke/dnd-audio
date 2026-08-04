@@ -48,9 +48,13 @@ __all__ = [
     "TimelineTrack",
 ]
 
-#: Frozen at M2's close. Only additive optional fields from here; anything else bumps the
-#: version (ADR-0005). M3 and M5 both index into this document.
-TIMELINE_SCHEMA_VERSION: Final = 1
+#: Only additive optional fields within a version; anything else bumps it (ADR-0005). M3
+#: and M5 both index into this document.
+#:
+#: **2 (M8, ADR-0031).** `SessionZero` stopped claiming a day origin that this hardware does
+#: not have: `real_time` became `recorder_epoch` and `since_day_origin_samples` became
+#: `since_domain_origin_samples`. Renaming a field and re-valuing an enum is not additive.
+TIMELINE_SCHEMA_VERSION: Final = 2
 
 Sha256Hex = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
@@ -59,11 +63,16 @@ Sha256Hex = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 #: earliest valid source start lands at zero (ADR-0009).
 ZeroSource = Literal["configured_origin", "earliest_source"]
 
-#: The coordinate system the day origin belongs to. ``real_time`` is midnight, from a BWF
-#: sample reference. ``timecode`` is the recorder's ``00:00:00:00``, which is *not* real
-#: midnight at a fractional non-drop rate (OQ-015). ``relative`` means no absolute evidence
-#: existed and the origin is the offsets' own.
-ZeroDomain = Literal["real_time", "timecode", "relative"]
+#: The coordinate system session zero's origin belongs to. ``recorder_epoch`` is where a
+#: BWF sample reference counts from — the recorder's own timecode origin, **not** midnight
+#: (OQ-004, ADR-0031). ``timecode`` is a recorder's ``00:00:00:00``, which is not real
+#: midnight at a fractional non-drop rate either (OQ-015). ``relative`` means no absolute
+#: evidence existed and the origin is the offsets' own.
+#:
+#: The first two are the same clock in different units on this hardware (OQ-023), which is
+#: why they are permitted to be mixed; they stay distinct because a timecode's 24-hour cycle
+#: is not a BWF reference's.
+ZeroDomain = Literal["recorder_epoch", "timecode", "relative"]
 
 
 class _Artifact(BaseModel):
@@ -100,9 +109,14 @@ class SessionZero(_Artifact):
     origin_date: dt.date | None = None
     #: The configured origin timecode, when there was one.
     origin_timecode: str | None = None
-    #: Session zero's own position, in samples since its domain's day origin at the
-    #: canonical rate. ``None`` when the domain is ``relative`` and there is no day.
-    since_day_origin_samples: int | None = Field(default=None, ge=0)
+    #: Session zero's own position, in samples since its domain's origin at the canonical
+    #: rate. ``None`` when the domain is ``relative`` and there is no such origin.
+    #:
+    #: Kept rather than nulled for a recorder epoch, even though where that epoch sits in
+    #: the day is unknown: M2's consistency check is that session zero plus a source's
+    #: placement equals that source's own position in its domain, and without this number a
+    #: wrong timeline is indistinguishable from a right one.
+    since_domain_origin_samples: int | None = Field(default=None, ge=0)
     detail: str = Field(min_length=1)
 
 
@@ -314,7 +328,7 @@ class TimelineProvenance(_Artifact):
 class Timeline(_Artifact):
     """The deterministic segment map `ingest` writes to ``work/timeline.json``."""
 
-    schema_version: Literal[1] = TIMELINE_SCHEMA_VERSION
+    schema_version: Literal[2] = TIMELINE_SCHEMA_VERSION
     session_id: str = Field(min_length=1)
     config_hash: Sha256Hex
     #: Hash of the `manifest.json` this was built from. Ties the two artifacts together,

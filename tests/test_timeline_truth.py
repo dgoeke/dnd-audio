@@ -67,7 +67,7 @@ class TestPlacementMatchesTheGeneratorsTruth:
     ) -> None:
         """19:00:00:00 on 2026-08-15, stated by the fixture before any audio was written."""
         assert origin.zero.source == "configured_origin"
-        assert origin.zero.since_day_origin_samples == truth.session_zero_since_midnight
+        assert origin.zero.since_domain_origin_samples == truth.session_zero_since_midnight
 
     def test_every_chunk_lands_on_its_declared_sample(
         self, truth: FixtureTruth, origin: SessionOrigin

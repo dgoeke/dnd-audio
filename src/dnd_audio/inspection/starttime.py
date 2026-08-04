@@ -12,12 +12,17 @@ three kinds do not share a coordinate system:
 ===========================  ========  =====================  ==============  ======
 Evidence                     Unit      Rate                   Origin          Signed
 ===========================  ========  =====================  ==============  ======
-:class:`BwfSampleReference`  samples   the file's own rate    midnight        no
-:class:`TimecodeReference`   frames    the configured rate    midnight        no
+:class:`BwfSampleReference`  samples   the file's own rate    recorder epoch  no
+:class:`TimecodeReference`   frames    the configured rate    recorder epoch  no
 :class:`SessionOffset`       samples   48 kHz                 session zero    yes
 ===========================  ========  =====================  ==============  ======
 
-Reconciling them, inferring midnight rollover, and rasterizing onto the working sample
+**Neither absolute origin is midnight** (OQ-004, ADR-0031). Both are where the recorder's
+own counter starts, which on this hardware is where it was last jammed or powered on. That
+does not reach placement — M2 places by subtraction, and a shared origin cancels — but it is
+why this module records what a tag *says* and asserts nothing about when that was.
+
+Reconciling them, inferring a counter wrap, and rasterizing onto the working sample
 grid are M2's. This module's whole job is to preserve what the evidence actually says.
 
 **Nothing here reads a filename or a modification time.** INV-12 forbids inventing a
@@ -61,10 +66,15 @@ _DATE_TAG: Final = "date"
 
 @dataclass(frozen=True, slots=True)
 class BwfSampleReference:
-    """A BWF ``time_reference``: samples since midnight at the file's own rate.
+    """A BWF ``time_reference``: samples from the recorder's own origin, at the file's rate.
 
-    Kept as an integer and never rounded through a frame count (INV-04). The rate is
-    carried alongside because it is the *file's*, which need not be the session's.
+    EBU Tech 3285 calls it samples since midnight, and **on this hardware it is not**
+    (OQ-004): a 19:26:55 file carries 388 seconds, and two files made 44 seconds apart carry
+    references in the wrong order. It is a device-local count, shared between receivers only
+    by a jam (OQ-023). Kept as an integer and never rounded through a frame count (INV-04) —
+    though the recorder itself quantizes it to a frame before writing, which is what
+    `timecode.bwf_reference_quantum_samples` exists for. The rate is carried alongside
+    because it is the *file's*, which need not be the session's.
     """
 
     samples: int
@@ -223,8 +233,9 @@ def _bwf_time_reference(context: SourceContext) -> _Attempt:
         ),
         assumptions=(
             "OQ-001: FFprobe's time_reference tag carries the BWF bext sample reference",
-            "OQ-004: it counts samples since midnight at the file's own sample rate, "
-            "and is used as an integer without being rounded through a frame count",
+            "OQ-004: it counts samples at the file's own sample rate from the recorder's "
+            "own origin, which is not midnight, and is used as an integer without being "
+            "rounded through a frame count",
         ),
     )
 

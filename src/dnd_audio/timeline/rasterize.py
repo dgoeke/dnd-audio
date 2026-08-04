@@ -11,6 +11,16 @@ subtracts them *before* quantizing. Rounding an absolute position and then subtr
 rounded origin rounds twice, doubles the worst-case error, and makes a chunk's placement
 depend on where ``origin_timecode`` happens to sit inside a sample.
 
+**Neither absolute domain's origin is midnight.** A ``bwf_sample_reference`` counts from the
+recorder's own timecode origin, which on this hardware is where that receiver was last
+jammed or powered on — OQ-004 measured a 19:26:55 file carrying 388 seconds, and OQ-023
+measured a jam propagating into the field to within one frame. A ``timecode`` counts from a
+recorder's ``00:00:00:00``, which is not real midnight at a fractional non-drop rate either
+(**OQ-015**). None of that reaches placement, because :func:`session_position` is a
+*subtraction* and a shared origin cancels out of it — but it is why nothing here says
+"midnight", and why :class:`~dnd_audio.artifacts.timeline.SessionZero` records
+``since_domain_origin_samples`` rather than a time of day (ADR-0031).
+
 **A 24-hour cycle is counted in the evidence's own units.** This is the finding that a
 plausible first draft got wrong. "Add a day" is not one operation:
 
@@ -29,9 +39,10 @@ the frame that preceded it, manufacturing a large false overlap out of correct e
 :func:`absolute_seconds` therefore takes whole cycles and adds them in frames or samples,
 never in seconds.
 
-The two absolute domains are compared against each other on the assumption that a
-recorder's ``00:00:00:00`` is real midnight. That holds trivially at an integer rate and
-is an assumption at a fractional non-drop one, which is **OQ-015**. A caller notices with
+The two absolute domains are compared against each other on the assumption that they share
+one origin. On this hardware they do — the reference *is* the receiver's jammed timecode
+count, in samples instead of frames (OQ-023) — so what is left is that their 24-hour cycles
+differ in length at a fractional non-drop rate, which is **OQ-015**. A caller notices with
 :func:`has_mixed_absolute_domains` and sizes it with
 :func:`timecode_day_discrepancy_seconds`.
 """
@@ -65,14 +76,13 @@ __all__ = [
     "timecode_day_discrepancy_seconds",
 ]
 
-#: A calendar day. Used for a BWF reference, whose samples-since-midnight really is
-#: measured against wall time — and pointedly *not* for a timecode, which has its own
-#: cycle (see the module docstring).
+#: One counter cycle for a BWF reference, in seconds — and pointedly *not* for a timecode,
+#: which counts its own cycle in frames (see the module docstring).
 #:
-#: Assumes OQ-004: that a BWF reference counts samples since **midnight at the file's own
-#: rate**. If H1 shows it counts from power-on, or at a fixed rate regardless of the file's,
-#: this constant and :func:`relative_seconds`' BWF branch are what change — and every
-#: placement in every session moves with them.
+#: The name survives the reframe because the arithmetic does: 86 400 seconds of samples is
+#: 86 400 seconds of samples whatever the origin is measured from, so **OQ-004** disproving
+#: "since midnight" changed what the number means and not what it is. Whether a DJI counter
+#: wraps at all, and with what period, is **OQ-026** — see :func:`cycle_units`.
 SECONDS_PER_DAY: Final = 86400
 
 
@@ -119,8 +129,16 @@ def evidence_quantum_samples(
 def cycle_units(evidence: StartEvidenceRecord, frame_rate: FrameRate) -> int | None:
     """How much one 24-hour wrap adds, **in this evidence's own units**.
 
-    Returns ``None`` for a session-relative offset, which has no midnight in it: it is
-    measured from session zero, and session zero does not wrap.
+    Returns ``None`` for a session-relative offset, which has no cycle in it: it is measured
+    from session zero, and session zero does not wrap.
+
+    **That a BWF reference wraps every 24 hours is now an assumption rather than a
+    definition** (**OQ-026**). It followed from "samples since midnight", which OQ-004
+    disproved; a device-local counter need not have a 24-hour period, or any period a
+    session would reach. The arithmetic stays because unwrapping is spec-required and
+    tested, because a recorder whose reference *is* midnight-relative needs it, and because
+    INV-12 keeps it safe meanwhile — the inference warns, refuses a tie rather than
+    guessing, and no real DJI session has reached it.
 
     Args:
         frame_rate: The configured rate. Used only for timecode evidence, whose record
@@ -237,8 +255,8 @@ def quantization_tolerance_samples(
 def timecode_day_discrepancy_seconds(frame_rate: FrameRate) -> Fraction:
     """How far a timecode day is from a calendar day, exactly.
 
-    Zero at every integer rate, where a timecode day *is* 86 400 seconds and a timecode's
-    day origin coincides with real midnight by construction. Non-zero at 23.98F and 29.97F
+    Zero at every integer rate, where a timecode cycle *is* 86 400 seconds and therefore
+    the same length as a BWF reference's. Non-zero at 23.98F and 29.97F
     (+86.4 s) and, much more mildly, at 29.97DF (-0.0864 s, drop-frame's residual).
 
     Returned as a signed exact value rather than a boolean so a caller can put the
@@ -251,11 +269,12 @@ def timecode_day_discrepancy_seconds(frame_rate: FrameRate) -> Fraction:
 def has_mixed_absolute_domains(evidence: Sequence[StartEvidenceRecord]) -> bool:
     """Whether both absolute domains appear among this session's evidence.
 
-    A BWF reference counts from real midnight; a timecode counts from the recorder's
-    ``00:00:00:00``. Relating the two requires assuming where the recorder was jammed
-    (**OQ-015**). Whether that assumption costs anything depends on the rate — see
-    :func:`timecode_day_discrepancy_seconds` — so the two questions are answered
-    separately and the caller combines them.
+    Both count from the recorder's own origin — the reference in samples, the tag in frames
+    — so on this hardware they are one clock in two units (OQ-023) and relating them is
+    sound. What differs is the length of their 24-hour cycles at a fractional non-drop rate
+    (**OQ-015**), which matters only once a session is unwrapped across one. Whether that
+    costs anything depends on the rate — see :func:`timecode_day_discrepancy_seconds` — so
+    the two questions are answered separately and the caller combines them.
 
     The canonical fixture mixes exactly these domains at 30F, where the discrepancy is
     zero and there is nothing to warn about.

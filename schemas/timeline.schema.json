@@ -115,7 +115,7 @@
         },
         "domain": {
           "enum": [
-            "real_time",
+            "recorder_epoch",
             "timecode",
             "relative"
           ],
@@ -147,7 +147,7 @@
           "default": null,
           "title": "Origin Timecode"
         },
-        "since_day_origin_samples": {
+        "since_domain_origin_samples": {
           "anyOf": [
             {
               "minimum": 0,
@@ -158,7 +158,7 @@
             }
           ],
           "default": null,
-          "title": "Since Day Origin Samples"
+          "title": "Since Domain Origin Samples"
         },
         "source": {
           "enum": [
@@ -464,8 +464,8 @@
       "type": "integer"
     },
     "schema_version": {
-      "const": 1,
-      "default": 1,
+      "const": 2,
+      "default": 2,
       "title": "Schema Version",
       "type": "integer"
     },

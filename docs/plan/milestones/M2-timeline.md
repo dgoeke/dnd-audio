@@ -301,6 +301,11 @@ downstream could have caught it: a uniformly one-second-late transcript looks li
 correct transcript. If you record an origin, assert the only consistent reading of it —
 zero plus a source's placement equals that source's own time of day.
 
+_M8 (2026-08-03): the field is now `SessionZero.since_domain_origin_samples` and "time of
+day" is "position in its domain", because OQ-004 showed a BWF reference does not count from
+midnight (ADR-0031). The lesson above is unchanged and the check it argues for is why the
+value is still recorded rather than nulled._
+
 Things that surprised me, where the code was right and I was wrong:
 
 - **`sample16 = sample48 // 3` is false.** A filtered impulse peaks at the *nearest* output

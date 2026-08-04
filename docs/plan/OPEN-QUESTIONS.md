@@ -87,8 +87,8 @@ rate, kept as an integer and never rounded through frames (INV-04).
 is a timecode tag plus configured frame rate.
 **Evidence:** `bext` chunk contents from a file whose wall-clock start is known.
 **Needs:** H1 · **Blocks:** M1, M2 · **Status:** **answered — and the answer is no, on
-both halves.** The implementation still encodes the old assumption; see the consequence
-below. (sample probe, 2026-08-02)
+both halves** (sample probe, 2026-08-02). **The implementation was corrected in M8**
+(2026-08-03, ADR-0031); see the consequences below.
 
 **Answer — it is neither midnight-relative nor sample-accurate.**
 
@@ -114,15 +114,24 @@ DJI copies the same value into iXML's `TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_LO` besi
 `TIMESTAMP_SAMPLE_RATE 48000`, so the misleading label appears twice and agreeing with
 itself is not evidence.
 
-**Consequence, not yet acted on.** `rg 'OQ-004'` finds the sites that encode the old
-reading — `timeline/rasterize.py`'s conversion and the assumption string M1 stamps into
-every manifest. Absolute wall-clock placement from a BWF reference alone is **not available**
-on this hardware. Within one receiver the value is usable for relative placement, to ±33 ms.
-**This is a scoped piece of work on M1 and M2, deliberately left undone at the time of
-writing** so it is not folded into an unrelated session. INV-12 already forbids inventing
-timing, which is what keeps this safe in the meantime: a wrong *epoch* shifts a whole session
-uniformly rather than scrambling it, and the clap-sync QA exists to catch the cross-receiver
-case.
+**Consequence, acted on in M8 (2026-08-03).** Absolute wall-clock placement from a BWF
+reference alone is **not available** on this hardware; within one receiver, and across
+receivers that were jammed (**OQ-023**), the value is usable for relative placement to
+±33 ms. **ADR-0031** records the reframe and what moved with it: the assumption string M1
+stamps into every manifest now says the origin is the recorder's and not midnight,
+`rasterize`'s docstrings and constants say the same, `ZeroDomain`'s `real_time` became
+`recorder_epoch`, `since_day_origin_samples` became `since_domain_origin_samples`, and
+`timeline.json` is therefore **schema version 2**. The arithmetic is unchanged throughout —
+it never depended on what the origin meant — which is exactly why prose was the only place
+the false claim could survive, and why the test for it reads the artifacts on disk rather
+than the source. The spec is amended in the same change.
+
+Two things that did *not* change, deliberately. The 24-hour unwrap stays, because it is
+spec-required and tested and a genuinely midnight-relative recorder needs it; what it lost
+was its justification, now registered as **OQ-026** and cited from `cycle_units`. And
+mixing a BWF reference with a timecode tag stays permitted — under this reading they are
+the same clock in two units, which is weaker grounds for refusing to relate them, not
+stronger.
 
 **The quantization half was acted on in M8 (2026-08-03), and it was not cosmetic.**
 `rasterize` treated a BWF reference as sample-*exact* because it is expressed in samples,

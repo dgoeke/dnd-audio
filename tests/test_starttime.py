@@ -2,9 +2,9 @@
 
 Two properties are load-bearing here and both are invariants. Evidence keeps its own
 units and origin (ADR-0006, INV-04) — a signed 48 kHz offset from session zero is not a
-sample count since midnight, and nothing in this module pretends otherwise. And a source
-with no reliable timing is fatal (INV-12), including when a filename and a modification
-time both look perfectly plausible.
+sample count from a recorder's own epoch, and nothing in this module pretends otherwise.
+And a source with no reliable timing is fatal (INV-12), including when a filename and a
+modification time both look perfectly plausible.
 """
 
 from __future__ import annotations
@@ -157,6 +157,13 @@ class TestAssumptionsAreTagged:
         bwf = extract_start_time(context(tags={"time_reference": "1"}))
         assert any("OQ-004" in note for note in bwf.assumptions)
         assert any("OQ-001" in note for note in bwf.assumptions)
+
+        # And it states what OQ-004 actually measured, not what EBU Tech 3285 says the
+        # field means. Every manifest carries this sentence; a stale one would tell the
+        # next reader the reference is wall clock (ADR-0031).
+        stamped = " ".join(bwf.assumptions)
+        assert "which is not midnight" in stamped
+        assert "since midnight" not in stamped
 
         tagged = extract_start_time(context(tags={"timecode": "19:00:00:00"}))
         assert any("OQ-001" in note for note in tagged.assumptions)

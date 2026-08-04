@@ -116,6 +116,53 @@ class TestSchema:
         with pytest.raises(jsonschema.ValidationError):
             jsonschema.validate({"schema_version": 1}, schema)
 
+    def test_it_declares_version_two(
+        self, canonical_fixture: FixtureTruth, schema: dict[str, Any]
+    ) -> None:
+        """ADR-0031 renamed a field and re-valued an enum, which is not additive.
+
+        A version-1 reader must be told rather than handed a document whose
+        `since_day_origin_samples` has silently vanished (ADR-0005).
+        """
+        result = run_ingest(canonical_fixture.session_dir)
+        document = json.loads(result.timeline_path.read_text(encoding="utf-8"))
+        assert document["schema_version"] == 2
+        assert schema["properties"]["schema_version"]["const"] == 2
+
+
+class TestNoArtifactClaimsAnOriginItDoesNotHave:
+    """The gate criterion for M8's defect 3, checked against the bytes on disk.
+
+    OQ-004 measured `bext.time_reference` as a device-local count: a 19:26:55 file carries
+    388 seconds, and the pair made 44 seconds later carries the *smaller* value. Until M8
+    the pipeline stamped "samples since midnight" into every manifest as provenance and
+    recorded session zero in a domain called `real_time`. Nothing downstream did arithmetic
+    with the claim, which is exactly why prose is the only place it could survive — so this
+    reads the artifacts rather than the source.
+    """
+
+    def test_neither_artifact_says_since_midnight(self, canonical_fixture: FixtureTruth) -> None:
+        result = run_ingest(canonical_fixture.session_dir)
+        manifest = (canonical_fixture.session_dir / "work/manifest.json").read_text(
+            encoding="utf-8"
+        )
+        timeline = result.timeline_path.read_text(encoding="utf-8")
+
+        assert "since midnight" not in manifest
+        assert "since midnight" not in timeline
+        # The assumption is stamped rather than merely absent: a manifest that recorded no
+        # assumption at all would pass the two lines above and tell an operator nothing.
+        assert "OQ-004" in manifest
+        assert "which is not midnight" in manifest
+
+    def test_session_zero_names_the_recorder_epoch(self, canonical_fixture: FixtureTruth) -> None:
+        """And keeps its value, because M2's consistency check is built on it."""
+        result = run_ingest(canonical_fixture.session_dir)
+        assert result.timeline is not None
+        zero = result.timeline.session_zero
+        assert zero.domain in {"recorder_epoch", "timecode"}
+        assert zero.since_domain_origin_samples is not None
+
 
 class TestTheMapTilesItsExtent:
     """A hole has two readings and a consumer cannot tell them apart."""
@@ -257,7 +304,7 @@ def _timeline(*, duration: int, tracks: list[TimelineTrack]) -> Timeline:
         ),
         sample_rate=48000,
         duration_samples=duration,
-        session_zero=SessionZero(source="earliest_source", domain="real_time", detail="test"),
+        session_zero=SessionZero(source="earliest_source", domain="recorder_epoch", detail="test"),
         frame_rate_label="30F",
         frame_rate=RationalRate(numerator=30, denominator=1),
         tracks=tracks,

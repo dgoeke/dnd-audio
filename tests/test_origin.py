@@ -52,7 +52,7 @@ class TestSessionZero:
             config(origin_date="2026-08-15", origin_timecode="19:00:00:00"),
         )
         assert found.zero.source == "configured_origin"
-        assert found.zero.since_day_origin_samples == 19 * HOUR
+        assert found.zero.since_domain_origin_samples == 19 * HOUR
         assert placed(found, "raw/tx-a/one.wav") == 0
 
     def test_without_an_origin_zero_is_the_earliest_source(self) -> None:
@@ -118,7 +118,7 @@ class TestSessionZero:
         from_bwf = determine_origin(
             manifest({"tx-a": [source("raw/tx-a/one.wav", bwf(19 * HOUR))]}), config()
         )
-        assert from_bwf.zero.domain == "real_time"
+        assert from_bwf.zero.domain == "recorder_epoch"
 
 
 class TestSignedRecoveryOffsets:
@@ -178,7 +178,7 @@ class TestSignedRecoveryOffsets:
         assert placed(found, "raw/tx-b/one.wav") == 0
         assert placed(found, "raw/tx-a/one.wav") == RATE
 
-        recorded = found.zero.since_day_origin_samples
+        recorded = found.zero.since_domain_origin_samples
         assert recorded is not None
         # Session zero, plus where the absolute source sits on the timeline, is that
         # source's own time of day. Nothing else is a consistent reading.

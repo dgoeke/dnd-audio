@@ -102,7 +102,7 @@ def _source(path: str, sha: str, *, role: str = "selected") -> ManifestSource:
         start_time=StartTimeRecord(
             strategy="bwf_time_reference",
             evidence=BwfSampleReferenceRecord(samples=3283200000, sample_rate=48000),
-            assumptions=["OQ-004: samples since midnight at the file's own rate"],
+            assumptions=["OQ-004: samples from the recorder's own origin at the file's rate"],
             declined=[DeclinedStrategyRecord(strategy="timecode_tag", reason="no timecode tag")],
         ),
     )

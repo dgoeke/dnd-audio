@@ -2,7 +2,7 @@
   "$defs": {
     "BwfSampleReferenceRecord": {
       "additionalProperties": false,
-      "description": "Samples since midnight, at the **file's own** sample rate.\n\nThe rate is recorded because it need not be the session's: a 44.1 kHz source counts\n44100ths of a second, and reading it as 48000ths misplaces the file by 8.75%.",
+      "description": "Samples from the recorder's own origin, at the **file's own** sample rate.\n\nNot midnight, whatever EBU Tech 3285 says the field means: OQ-004 measured this\nhardware writing a device-local count, and ADR-0031 records what follows. What matters\nto placement is that receivers *share* the origin, which a jam supplies (OQ-023).\n\nThe rate is recorded because it need not be the session's: a 44.1 kHz source counts\n44100ths of a second, and reading it as 48000ths misplaces the file by 8.75%.",
       "properties": {
         "kind": {
           "const": "bwf_sample_reference",
