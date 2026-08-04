@@ -1093,3 +1093,58 @@ vendor documentation stating the counter's width. Either settles it; neither is 
 that OQ-004's answer had quietly orphaned an assumption nobody had written down. The reviewer
 argued for removing the wrap; the narrower remedy — register it and cite it — is recorded there
 with the reason.
+
+---
+
+## OQ-027 — Does the aligner absorb a window's lead-in into its first word?
+
+**Assumption:** Yes, and only the first word — every interior word's start is trustworthy to
+well inside a syllable.
+**Why it matters:** `transcript/segments.py::_owned_words` assigns a word to the ownership
+interval containing its **start** (ADR-0020). A first word whose start is dragged to the
+window start falls outside every interval and is silently dropped, which is precisely what
+M8's diagnostic 9 now counts. So this is a live cause of the symptom that motivated diagnostic
+9 — five of eleven segments losing their opening word on the 2026-08-02 capture — and it is
+*not* the one that was assumed. The assumed cause was `activity.vad.pad_ms` being too small
+(**OQ-017**); this is the aligner placing the word wrongly regardless of the padding, and
+raising `pad_ms` would not fix it.
+
+**Measured 2026-08-03**, during M8's verify phase, over all four recordings in `samples/`
+(`tests/test_qwen_smoke.py::TestOq018TimestampStability`):
+
+| recording | paired | worst delta | **interior worst** |
+| --- | --- | --- | --- |
+| TX01_MIC002 | 16/16 | 6160 ms | 80 ms |
+| TX01_MIC005 | 15/16 | 80 ms | 80 ms |
+| TX02_MIC002 | 15/16 | 80 ms | 80 ms |
+| TX02_MIC003 | 16/16 | 0 ms | 0 ms |
+
+Two requests over the same audio, one opening 4 s earlier than the other. On TX01_MIC002 the
+word "Hello" came back at `1600000..1704960` from the window that opened earlier and at
+`1698560..1704960` from the one that did not — **the same end to the sample, and a start
+pinned exactly to the window start**. Every other paired word on every recording agreed to
+80 ms or better.
+
+**It is lead-in, not silence.** That window's first second is *louder* than the region where
+the word actually is (rms 0.0077 against 0.0020, with a 0.13 peak at 2 s) — handling noise,
+not a quiet room. A real table has more of that than one operator holding a microphone does,
+not less.
+
+**What it does not break.** M4's stitch rule pairs on text equality plus interval *overlap*,
+and a stretched word still overlaps the short one — 16/16 paired on the affected recording. So
+duplicates are still recognized; it is ownership, not collapse, that this reaches.
+
+**Evidence:** A real session, where the same measurement runs over utterances that begin after
+genuine speech rather than after a capture's lead-in. If the effect is confined to a request's
+*first* word it is cheap to correct at the seam — clamp a leading word's start to its own end
+minus a plausible word length, or re-request without the lead-in — but which of those is right
+depends on whether it also happens mid-request after a long pause, which these four recordings
+cannot show: each holds one continuous utterance.
+**Needs:** H1/H2 · **Blocks:** moving `activity.vad.pad_ms` on the strength of diagnostic 9's
+count, since some of that count is this rather than padding · **Status:** open
+
+**Raised by M8's verify phase.** The `host_smoke` suite failed from `.venv-rocm` after
+`samples/` was replaced during M8's start phase — a 6160 ms outlier against a 1000 ms bound.
+The bound was not widened: it now applies to interior words, which is the population the claim
+was always about, and the first-word behaviour is asserted in its own right by
+`test_a_words_start_depends_on_how_much_lead_in_its_window_had`.

@@ -154,13 +154,18 @@ def cycle_units(evidence: StartEvidenceRecord, frame_rate: FrameRate) -> int | N
 def absolute_seconds(
     evidence: StartEvidenceRecord, frame_rate: FrameRate, *, cycles: int = 0
 ) -> Fraction:
-    """Exact seconds from this evidence's day origin, after ``cycles`` 24-hour wraps.
+    """Exact seconds from this evidence's own origin, after ``cycles`` cycle wraps.
+
+    "Origin" rather than "day origin": a timecode tag's is that recorder's ``00:00:00:00``
+    and a BWF reference's is that recorder's own counter zero, which OQ-004 showed is not
+    midnight. What both share is that a *cycle* of them is 86 400 seconds long — exactly the
+    assumption OQ-026 registers.
 
     The cycles are added in the evidence's own units *before* the conversion to seconds,
     which is the whole point — see the module docstring's table.
 
     Raises:
-        ValueError: if handed a session-relative offset, which has no day origin, or a
+        ValueError: if handed a session-relative offset, which has no origin of its own, or a
             negative cycle count. Both mean a caller has confused the two coordinate
             systems ADR-0006 exists to keep apart, and inventing an answer would place
             audio somewhere plausible and wrong.

@@ -850,9 +850,24 @@ class SessionConfig(_Strict):
     def _check_offset_threshold_is_measurable(self) -> SessionConfig:
         """Refuse a constant-offset threshold finer than one tick of a timecode counter.
 
-        Here rather than on `SyncQaConfig` for the same reason as the check above: the floor
-        depends on another section — `timecode.frame_rate` — and a validator that cannot see
+        Here rather than on `SyncQaConfig` because the floor depends on another section —
+        `timecode`, both its frame rate and its BWF quantum — and a validator that cannot see
         it would have to assume one.
+
+        **The floor is the coarser of the two kinds of evidence, not one frame at the
+        configured rate**, which is the same rule `syncqa.offset_floor_samples` applies at
+        run time and for the same reason: OQ-024 measured a receiver set to 60 fps writing
+        references on 1600-sample boundaries anyway. Deriving this floor from `frame_rate`
+        alone accepted `offset_warn_ms=20` at `60F` — and since an explicitly stated
+        threshold replaces the evidence-derived one outright, a healthy session whose
+        references still move in 33.3 ms steps then raised `timecode_disagreement` on a
+        25 ms offset. That is defect 5a reinstated at exactly the rate the charter amended
+        its own criterion to cover.
+
+        A session carrying only timecode tags really can resolve one frame, and this refuses
+        that operator a threshold they could have had. That asymmetry is deliberate: the cost
+        is one error message naming the number to use, against a false alarm on every healthy
+        session, which is the failure this defect exists to remove.
 
         Refused rather than silently raised. An operator who states 5 ms has a belief about
         what this instrument can resolve, and quietly widening it to 33 leaves that belief
@@ -862,14 +877,29 @@ class SessionConfig(_Strict):
         if stated is None:
             return self
         frame_rate = parse_frame_rate(self.timecode.frame_rate)
-        floor_ms = math.ceil(Fraction(1000) / frame_rate.rate)
+        frame_floor_ms = math.ceil(Fraction(1000) / frame_rate.rate)
+        # The quantum is stated in samples at the file's own rate, which this validator
+        # cannot know; 48 kHz is the rate it was measured at and the only rate the working
+        # path accepts, so it is the honest conversion here.
+        bwf_floor_ms = math.ceil(
+            Fraction(self.timecode.bwf_reference_quantum_samples * 1000, 48_000)
+        )
+        floor_ms = max(frame_floor_ms, bwf_floor_ms)
         if stated < floor_ms:
+            coarsest = (
+                f"one frame at {frame_rate.label}"
+                if frame_floor_ms >= bwf_floor_ms
+                else (
+                    f"this hardware's BWF reference quantum of "
+                    f"{self.timecode.bwf_reference_quantum_samples} samples"
+                )
+            )
             message = (
-                f"sync_qa.offset_warn_ms={stated} ms is finer than one frame at "
-                f"{frame_rate.label} ({floor_ms} ms), which is the coarsest a receiver's "
-                f"timecode counter ticks — so a threshold below it fires on sessions that "
-                f"are working correctly (OQ-004, OQ-024). Raise it to at least {floor_ms}, "
-                f"or remove it to let the session's own evidence decide."
+                f"sync_qa.offset_warn_ms={stated} ms is finer than {coarsest} ({floor_ms} "
+                f"ms), which is the coarsest this session's timing evidence can express — "
+                f"so a threshold below it fires on sessions that are working correctly "
+                f"(OQ-004, OQ-024). Raise it to at least {floor_ms}, or remove it to let "
+                f"the session's own evidence decide."
             )
             raise ValueError(message)
         return self

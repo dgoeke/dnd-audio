@@ -606,3 +606,29 @@ class TestWarnings:
             config(frame_rate="29.97F", origin_date="2026-08-15", origin_timecode="19:00:00:00"),
         )
         assert [n for n in at_29_97.warnings if n.code == "mixed_time_domains"]
+
+    def test_the_mixed_domain_warning_does_not_claim_either_origin_is_midnight(self) -> None:
+        """The one place defect 3's false semantic survived, and why asserting a code is not
+        enough.
+
+        `TimelineNote` is serialized into `timeline.json`, so this message *is* an artifact.
+        It read "BWF sample references, which count from real midnight" — the exact claim
+        OQ-004 disproved and ADR-0031 removed from every docstring, assumption string and
+        schema — while the test above passed, because it only ever checked that the code
+        fired. Both independent reviewers found it; nothing in the suite could have.
+        """
+        found = determine_origin(
+            manifest(
+                {
+                    "tx-a": [source("raw/tx-a/one.wav", bwf(19 * HOUR))],
+                    "tx-b": [source("raw/tx-b/one.wav", timecode("19:00:00:00", "29.97F"))],
+                }
+            ),
+            config(frame_rate="29.97F", origin_date="2026-08-15", origin_timecode="19:00:00:00"),
+        )
+        (note,) = [n for n in found.warnings if n.code == "mixed_time_domains"]
+
+        assert "midnight" not in note.message.lower(), note.message
+        # And it still says the thing it exists to say: the two cycles differ in length.
+        assert "own origin" in note.message
+        assert "86 400 seconds" in note.message

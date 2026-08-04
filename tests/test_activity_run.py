@@ -24,6 +24,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Final
 
+import numpy as np
 import pytest
 import yaml
 
@@ -302,6 +303,56 @@ class TestTheBleedDominatedSession:
         spread_db = (max(references) - min(references)) / 100
         assert spread_db < 3.0, f"{spread_db:.2f} dB apart"
         assert spread_db < BLEED_REJECTION_DB
+
+    def test_the_old_rule_is_reproducibly_wrong_on_this_fixture_from_the_artifact_alone(
+        self, a_session: Callable[[FixtureSession], FixtureTruth]
+    ) -> None:
+        """Diagnostic 8's criterion, and the fixture's own can-fail proof, in one test.
+
+        Two things were asserted only in prose before this. That `bleed_dominated_session`
+        actually reproduces ADR-0029's defect — a fixture that did not would make every
+        assertion above pass against a broken implementation as happily as a fixed one. And
+        that the defect is derivable "from the artifact alone with no audio measurement",
+        which is what the charter asks diagnostic 8 to deliver and which nothing checked.
+
+        So the old rule is recomputed here from `band_level_mbfs` in the graph — the upper
+        quartile of *every* candidate on a track, `nearest` interpolation, which is what
+        `speech_references` did — and compared against the reference the pipeline recorded.
+        No audio is read. Measured this way the old rule puts three of four references on
+        the bleed at about -56 dBFS while one crosses to its own speech, a 16.7 dB spread;
+        the two-pass rule puts all four on speech within 1.2 dB.
+        """
+        truth = a_session(bleed_dominated_session())
+        graph = graph_of(run_activity(truth.session_dir, detector=leaky(truth)))
+
+        levels: dict[str, list[int]] = {}
+        for candidate in graph.candidates:
+            levels.setdefault(candidate.track_id, []).append(candidate.band_level_mbfs)
+
+        old = {
+            track_id: int(np.percentile(sorted(found), 75, method="nearest"))
+            for track_id, found in levels.items()
+        }
+        new = {
+            track.track_id: track.speech_reference_mbfs
+            for track in graph.tracks
+            if track.speech_reference_mbfs is not None
+        }
+        assert set(old) == set(new)
+        assert len(new) == 4
+
+        old_spread = (max(old.values()) - min(old.values())) / 100
+        new_spread = (max(new.values()) - min(new.values())) / 100
+        assert old_spread > 10.0, (
+            f"the old all-candidates rule is only {old_spread:.2f} dB apart across four "
+            f"identically-set transmitters, so this fixture no longer reproduces the defect "
+            f"ADR-0029 exists for and the assertions beside it prove nothing"
+        )
+        assert new_spread < 3.0, f"{new_spread:.2f} dB"
+
+        # And concretely: the old rule leaves most references down at the bleed.
+        on_bleed = [track_id for track_id, level in old.items() if level < -5000]
+        assert len(on_bleed) >= 3, old
 
     def test_the_mix_does_not_clamp_a_correction_on_it(
         self, a_session: Callable[[FixtureSession], FixtureTruth]

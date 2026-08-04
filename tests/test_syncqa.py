@@ -306,6 +306,143 @@ class TestTheConstantOffsetThreshold:
         with pytest.raises(Exception, match="finer than one frame"):
             config_for(("tx-a",), frame_rate="30F", sync_qa={"enabled": True, "offset_warn_ms": 5})
 
+    def test_a_stated_threshold_is_refused_against_the_quantum_not_the_frame_rate(self) -> None:
+        """The gap between the two halves above, which each passed on its own.
+
+        `offset_floor_samples` takes the coarser of the two kinds of evidence, but a stated
+        `offset_warn_ms` **replaces** it outright rather than being floored by it — so the
+        only thing standing between an operator and a sub-quantum threshold is this
+        validator. Deriving its floor from `frame_rate` alone accepted 20 ms at `60F`
+        against evidence that still moves in 33.375 ms steps, which is defect 5a reinstated
+        at exactly the rate the charter amended its criterion to cover. Both independent
+        reviewers found it; `test_an_unmeasurable_threshold_is_refused_rather_than_widened`
+        could not, because at 30F the frame floor and the BWF floor are the same number.
+        """
+        with pytest.raises(Exception, match="BWF reference quantum of 1600 samples"):
+            config_for(("tx-a",), frame_rate="60F", sync_qa={"enabled": True, "offset_warn_ms": 20})
+
+        # 34 ms clears the quantum and is accepted — the refusal is a floor, not a ban.
+        accepted = config_for(
+            ("tx-a",), frame_rate="60F", sync_qa={"enabled": True, "offset_warn_ms": 34}
+        )
+        assert accepted.sync_qa.offset_warn_ms == 34
+
+        # A recorder that really is sample-exact restores the frame-rate floor exactly.
+        exact = config_for(
+            ("tx-a",),
+            frame_rate="60F",
+            bwf_reference_quantum_samples=1,
+            sync_qa={"enabled": True, "offset_warn_ms": 17},
+        )
+        assert exact.sync_qa.offset_warn_ms == 17
+
+    def test_a_healthy_60f_session_inside_the_quantum_raises_nothing(self, tmp_path: Path) -> None:
+        """The defect the validator above now prevents, measured end to end.
+
+        25 ms of cross-receiver offset at `60F`: inside the 33.375 ms the hardware can
+        actually express, so a healthy session. Before the fix a stated 20 ms was accepted
+        here and this run raised `timecode_disagreement` twice.
+        """
+        truth = build_session(constant_offset_session(25 * RATE // 1000), tmp_path / "sixty")
+        path = truth.session_dir / "session.yaml"
+        document = yaml.safe_load(path.read_text())
+        document["timecode"]["frame_rate"] = "60F"
+        document["sync_qa"] = {"enabled": True, "max_lag_ms": 200}
+        path.write_text(yaml.safe_dump(document, sort_keys=True), encoding="utf-8")
+
+        result = run_ingest(truth.session_dir)
+        assert result.timeline is not None
+        assert "timecode_disagreement" not in {n.code for n in result.timeline.warnings}
+
+
+class TestThresholdsCompareAsIntegers:
+    """INV-04 for defect 5a, in the two halves it actually splits into.
+
+    **The charter's stated proof for this criterion does not work, and saying so is the
+    point.** It asks for "a lag exactly one sample either side of the threshold, which no
+    float-millisecond comparison resolves correctly". That premise is false: at 16 kHz an
+    integer-millisecond threshold converts to a whole number of samples exactly, so
+    `lag > threshold` and `lag * 1000 / 16000 > threshold * 1000 / 16000` agree on every
+    integer lag, at every threshold, in both signs. Measured before this test was written
+    rather than assumed — a boundary test justified that way would have been a test that
+    cannot fail for the reason its docstring gives, which is the failure mode the verify
+    phase exists to catch.
+
+    So the two claims are separated. The boundary test below proves what it can actually
+    observe — the comparison is strict and symmetric in sign — and the structural test
+    proves the invariant itself, which at these magnitudes is only observable in the source.
+    """
+
+    def _assessed(self, lag: int, *, threshold: int) -> list[str]:
+        import datetime as dt
+
+        from dnd_audio.artifacts.report import ReportBuilder
+        from dnd_audio.config import SyncQaConfig
+        from dnd_audio.timeline.syncqa import LagMeasurement, _assess
+
+        measurements = [
+            LagMeasurement(track_id="tx-b", position="start", lag_samples=lag, correlation=0.9)
+        ]
+        builder = ReportBuilder(
+            "boundary",
+            config_hash=None,
+            started_at=dt.datetime(2026, 8, 15, tzinfo=dt.UTC),
+        )
+        return [
+            note.code
+            for note in _assess(
+                "tx-a",
+                measurements,
+                settings=SyncQaConfig(enabled=True),
+                builder=builder,
+                offset_threshold=threshold,
+                drift_threshold=threshold,
+            )
+        ]
+
+    @pytest.mark.parametrize("sign", [1, -1])
+    def test_the_threshold_is_strict_and_symmetric(self, sign: int) -> None:
+        """Exactly at the threshold is clean; one sample beyond it warns.
+
+        Both signs, because the comparison takes an absolute value: a dropped `abs` leaves
+        every positive case passing and fails only on a track that arrives *early*, which
+        is half of them and the half no one-sided test would see.
+        """
+        threshold = 534  # the 60F/BWF floor, in derivative samples
+        assert "timecode_disagreement" not in self._assessed(sign * threshold, threshold=threshold)
+        assert "timecode_disagreement" in self._assessed(
+            sign * (threshold + 1), threshold=threshold
+        )
+
+    def test_no_lag_in_milliseconds_is_ever_an_operand_of_a_comparison(self) -> None:
+        """The invariant itself, and the only form in which it is observable here.
+
+        Parsed rather than grepped: `lag_ms` appears in five f-strings in this function, so
+        a substring search for `<` or `>` would trip over format specifiers and prove
+        nothing. Walking the AST asks the precise question — is a millisecond value an
+        operand of a `Compare`? — and it stays true as the function grows, which is what
+        this needs to be. The pre-M8 code compared `found.lag_ms` against a float threshold
+        and defect 5a was about to add a second one.
+        """
+        import ast
+        import inspect
+        import textwrap
+
+        from dnd_audio.timeline import syncqa
+
+        tree = ast.parse(textwrap.dedent(inspect.getsource(syncqa._assess)))
+        offenders = [
+            ast.unparse(node)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Compare)
+            for operand in [node.left, *node.comparators]
+            if any(
+                isinstance(inner, ast.Attribute) and inner.attr.endswith("_ms")
+                for inner in ast.walk(operand)
+            )
+        ]
+        assert offenders == [], offenders
+
 
 class TestWhenQaDoesNotRun:
     def test_it_is_off_by_default(self, canonical_fixture: FixtureTruth) -> None:

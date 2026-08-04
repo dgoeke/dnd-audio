@@ -638,7 +638,15 @@ def _warn_about_span(
 def _warn_about_mixed_domains(
     evidence: list[StartEvidenceRecord], frame_rate: FrameRate, warnings: list[TimelineNote]
 ) -> None:
-    """Flag the assumption that a recorder's ``00:00:00:00`` is real midnight (OQ-015)."""
+    """Flag that the two domains' *cycles* are different lengths at this rate (OQ-015).
+
+    **Not that either origin is midnight.** This message used to say a BWF reference counts
+    from real midnight, which is the claim OQ-004 disproved and ADR-0031 removed everywhere
+    else — and because it is a `TimelineNote`, it was the one place the false semantic still
+    reached `timeline.json`. Both domains count from the recorder's own origin (OQ-023); what
+    differs at a fractional non-drop rate is how long each one's 24-hour cycle is, which is
+    what the discrepancy below measures and the only thing this warning is about.
+    """
     discrepancy = timecode_day_discrepancy_seconds(frame_rate)
     if discrepancy == 0 or not has_mixed_absolute_domains(evidence):
         return
@@ -646,12 +654,12 @@ def _warn_about_mixed_domains(
         TimelineNote(
             code="mixed_time_domains",
             message=(
-                f"this session mixes BWF sample references, which count from real "
-                f"midnight, with timecode tags, which count from the recorder's "
-                f"00:00:00:00. At {frame_rate.label} a timecode day is "
-                f"{float(discrepancy):+.4f} seconds from a calendar day, so relating the "
-                f"two origins assumes the receivers were jammed to real midnight "
-                f"(OQ-015)."
+                f"this session mixes BWF sample references with timecode tags. Both count "
+                f"from the recorder's own origin (OQ-004, ADR-0031), but their cycles are "
+                f"not the same length: at {frame_rate.label} a timecode day is "
+                f"{float(discrepancy):+.4f} seconds from 86 400 seconds of samples, so "
+                f"unwrapping the two together assumes they share a cycle boundary (OQ-015, "
+                f"OQ-026)."
             ),
         )
     )

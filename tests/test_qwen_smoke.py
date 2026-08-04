@@ -364,8 +364,12 @@ class TestOq018TimestampStability:
         shared_start = max(early.words[0].start_sample, late.words[0].start_sample)
         shared_end = min(early.words[-1].end_sample, late.words[-1].end_sample)
 
+        # **Three populations, because the third turned out to be a different phenomenon.**
+        # `deltas_ms` is every pair; `interior_ms` drops pairs involving either window's
+        # *first* word. That split is not a convenience — see the block below the loop.
         candidates = 0
         deltas_ms: list[int] = []
+        interior_ms: list[int] = []
         for late_word in late.words:
             if not (shared_start <= late_word.start_sample < shared_end):
                 continue
@@ -385,35 +389,112 @@ class TestOq018TimestampStability:
             ]
             if paired:
                 delta = abs(paired[0].start_sample - late_word.start_sample)
-                deltas_ms.append(delta * 1000 // DERIVATIVE_SAMPLE_RATE)
+                delta_ms = delta * 1000 // DERIVATIVE_SAMPLE_RATE
+                deltas_ms.append(delta_ms)
+                if paired[0] is not early.words[0] and late_word is not late.words[0]:
+                    interior_ms.append(delta_ms)
 
         assert candidates, "the two windows shared no word for the stitch rule to pair"
         print(f"\nOQ-018(2) {len(deltas_ms)}/{candidates} shared word(s) paired by the rule")
         print(f"OQ-018(2) |delta| ms: {sorted(deltas_ms)}")
         print(f"OQ-018(2) worst {max(deltas_ms) if deltas_ms else 'n/a'} ms")
+        print(f"OQ-018(2) interior worst {max(interior_ms) if interior_ms else 'n/a'} ms")
 
-        # The regression bounds, now that the measurement has a denominator. Both numbers
-        # are set from all four sample recordings rather than from whichever one this host
-        # happens to sort first — which is not a hypothetical: a first draft of this bound
-        # was 250 ms, and it passed only because TX01 sorts ahead of TX03, whose worst
-        # in-pair disagreement is 400 ms. Replacing `samples/` would have turned a green
-        # suite red for no reason anyone could have reconstructed. Measured 2026-08-03:
-        #
-        #     TX01  20/22 paired, worst   0 ms     TX03  18/18 paired, worst 400 ms
-        #     TX02  21/22 paired, worst  80 ms     TX04  18/18 paired, worst 320 ms
-        #
         # The **ratio** is the assertion that matters and the half that could not fail
         # before: it is the stitch rule's own hit rate, and a word the rule fails to pair is
-        # one it emits twice. The delta bound is the coarse sanity check beside it — the
-        # claim is "times do not wander by more than a word's length", and a word is a few
-        # hundred milliseconds, so a second means they have become unrelated.
+        # one it emits twice. Re-measured 2026-08-03 over all four of the jam capture's
+        # recordings, after `samples/` was replaced during M8:
+        #
+        #     TX01_MIC002  16/16 paired, worst 6160 ms, interior worst 80 ms
+        #     TX01_MIC005  15/16 paired, worst   80 ms, interior worst 80 ms
+        #     TX02_MIC002  15/16 paired, worst   80 ms, interior worst 80 ms
+        #     TX02_MIC003  16/16 paired, worst    0 ms, interior worst  0 ms
         assert len(deltas_ms) >= candidates * 3 // 4, (
             f"only {len(deltas_ms)} of {candidates} shared words still overlap between two "
             f"requests — M4's stitch rule would emit the rest twice"
         )
-        assert max(deltas_ms) <= 1000, (
-            f"word starts moved by {max(deltas_ms)} ms between two requests over the same "
-            f"audio; the stitch rule pairs on overlap and cannot survive that"
+
+        # **The delta bound applies to interior words, and the reason is a measurement, not
+        # a convenience (OQ-027).** One recording produced a 6160 ms outlier and it was a
+        # single pair: the *first* word of a window that opens on silence, whose start the
+        # aligner pins to the window start rather than to the speech. On TX01_MIC002 the
+        # early window's "Hello" came back spanning 6560 ms against the late window's 400 ms
+        # — and both agreed on its *end* to the sample. Nothing had wandered; a word had been
+        # stretched backwards over the lead-in.
+        #
+        # Excluding those pairs silently would be exactly the weakening this bound exists to
+        # prevent, so the behaviour is asserted in its own right below instead. What remains
+        # here is the original claim, over the population it was always about: times do not
+        # wander by more than a word's length, and a word is a few hundred milliseconds.
+        assert max(interior_ms) <= 1000, (
+            f"interior word starts moved by {max(interior_ms)} ms between two requests over "
+            f"the same audio; the stitch rule pairs on overlap and cannot survive that"
+        )
+
+    def test_a_words_start_depends_on_how_much_lead_in_its_window_had(
+        self, transcriber: QwenTranscriber
+    ) -> None:
+        """**OQ-027**, and the reason the bound above is scoped to interior words.
+
+        The same word, in the same audio, gets a different *start* depending on how much
+        non-speech the window opened with — and the same *end* to the sample. On
+        TX01_MIC002 the window opening 6 s earlier returned "Hello" spanning 6560 ms where
+        the later window returned 400 ms, both ending at 106560 ms. The aligner had absorbed
+        the lead-in into the word.
+
+        It is lead-in rather than silence, which is worth knowing for a real table: this
+        window's first second is *louder* than the region where the word actually is (rms
+        0.0077 against 0.0020, with a 0.13 transient at 2 s). Handling noise, a chair, a
+        cough before someone speaks — that is what gets swallowed, and a real session has
+        more of it than this one, not less.
+
+        M4's stitch rule survives it, because the stretched word still overlaps the short one
+        and the duplicate is recognized. What does not survive is ownership:
+        `transcript/segments.py::_owned_words` assigns a word to the interval containing its
+        **start**, so a start dragged seconds early falls outside every interval and is
+        dropped. That is M8's diagnostic 9 counting a word the model never misplaced, and it
+        is why the counter had to exist before `vad.pad_ms` moves (OQ-017).
+
+        Stated as a comparison between two requests rather than as a millisecond bound: how
+        much lead-in precedes the first word is a property of the recording, and asserting a
+        number would pin this test to `samples/` again — the failure that produced it.
+        """
+        early = transcriber.transcribe(
+            a_request(decode(_speech_path(), seconds=16.0, start=8.0), request_id="lead-in-long")
+        )
+        shift = int(4.0 * DERIVATIVE_SAMPLE_RATE)
+        late = transcriber.transcribe(
+            a_request(
+                decode(_speech_path(), seconds=16.0, start=12.0),
+                start=WINDOW_START + shift,
+                request_id="lead-in-short",
+            )
+        )
+        from dnd_audio.transcript.normalize import comparison_key
+
+        first_early, first_late = early.words[0], late.words[0]
+        assert comparison_key(first_early.text) == comparison_key(first_late.text), (
+            "the two windows must open on the same word for this comparison to mean anything"
+        )
+
+        print(
+            f"\nOQ-027 {first_early.text!r} long lead-in: {first_early.start_sample}"
+            f"..{first_early.end_sample}"
+        )
+        print(
+            f"OQ-027 {first_late.text!r} short lead-in: {first_late.start_sample}"
+            f"..{first_late.end_sample}"
+        )
+
+        # The end is trustworthy. If it were not, the stitch rule would stop pairing and the
+        # ratio asserted above would already have caught it — so this is the half that holds.
+        assert first_early.end_sample == first_late.end_sample
+
+        # The start is not, and it is dragged toward whichever window opened earlier.
+        assert first_early.start_sample < first_late.start_sample, (
+            "the longer lead-in is supposed to produce the earlier start — if it no longer "
+            "does, OQ-027 has been answered and the interior-only bound above can be widened "
+            "back to every pair"
         )
 
 

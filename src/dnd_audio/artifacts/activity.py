@@ -363,8 +363,15 @@ class ActivityTrack(_Artifact):
     #: reverse-engineering a percentile. Since ADR-0029 the reference's population is a
     #: *subset* of the track's candidates, so it can no longer be reconstructed from the
     #: candidate list at all — which would have made the same defect permanently unauditable
-    #: from the artifact. `reference_candidate_count` is zero exactly when there is no
-    #: reference, and equals `candidate_count` when the fallback supplied one.
+    #: from the artifact.
+    #:
+    #: `reference_candidate_count` counts **attributed** candidates behind the reference, so
+    #: it is zero in both of ADR-0029's non-winner cases and `speech_reference_mbfs` is what
+    #: separates them: zero with a reference means the fallback measured it from all
+    #: `candidate_count` of the track's candidates, and zero with `None` means there was no
+    #: reference to measure. Reporting the mixture's size in the fallback case would make an
+    #: inherited reference indistinguishable from one actually measured from that many
+    #: winners, which is the distinction these fields exist to expose.
     candidate_count: int = Field(default=0, ge=0)
     reference_candidate_count: int = Field(default=0, ge=0)
     retained_candidate_count: int = Field(default=0, ge=0)

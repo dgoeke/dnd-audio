@@ -869,8 +869,11 @@ def _reference_detail(track: ActivityTrack) -> str:
             f"measured from {track.reference_candidate_count} candidate(s) that won attribution"
         )
     else:
+        # `candidate_count`, not `reference_candidate_count`: the latter counts *attributed*
+        # candidates and is zero here by construction, so quoting it produced "measured from
+        # all 0 of its candidates" — a line that contradicts itself in the same breath.
         source = (
-            f"measured from all {track.reference_candidate_count} of its candidates, because "
+            f"measured from all {track.candidate_count} of its candidates, because "
             f"none won attribution outright — the fallback that keeps a speaker who is always "
             f"overlapped from losing their veto (ADR-0029)"
         )
