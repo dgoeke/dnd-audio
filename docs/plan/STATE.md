@@ -7,9 +7,12 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 
 ## Right now
 
-- **Current milestone:** H1 — hardware fixture (**not started**; the M9 branch is complete and
-  ready to merge).
-- **Branch:** `milestone/M9-transcript-assembly-quality`
+- **Current milestone:** H1 — hardware fixture (**not started**). Before choosing whether to
+  begin the full fixture or a new software milestone, the immediate evidence step is the
+  two-person [minimal acoustic direction check](../minimal-acoustic-direction-check.md) and
+  its [event-first architecture spike](EVENT-FIRST-ARCHITECTURE-SPIKE.md). This small capture
+  does not close or replace H1.
+- **Branch:** `main`
 - **Last closed milestone:** M9 — transcript assembly quality
 - **Gate status at HEAD:** passes, zero skips (8 checks, 2 397 tests); the same default suite
   passes from `.venv-rocm`.
@@ -62,6 +65,14 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
   lineage-preserving presentation joins. On the four-file replay, all intended openings remain,
   long bleed fragments disappear, the final phrase renders coherently, and both unresolved
   one-word `Okay` copies remain. Activity, mix and ASR cache identity are unchanged.
+
+  **The next architecture question is recorded, not decided.** The minimal two-person capture
+  tests whether joint waveform evidence and session-local wearer information can represent one
+  voice heard on several microphones as one latent event while retaining two people saying the
+  same short word as two events. A successful result would justify a separately chartered
+  event-first software milestone; weak evidence leaves M9's conservative canonical transcript
+  in place and may justify only a traceable editorial/LLM view. No production default changes
+  from the minimal corpus.
 
   **The jam/timing result remains strong.** Two receivers started 5.28 s apart and their
   independently written references agree on that offset to 17–30 ms, inside one 30 fps frame

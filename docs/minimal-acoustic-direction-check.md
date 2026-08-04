@@ -16,6 +16,11 @@ The present pipeline compares per-track VAD candidates and later collapses dupli
 alternative is to infer one or more latent acoustic events jointly across channels, identify
 the active wearer(s), select source audio, and run ASR afterward.
 
+The full hypothesis, candidate stages, alternatives, invariants, and decision outcomes are
+recorded in the
+[event-first transcript architecture spike](plan/EVENT-FIRST-ARCHITECTURE-SPIKE.md). That note
+is exploratory, not an approved production design.
+
 This capture supplies the missing contrasts:
 
 - one voice saying `Okay`, heard directly and as bleed;
@@ -219,4 +224,3 @@ The follow-up analysis should answer only these questions before proposing more 
 
 The result is a direction decision, not a new production threshold. Do not modify H1, activity
 defaults, transcript semantics, or the mix merely to make this tiny corpus look perfect.
-
