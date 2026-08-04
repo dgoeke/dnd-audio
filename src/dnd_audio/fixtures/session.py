@@ -34,7 +34,13 @@ import yaml
 from dnd_audio.config import SessionConfig
 from dnd_audio.determinism import sha256_file, write_json_atomic
 from dnd_audio.fixtures import synth
-from dnd_audio.fixtures.wav import BroadcastMetadata, ExtraChunk, write_wav
+from dnd_audio.fixtures.wav import (
+    BroadcastMetadata,
+    ExtraChunk,
+    SampleFormatName,
+    quantize,
+    write_wav,
+)
 from dnd_audio.interfaces import SpeechSpan
 from dnd_audio.timecode import (
     FrameRate,
@@ -174,6 +180,11 @@ class FixtureChunk:
     #: Defaults to the session rate. Set it to 44100 to build the nonconforming source
     #: M1 warns about and M2 rejects.
     sample_rate: int | None = None
+    #: What the transmitter was set to write. `pcm_s24le` is not hypothetical — it is what
+    #: two of four kits produced in the 2026-08-02 probe from a per-transmitter setting the
+    #: operator had not matched (ADR-0030), and it is per *chunk* because that is how the
+    #: mistake happens: one kit, not the session.
+    sample_format: SampleFormatName = "pcm_f32le"
     rf64: bool = False
     #: An opaque custom chunk `ffprobe` will not report, so the generic RIFF walk has
     #: something to find. Invented, not observed (OQ-005).
@@ -718,10 +729,15 @@ def _write_chunk(
             )
         )
 
+    written: npt.NDArray[np.float32] | npt.NDArray[np.int32] = samples
+    if chunk.sample_format != "pcm_f32le":
+        written = quantize(samples, chunk.sample_format)
+
     size = write_wav(
         path,
-        samples,
+        written,
         sample_rate=rate,
+        sample_format=chunk.sample_format,
         broadcast=broadcast,
         info=info,
         extra=tuple(extra),

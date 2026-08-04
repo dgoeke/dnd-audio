@@ -14,6 +14,7 @@ them apart would be tempted to treat them differently.
 from __future__ import annotations
 
 import struct
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -80,17 +81,36 @@ class TestPcmRefusals:
         with pytest.raises(PcmError, match="no fmt  and data chunk"):
             open_pcm(path)
 
-    def test_an_integer_pcm_file_is_refused_rather_than_rounded(self, tmp_path: Path) -> None:
+    def test_a_32_bit_integer_file_is_refused_rather_than_rounded(self, tmp_path: Path) -> None:
         """s32 cannot become float32 exactly, so it is named rather than silently lost."""
-        path = tmp_path / "s16.wav"
-        fmt = struct.pack("<HHIIHH", 1, 1, RATE, RATE * 2, 2, 16)
+        path = tmp_path / "s32.wav"
+        fmt = struct.pack("<HHIIHH", 1, 1, RATE, RATE * 4, 4, 32)
         body = (
             b"fmt " + struct.pack("<I", len(fmt)) + fmt + b"data" + struct.pack("<I", 4) + bytes(4)
         )
         path.write_bytes(b"RIFF" + struct.pack("<I", len(body) + 4) + b"WAVE" + body)
-        with pytest.raises(PcmError, match="32-bit IEEE float") as caught:
+        with pytest.raises(PcmError, match=r"2147483647 becomes 2147483648\.0") as caught:
             open_pcm(path)
         assert caught.value.code == "undecodable_source"
+
+    def test_an_unsigned_file_is_refused_as_untested_not_as_unrepresentable(
+        self, tmp_path: Path
+    ) -> None:
+        """u8 *would* convert exactly. The reason it is refused has to say so.
+
+        The defect M8 fixes is a refusal whose stated reason is false for the file in front
+        of the operator, and "8-bit cannot be converted exactly" would be exactly that.
+        """
+        path = tmp_path / "u8.wav"
+        fmt = struct.pack("<HHIIHH", 1, 1, RATE, RATE, 1, 8)
+        body = (
+            b"fmt " + struct.pack("<I", len(fmt)) + fmt + b"data" + struct.pack("<I", 4) + bytes(4)
+        )
+        path.write_bytes(b"RIFF" + struct.pack("<I", len(body) + 4) + b"WAVE" + body)
+        with pytest.raises(PcmError, match="unsigned PCM") as caught:
+            open_pcm(path)
+        assert "untested rather than as unrepresentable" in str(caught.value)
+        assert "cannot be converted" not in str(caught.value)
 
     def test_an_extensible_format_says_why_it_is_not_supported(self, tmp_path: Path) -> None:
         """Named rather than guessed at: no DJI file has been seen using it (OQ-001)."""
@@ -124,6 +144,104 @@ class TestPcmRefusals:
         with pytest.raises(PcmError, match="whole number") as caught:
             open_pcm(path)
         assert caught.value.code == "unknown_sample_count"
+
+
+def _spread(bits: int) -> np.ndarray:
+    """Two million random samples plus every value the conversion could go wrong on.
+
+    The edges are the point: the most negative sample is the one a symmetric scaling
+    convention gets wrong, and full-scale positive is the one an off-by-one clamp does.
+    """
+    limit = 2 ** (bits - 1)
+    rng = np.random.default_rng(bits)
+    body = rng.integers(-limit, limit, size=_ROUND_TRIP_SAMPLES, dtype=np.int64)
+    edges = np.array([-limit, -limit + 1, -1, 0, 1, limit - 2, limit - 1], dtype=np.int64)
+    return np.concatenate([edges, body]).astype(np.int32)
+
+
+#: Enough that a scaling error anywhere in the range shows up, and small enough that the
+#: widest case is a six-megabyte file rather than a reason to skip the test.
+_ROUND_TRIP_SAMPLES = 2_000_000
+
+
+class TestFormatsThatConvertExactly:
+    """ADR-0030: a format is accepted when the conversion to float32 loses nothing.
+
+    Two of four transmitters in the 2026-08-02 probe wrote `pcm_s24le` from a setting the
+    operator had not matched across kits, and `ingest` refused them — after the recording,
+    with a reason that is false for 24-bit. That is what these prove is gone.
+    """
+
+    @pytest.mark.parametrize("bits", [16, 24])
+    def test_an_integer_source_reaches_the_reader_bit_exactly(
+        self, tmp_path: Path, bits: int
+    ) -> None:
+        """Every sample comes back as exactly the integer that was written, scaled."""
+        values = _spread(bits)
+        path = tmp_path / f"s{bits}.wav"
+        write_wav(path, values, sample_rate=RATE, sample_format=f"pcm_s{bits}le")  # type: ignore[arg-type]
+
+        source = open_pcm(path)
+        assert source.sample_format.codec_name == f"pcm_s{bits}le"
+        assert source.n_samples == values.shape[0]
+        with PcmReader(source) as reader:
+            decoded = reader.read(0, values.shape[0])
+
+        scale = 2 ** (bits - 1)
+        assert np.array_equal(decoded.astype(np.float64) * scale, values.astype(np.float64))
+        assert float(np.abs(decoded).max()) <= 1.0
+
+    def test_the_same_round_trip_at_32_bits_does_not_survive(self) -> None:
+        """So the refusal of `pcm_s32le` is measured, not merely asserted (ADR-0011)."""
+        values = _spread(32)
+        scale = 2.0**31
+        decoded = (values.astype(np.float32) / np.float32(scale)).astype(np.float64) * scale
+        assert not np.array_equal(decoded, values.astype(np.float64))
+        # And concretely, the number the refusal names.
+        assert float(np.float32(2**31 - 1)) == 2147483648.0
+
+    @pytest.mark.parametrize("bits", [16, 24])
+    def test_ffmpegs_own_decode_agrees_sample_for_sample(self, tmp_path: Path, bits: int) -> None:
+        """The scaling convention is measured against another implementation, not argued.
+
+        `2**(bits-1)` versus `2**(bits-1) - 1` is a real choice with a real disagreement at
+        one sample, and nothing inside this repository could tell the two apart.
+        """
+        rng = np.random.default_rng(bits + 100)
+        limit = 2 ** (bits - 1)
+        values = np.concatenate(
+            [
+                np.array([-limit, -1, 0, 1, limit - 1], dtype=np.int64),
+                rng.integers(-limit, limit, size=50_000, dtype=np.int64),
+            ]
+        ).astype(np.int32)
+        path = tmp_path / f"cross-{bits}.wav"
+        write_wav(path, values, sample_rate=RATE, sample_format=f"pcm_s{bits}le")  # type: ignore[arg-type]
+
+        completed = subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", str(path), "-f", "f32le", "-c:a", "pcm_f32le", "-"],
+            capture_output=True,
+            check=True,
+        )
+        theirs = np.frombuffer(completed.stdout, dtype="<f4")
+        with PcmReader(open_pcm(path)) as reader:
+            ours = reader.read(0, values.shape[0])
+        assert np.array_equal(ours, theirs)
+
+    def test_a_windowed_read_of_a_24_bit_source_is_that_window(self, tmp_path: Path) -> None:
+        """Three-byte samples make the seek arithmetic width-dependent for the first time.
+
+        A reader that kept a four-byte stride would return a window shifted by a fraction of
+        a sample — audio that plays, sounds like noise, and has no obvious cause.
+        """
+        values = _spread(24)[:20_000]
+        path = tmp_path / "window.wav"
+        write_wav(path, values, sample_rate=RATE, sample_format="pcm_s24le")
+        with PcmReader(open_pcm(path)) as reader:
+            window = reader.read(7_001, 500)
+            assert np.array_equal(window.astype(np.float64) * 2**23, values[7_001:7_501])
+            # Backwards, so it is random access rather than a cursor.
+            assert np.array_equal(reader.read(11, 3).astype(np.float64) * 2**23, values[11:14])
 
 
 class TestPcmReads:

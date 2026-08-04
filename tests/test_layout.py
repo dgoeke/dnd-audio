@@ -330,12 +330,28 @@ class TestRefusalsHappenFirst:
             reject_unusable_sources(built)
         assert caught.value.code == "inconsistent_sample_rate"
 
-    def test_an_integer_pcm_source_is_refused_rather_than_rounded(self) -> None:
+    def test_a_32_bit_integer_source_is_refused_rather_than_rounded(self) -> None:
         """s32 cannot become float32 exactly, so it is named rather than silently lost."""
         built = manifest({"tx-a": [source("raw/tx-a/one.wav", bwf(0), codec="pcm_s32le")]})
-        with pytest.raises(LayoutError, match="pcm_f32le") as caught:
+        with pytest.raises(LayoutError, match=r"2147483647 becomes 2147483648\.0") as caught:
             reject_unusable_sources(built)
         assert caught.value.code == "undecodable_source"
+
+    @pytest.mark.parametrize("codec", ["pcm_s24le", "pcm_s16le"])
+    def test_a_source_that_converts_exactly_is_not_refused(self, codec: str) -> None:
+        """ADR-0030. The refusal this replaces cost a capture: two of four transmitters in
+        the 2026-08-02 probe wrote `pcm_s24le` from a setting mismatch, and `ingest` turned
+        them away with a sentence that is true of `pcm_s32le` and false of them.
+        """
+        built = manifest({"tx-a": [source("raw/tx-a/one.wav", bwf(0), codec=codec)]})
+        reject_unusable_sources(built)
+
+    def test_an_unsigned_source_is_refused_as_untested(self) -> None:
+        """`pcm_u8` converts exactly; what it lacks is a tested convention, and the
+        diagnostic has to say which of those two it is."""
+        built = manifest({"tx-a": [source("raw/tx-a/one.wav", bwf(0), codec="pcm_u8")]})
+        with pytest.raises(LayoutError, match="untested rather than as unrepresentable"):
+            reject_unusable_sources(built)
 
     def test_a_stereo_source_is_refused(self) -> None:
         built = manifest({"tx-a": [source("raw/tx-a/one.wav", bwf(0), channels=2)]})

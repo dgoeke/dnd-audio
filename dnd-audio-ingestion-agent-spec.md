@@ -53,9 +53,13 @@ transmitter, and the session configuration maps that transmitter to a person.
 - Do not read from or write to the campaign wiki.
 - An optional local `glossary.txt` may bias ASR spelling, but absence of a glossary
   must not block a run.
-- Input audio is the transmitter's original 32-bit-float recording. When DJI dual-
-  file recording produces both `orig` and `edit` variants, consume `orig` and ignore
-  `edit`.
+- Input audio is the transmitter's original internal recording, normally 32-bit
+  float. When DJI dual-file recording produces both `orig` and `edit` variants,
+  consume `orig` and ignore `edit`. A transmitter set to a narrower width is a
+  capture mistake rather than an unusable file: accept any sample format that
+  converts to float32 with no loss, and refuse the rest with the reason that is true
+  of it (ADR-0030). Two of four transmitters in the 2026-08-02 probe recorded 24-bit
+  from a per-transmitter setting the operator had not matched (OQ-007).
 - Preserve all raw input files byte-for-byte. Never rewrite, rename, delete, or
   normalize files under `raw/`.
 - Accuracy and recoverability matter more than runtime. Overnight processing is

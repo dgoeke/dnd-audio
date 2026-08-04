@@ -32,6 +32,7 @@ __all__ = [
     "drift_session",
     "drop_frame_session",
     "inconsistent_rate_session",
+    "mixed_format_session",
     "mutual_bleed_session",
     "no_origin_session",
     "nonconforming_rate_session",
@@ -284,6 +285,54 @@ def dated_session(day: dt.date) -> FixtureSession:
         tracks=_two_tracks(
             (FixtureChunk(start_sample=0, n_samples=_SECOND, sequence=1),),
             (FixtureChunk(start_sample=_SECOND, n_samples=_SECOND, sequence=1),),
+        ),
+    )
+
+
+def mixed_format_session() -> FixtureSession:
+    """Two transmitters that recorded the same session at two different widths.
+
+    Exactly the capture mistake the 2026-08-02 probe made: `orig` is 32-bit float by
+    default, the width is a *per-transmitter* setting, and two of four kits were on the
+    other one. Discovered after the recording, because the whole session was refused.
+
+    Both tracks are readable and the session mixes normally (ADR-0030). The point of the
+    fixture is that "readable" is now true of the pair rather than of the float half, and
+    that the difference is invisible downstream — the working path hands out float32
+    windows whatever is on disk.
+    """
+    length = 4 * _SECOND
+    return FixtureSession(
+        session_id="mixed-format",
+        title="Mixed format",
+        tracks=_two_tracks(
+            (FixtureChunk(start_sample=0, n_samples=length, sequence=1),),
+            (
+                FixtureChunk(
+                    start_sample=0,
+                    n_samples=length,
+                    sequence=1,
+                    sample_format="pcm_s24le",
+                ),
+            ),
+        ),
+        speech=(
+            SpeechInterval(
+                track_id="tx-a",
+                start_sample=_SECOND // 2,
+                n_samples=_SECOND,
+                gain=0.30,
+                utterance_id="utt_mixed_a",
+                text="Mine is the one that was set correctly.",
+            ),
+            SpeechInterval(
+                track_id="tx-b",
+                start_sample=2 * _SECOND,
+                n_samples=_SECOND,
+                gain=0.30,
+                utterance_id="utt_mixed_b",
+                text="And mine is the one that was not.",
+            ),
         ),
     )
 

@@ -26,7 +26,7 @@ import datetime as dt
 import struct
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
 import numpy as np
 import numpy.typing as npt
@@ -36,11 +36,18 @@ __all__ = [
     "RF64_SENTINEL",
     "BroadcastMetadata",
     "ExtraChunk",
+    "SampleFormatName",
     "bext_payload",
     "chunk",
     "info_payload",
+    "pack_samples",
+    "quantize",
     "write_wav",
 ]
+
+#: What a fixture may be written in. FFprobe's own names, so a fixture spec and the
+#: manifest it produces read alike.
+SampleFormatName = Literal["pcm_f32le", "pcm_s24le", "pcm_s16le"]
 
 #: A 32-bit size field set to this means "the real size is 64-bit, look in ``ds64``".
 RF64_SENTINEL: Final = 0xFFFFFFFF
@@ -50,8 +57,19 @@ RF64_SENTINEL: Final = 0xFFFFFFFF
 #: the fixed size is the same for versions 1 and 2.
 BEXT_FIXED_BYTES: Final = 602
 
-_WAVE_FORMAT_IEEE_FLOAT: Final = 3
 _UNSET_LOUDNESS: Final = 0x7FFF
+
+#: The formats a fixture can be written in, named the way FFprobe names them, as
+#: ``(fmt tag, bits)``. Deliberately **not** imported from
+#: :mod:`dnd_audio.timeline.pcm`, for the reason stated above about
+#: :mod:`~dnd_audio.inspection.riff`: a reader test that got its header fields from the
+#: reader's own table would be exercising the table rather than the reader. The two agree
+#: on FFprobe's vocabulary and on nothing else.
+_FORMATS: Final[dict[SampleFormatName, tuple[int, int]]] = {
+    "pcm_f32le": (3, 32),
+    "pcm_s24le": (1, 24),
+    "pcm_s16le": (1, 16),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,22 +170,62 @@ def info_payload(entries: dict[bytes, str]) -> bytes:
     return payload
 
 
+def quantize(
+    samples: npt.NDArray[np.float32], sample_format: SampleFormatName
+) -> npt.NDArray[np.int32]:
+    """Float32 audio as the integers a recorder set to that width would have written.
+
+    Round-half-away-from-zero and a clamp at the positive edge, which is what a converter
+    does: `2**(bits-1)` values exist below zero and only `2**(bits-1) - 1` above it, so
+    full-scale positive is the one sample that cannot be represented symmetrically.
+    """
+    scale = 2 ** (_FORMATS[sample_format][1] - 1)
+    scaled = np.rint(np.asarray(samples, dtype=np.float64) * scale)
+    clamped: npt.NDArray[np.int32] = np.clip(scaled, -scale, scale - 1).astype(np.int32)
+    return clamped
+
+
+def pack_samples(values: npt.NDArray[np.int32], sample_format: SampleFormatName) -> bytes:
+    """Little-endian packed bytes for one integer sample format.
+
+    24-bit is written by dropping the *high* byte of each little-endian int32 — the
+    inverse of the reader's widen-and-shift, arrived at independently so that a
+    round-trip test measures agreement rather than a shared helper.
+    """
+    bits = _FORMATS[sample_format][1]
+    limit = 2 ** (bits - 1)
+    if values.size and (int(values.min()) < -limit or int(values.max()) > limit - 1):
+        message = (
+            f"{sample_format} holds [{-limit}, {limit - 1}]; got "
+            f"[{int(values.min())}, {int(values.max())}]"
+        )
+        raise ValueError(message)
+    wide = np.asarray(values, dtype="<i4").reshape(-1, 1).view(np.uint8)
+    return wide[:, : bits // 8].tobytes()
+
+
 def write_wav(
     path: Path,
-    samples: npt.NDArray[np.float32],
+    samples: npt.NDArray[np.float32] | npt.NDArray[np.int32],
     *,
     sample_rate: int,
+    sample_format: SampleFormatName = "pcm_f32le",
     broadcast: BroadcastMetadata | None = None,
     info: dict[bytes, str] | None = None,
     extra: tuple[ExtraChunk, ...] = (),
     trailing: tuple[ExtraChunk, ...] = (),
     rf64: bool = False,
 ) -> int:
-    """Write one mono 32-bit-float WAV. Returns the number of bytes written.
+    """Write one mono WAV. Returns the number of bytes written.
 
     Args:
-        samples: Mono float32. The fixtures are mono because each transmitter records
-            one channel.
+        samples: Mono. Float32 for ``FLOAT32``; the *integers themselves* for an integer
+            format, so a fixture that cares about exact values can state them and
+            :func:`quantize` converts when it does not. The fixtures are mono because each
+            transmitter records one channel.
+        sample_rate: Hertz.
+        sample_format: What to write. A settings mismatch across kits produces a 24-bit
+            `orig` on real hardware (ADR-0030), so fixtures have to be able to carry one.
         broadcast: Written as a ``bext`` chunk when given.
         info: Written as a ``LIST``/``INFO`` chunk when given.
         extra: Chunks written between the metadata and ``data``.
@@ -184,17 +242,13 @@ def write_wav(
         message = f"sample_rate must be positive, got {sample_rate}"
         raise ValueError(message)
 
-    frames = np.asarray(samples, dtype="<f4").tobytes()
-    block_align = 4
-    fmt = struct.pack(
-        "<HHIIHH",
-        _WAVE_FORMAT_IEEE_FLOAT,
-        1,
-        sample_rate,
-        sample_rate * block_align,
-        block_align,
-        32,
-    )
+    tag, bits = _FORMATS[sample_format]
+    if sample_format == "pcm_f32le":
+        frames = np.asarray(samples, dtype="<f4").tobytes()
+    else:
+        frames = pack_samples(np.asarray(samples, dtype=np.int32), sample_format)
+    block_align = bits // 8
+    fmt = struct.pack("<HHIIHH", tag, 1, sample_rate, sample_rate * block_align, block_align, bits)
 
     before_data = [chunk(b"fmt ", fmt)]
     if broadcast is not None:

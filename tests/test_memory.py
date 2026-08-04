@@ -18,9 +18,11 @@ while still being far larger than any window.
 
 from __future__ import annotations
 
+import tracemalloc
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, BinaryIO, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -29,11 +31,14 @@ import pytest
 from dnd_audio.artifacts.activity import ActivityGraph
 from dnd_audio.artifacts.timeline import Timeline, TimelineSegment, TimelineTrack
 from dnd_audio.config import EnvelopeConfig
-from dnd_audio.fixtures import FixtureTruth
+from dnd_audio.fixtures import FixtureTruth, build_session
+from dnd_audio.fixtures.variants import mixed_format_session
+from dnd_audio.fixtures.wav import write_wav
 from dnd_audio.mix.envelope import EnvelopeChunk, EnvelopeStream
 from dnd_audio.mix.levels import LevelCorrections, level_corrections
 from dnd_audio.mix.render import DEFAULT_MIX_WINDOW, render_mix
 from dnd_audio.timeline import CANONICAL_SAMPLE_RATE
+from dnd_audio.timeline.pcm import PcmReader, open_pcm
 from dnd_audio.timeline.reader import TrackReader
 from dnd_audio.timeline.resample import decimate_stream, output_length
 from dnd_audio.timeline.runner import run_ingest
@@ -81,19 +86,14 @@ class _LongMix:
     track_ids: tuple[str, ...]
 
 
-@pytest.fixture
-def long_track(canonical_fixture: FixtureTruth) -> tuple[Path, TimelineTrack, int]:
-    """`tx-a`'s real chunks, read as a twenty-minute track.
-
-    Everything past the track's own extent is silence, which is exactly what the reader
-    returns for a transmitter that stopped early — so this is an ordinary session shape,
-    not a special case built for the test.
-    """
-    chunks = sorted(canonical_fixture.for_track("tx-a"), key=lambda c: c.start_sample)
+def _long_track(
+    truth: FixtureTruth, track_id: str, speaker: str
+) -> tuple[Path, TimelineTrack, int]:
+    chunks = sorted(truth.for_track(track_id), key=lambda c: c.start_sample)
     track = TimelineTrack(
-        track_id="tx-a",
-        speaker_id="alice",
-        speaker_name="Alice",
+        track_id=track_id,
+        speaker_id=speaker,
+        speaker_name=speaker.title(),
         start_sample=chunks[0].start_sample,
         end_sample=chunks[-1].start_sample + chunks[-1].n_samples,
         segments=[
@@ -109,12 +109,43 @@ def long_track(canonical_fixture: FixtureTruth) -> tuple[Path, TimelineTrack, in
             for chunk in chunks
         ],
     )
-    return canonical_fixture.session_dir, track, LONG_SESSION_SAMPLES
+    return truth.session_dir, track, LONG_SESSION_SAMPLES
+
+
+@pytest.fixture
+def long_track(canonical_fixture: FixtureTruth) -> tuple[Path, TimelineTrack, int]:
+    """`tx-a`'s real chunks, read as a twenty-minute track.
+
+    Everything past the track's own extent is silence, which is exactly what the reader
+    returns for a transmitter that stopped early — so this is an ordinary session shape,
+    not a special case built for the test.
+    """
+    return _long_track(canonical_fixture, "tx-a", "alice")
+
+
+@pytest.fixture
+def long_24_bit_track(tmp_path: Path) -> tuple[Path, TimelineTrack, int]:
+    """The same shape over a source that has to be *unpacked* rather than viewed.
+
+    NumPy has no packed 24-bit dtype, so decoding is the one place in the working path
+    where an implementation naturally reaches for the whole `data` chunk — three bytes per
+    sample cannot be reinterpreted in place the way float32 can (ADR-0030). Running the
+    composed path over both widths is what makes the bound a property of the *reader*
+    rather than of float32's convenient memory layout.
+    """
+    truth = build_session(mixed_format_session(), tmp_path / "mixed-format")
+    return _long_track(truth, "tx-b", "bob")
+
+
+TRACK_WIDTHS = pytest.mark.parametrize(
+    "track_fixture", ["long_track", "long_24_bit_track"], ids=["f32", "s24"]
+)
 
 
 class TestTheWholePathStreams:
+    @TRACK_WIDTHS
     def test_a_write_happens_before_the_last_read(
-        self, long_track: tuple[Path, TimelineTrack, int], tmp_path: Path
+        self, request: pytest.FixtureRequest, track_fixture: str, tmp_path: Path
     ) -> None:
         """The assertion an accumulating implementation cannot pass.
 
@@ -122,7 +153,7 @@ class TestTheWholePathStreams:
         session before handing it on, every read would precede every write and this would
         fail — which is precisely the shape the naive implementation has.
         """
-        session_dir, track, duration = long_track
+        session_dir, track, duration = request.getfixturevalue(track_fixture)
         journal = Journal()
         output = tmp_path / "derivative.wav"
         expected = output_length(duration, 3)
@@ -143,15 +174,16 @@ class TestTheWholePathStreams:
         assert sum(journal.writes) == expected
         assert output.stat().st_size == expected * 4 + 44
 
+    @TRACK_WIDTHS
     def test_no_single_read_or_write_exceeds_its_window(
-        self, long_track: tuple[Path, TimelineTrack, int], tmp_path: Path
+        self, request: pytest.FixtureRequest, track_fixture: str
     ) -> None:
         """The size bound, alongside the ordering one.
 
         A window's worth of float32 is 192 kB; the whole track would be 230 MB, and six of
         them 1.4 GB. On a UMA host that difference is the one that kills a process.
         """
-        session_dir, track, duration = long_track
+        session_dir, track, duration = request.getfixturevalue(track_fixture)
         journal = Journal()
 
         with TrackReader(session_dir, track, duration) as reader:
@@ -185,6 +217,79 @@ class TestTheWholePathStreams:
             tail = reader.read(track.end_sample, WINDOW)
         assert not tail.any()
         assert tail.shape[0] == WINDOW
+
+
+class _CountingHandle:
+    """A file handle that remembers how many bytes were actually pulled off the disk."""
+
+    def __init__(self, wrapped: Any) -> None:
+        self._wrapped = wrapped
+        self.total = 0
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        position: int = self._wrapped.seek(offset, whence)
+        return position
+
+    def read(self, size: int = -1) -> bytes:
+        payload: bytes = self._wrapped.read(size)
+        self.total += len(payload)
+        return payload
+
+    def close(self) -> None:
+        self._wrapped.close()
+
+
+class TestTwentyFourBitUnpackingStaysInsideTheWindow:
+    """INV-07 in the one place the ordered event log above cannot see.
+
+    That log measures what the reader *hands back*, so a `read()` that decoded the entire
+    `data` chunk and returned a slice of it would satisfy every assertion in this file.
+    Three-byte samples are exactly where that implementation is tempting, because NumPy has
+    no packed 24-bit dtype and cannot reinterpret them in place (ADR-0030). So these two
+    measure what the log cannot: how many bytes leave the disk, and how much memory the
+    unpack allocates.
+    """
+
+    #: Twelve megabytes on disk at three bytes a sample — eighty-three windows, and large
+    #: enough that expanding it would be unmistakable against the bound below.
+    SAMPLES = 4_000_000
+
+    def _big_source(self, tmp_path: Path) -> Path:
+        rng = np.random.default_rng(24)
+        values = rng.integers(-(2**23), 2**23, size=self.SAMPLES, dtype=np.int64).astype(np.int32)
+        path = tmp_path / "big-s24.wav"
+        write_wav(path, values, sample_rate=CANONICAL_SAMPLE_RATE, sample_format="pcm_s24le")
+        return path
+
+    def test_a_window_pulls_only_its_own_bytes_off_the_disk(self, tmp_path: Path) -> None:
+        source = open_pcm(self._big_source(tmp_path))
+        assert source.n_samples == self.SAMPLES
+
+        with PcmReader(source) as reader:
+            # Instrumenting the handle is the only way to see this: everything above the
+            # handle has already been narrowed to the window by the time it is observable.
+            counted = _CountingHandle(reader._handle)
+            reader._handle = cast("BinaryIO", counted)
+            reader.read(1_000_000, WINDOW)
+
+        assert counted.total == WINDOW * 3
+
+    def test_the_unpack_allocates_a_window_and_not_a_file(self, tmp_path: Path) -> None:
+        """The bound is on the *unpacking*, which the byte count above cannot constrain."""
+        with PcmReader(open_pcm(self._big_source(tmp_path))) as reader:
+            reader.read(0, WINDOW)  # any one-time cost, outside the measurement
+            tracemalloc.start()
+            reader.read(1_000_000, WINDOW)
+            peak = tracemalloc.get_traced_memory()[1]
+            tracemalloc.stop()
+
+        # The honest path allocates about 900 kB: the raw bytes, the widened int32, and the
+        # float32 result, each one window long.
+        limit = 2 * 1024 * 1024
+        assert peak < limit
+        # And the array a whole-file unpack would have built is several times that, so the
+        # bound separates the two implementations rather than merely being generous.
+        assert 4 * limit < self.SAMPLES * 4
 
 
 class TestTheWriterDoesNotBuffer:

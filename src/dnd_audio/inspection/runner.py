@@ -530,8 +530,11 @@ def _format_warnings(
             ManifestNote(
                 code="unexpected_codec",
                 message=f"{properties.codec_name}, not {_EXPECTED_CODEC}. Dual-file mode's "
-                f"`orig` is 32-bit float; anything else suggests a processed or "
-                f"reconverted file (OQ-007).",
+                f"`orig` is 32-bit float, so this is either a transmitter set to a "
+                f"different width than the rest of the kit — which is what produced the "
+                f"24-bit files in the 2026-08-02 probe — or a processed or reconverted "
+                f"file (OQ-007). Whether the timeline can still read it is decided by "
+                f"whether the conversion to float32 is exact (ADR-0030), not here.",
             )
         )
     if properties.channels != _EXPECTED_CHANNELS:

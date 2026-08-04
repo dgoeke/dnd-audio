@@ -32,21 +32,18 @@ from dnd_audio.errors import DndAudioError
 from dnd_audio.timecode import FrameRate, parse_frame_rate
 from dnd_audio.timeline import CANONICAL_SAMPLE_RATE
 from dnd_audio.timeline.origin import SessionOrigin, SourceStart, selected_sources
+from dnd_audio.timeline.pcm import ACCEPTED_CODECS, ACCEPTED_FORMATS, refusal_reason
 from dnd_audio.timeline.rasterize import quantization_tolerance_samples
 
 __all__ = [
     "REQUIRED_CHANNELS",
-    "REQUIRED_CODEC",
     "LayoutError",
     "TrackLayout",
     "build_layout",
     "reject_unusable_sources",
 ]
 
-#: What the session contract specifies and what the PCM reader can read exactly
-#: (ADR-0011). Not a preference: `pcm_s32le` cannot be converted to float32 without loss,
-#: so "support every PCM flavour" is not available to be built.
-REQUIRED_CODEC = "pcm_f32le"
+#: A transmitter records one channel. Two suggests a receiver mixdown.
 REQUIRED_CHANNELS = 1
 
 
@@ -136,12 +133,20 @@ def _reject_unusable(track: ManifestTrack, source: ManifestSource) -> None:
         )
         raise LayoutError(message, code="unsupported_sample_rate")
 
-    if container.codec_name != REQUIRED_CODEC or container.channels != REQUIRED_CHANNELS:
+    if container.channels != REQUIRED_CHANNELS:
         message = (
-            f"{source.relative_path} is {container.channels}-channel "
-            f"{container.codec_name}, and the working path reads mono {REQUIRED_CODEC} — "
-            f"dual-file mode's `orig`. An integer format cannot be converted to float32 "
-            f"exactly, so it is refused rather than quietly rounded (ADR-0011)."
+            f"{source.relative_path} is {container.channels}-channel, and a transmitter "
+            f"records one. Two suggests a receiver mixdown rather than a transmitter "
+            f"recording, which is a different file than the one this track needs."
+        )
+        raise LayoutError(message, code="undecodable_source")
+
+    if container.codec_name not in ACCEPTED_CODECS:
+        accepted = ", ".join(fmt.codec_name for fmt in ACCEPTED_FORMATS)
+        message = (
+            f"{source.relative_path} is {container.codec_name}, and the working path "
+            f"reads {accepted} — every format that converts to float32 exactly "
+            f"(ADR-0030). {refusal_reason(container.codec_name)}"
         )
         raise LayoutError(message, code="undecodable_source")
 

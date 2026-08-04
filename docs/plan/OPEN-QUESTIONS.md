@@ -291,10 +291,22 @@ round-trip with zero error, and the same test on 32-bit integers fails, so the g
 right to refuse `s32` and wrong to refuse `s24` with it. ADR-0011's principle — never
 quietly round — is intact; only its implementation is too broad.
 
-**Not fixed at the time of writing**, deliberately: it is a change to closed M2 code and
-belongs in its own scoped piece of work, with the ADR amended and a test that fails if
-the guard narrows again. The remaining half of this entry — whether `orig`/`edit` pairs
-appear as assumed — is untouched: the sample has no `edit` files at all.
+**Fixed in M8 (2026-08-03), as its own scoped piece of work.** The allowlist became the
+principle it was always meant to be: a format is accepted when it is a signed
+little-endian integer or IEEE float **and** converts to float32 with zero error
+(**ADR-0030**). That is `pcm_f32le`, `pcm_s24le` and `pcm_s16le`. `pcm_s32le` is still
+refused, and now with the sentence that is true of it; `pcm_u8` is refused as *untested*
+rather than as unrepresentable, because it would convert exactly and only its
+offset-binary convention is unimplemented. The round-trip is measured over 2 000 000
+values per width and cross-checked against FFmpeg's own decode, so the `2**(bits-1)`
+scaling convention is agreed with another implementation rather than asserted. A
+mixed-format session ingests end to end, and the operator still gets an
+`unexpected_codec` warning naming the settings mismatch — readable is not the same as
+intended. The spec's "32-bit float" input rule is amended in the same change.
+
+**The remaining half of this entry is untouched:** whether `orig`/`edit` pairs appear as
+assumed still needs a fixture recorded in dual-file mode. The sample captures have no
+`edit` files at all, so this entry stays **open**.
 
 ## OQ-008 — Does AMD's stable `gfx1151` index yield a working Torch under uv + FHS?
 **Assumption:** Yes, with the `rocm[libraries]` sdist building at install time

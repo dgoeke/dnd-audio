@@ -21,6 +21,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Final
 
+import numpy as np
 import pytest
 import yaml
 
@@ -30,6 +31,7 @@ from dnd_audio.fixtures import FixtureSession, FixtureTruth, build_session
 from dnd_audio.fixtures.variants import (
     drop_frame_session,
     inconsistent_rate_session,
+    mixed_format_session,
     no_origin_session,
     nonconforming_rate_session,
     overlapping_session,
@@ -253,6 +255,68 @@ class TestRefusalsHappenBeforeConstruction:
         stages = _stages(result)
         assert stages["inspect"]["status"] == "failed"
         assert stages["reconstruct"]["status"] == "failed"
+
+
+class TestAMixedFormatSession:
+    """ADR-0030, end to end: a session half float and half 24-bit integer ingests.
+
+    This is the only test here that runs a session the previous release *refused*, which
+    is why it asserts the whole shape rather than one code — an exit status, a manifest
+    that records the two widths, and audio that actually came from the 24-bit file.
+    """
+
+    def test_it_ingests_rather_than_refusing_half_the_session(
+        self, a_session: Callable[[FixtureSession], FixtureTruth]
+    ) -> None:
+        truth = a_session(mixed_format_session())
+        result = run_ingest(truth.session_dir)
+        assert result.exit_code is ExitCode.OK, _error_codes(result)
+        assert result.timeline is not None
+
+        manifest = Manifest.model_validate_json(
+            (truth.session_dir / "work/manifest.json").read_text(encoding="utf-8")
+        )
+        widths = {
+            track.track_id: source.container.codec_name
+            for track in manifest.tracks
+            for source in track.sources
+            if source.container is not None
+        }
+        assert widths == {"tx-a": "pcm_f32le", "tx-b": "pcm_s24le"}
+
+    def test_the_24_bit_track_reaches_the_working_path_with_its_own_samples(
+        self, a_session: Callable[[FixtureSession], FixtureTruth]
+    ) -> None:
+        """Exit zero would also be satisfied by a track of silence."""
+        from dnd_audio.timeline.pcm import PcmReader, open_pcm
+
+        truth = a_session(mixed_format_session())
+        result = run_ingest(truth.session_dir)
+        assert result.exit_code is ExitCode.OK, _error_codes(result)
+
+        chunk = next(c for c in truth.chunks if c.track_id == "tx-b")
+        with PcmReader(open_pcm(truth.session_dir / chunk.relative_path)) as reader:
+            source = reader.read(0, chunk.n_samples)
+        assert reader.source.sample_format.codec_name == "pcm_s24le"
+        # Speech, not a silent placeholder — the fixture puts a second of it on tx-b.
+        assert float(np.abs(source).max()) > 0.05
+
+    def test_the_operator_is_still_told_about_the_mismatch(
+        self, a_session: Callable[[FixtureSession], FixtureTruth]
+    ) -> None:
+        """Readable is not the same as intended. The setting was still wrong."""
+        truth = a_session(mixed_format_session())
+        run_ingest(truth.session_dir)
+        manifest = Manifest.model_validate_json(
+            (truth.session_dir / "work/manifest.json").read_text(encoding="utf-8")
+        )
+        codes = {
+            note.code
+            for track in manifest.tracks
+            for source in track.sources
+            for note in source.warnings
+        }
+        assert "unexpected_codec" in codes
 
 
 class TestSessionZeroVariants:
