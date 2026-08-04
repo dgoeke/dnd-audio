@@ -168,6 +168,9 @@ jam-capture acoustics (17.4 dB rejection) is checked in, with no session audio c
 
 ### M9 — Transcript assembly quality
 
+**Status: closed.** The implementation and fixed-response four-file evaluation are recorded in
+the M9 closeout; H1/H2 retain the empirical calibration questions.
+
 Transcript-only recovery and presentation changes established by the four-file local
 evaluation: 20 ms of bounded leading ownership grace after ASR, conservative collapse of a
 proper contained fragment under compelling source dominance, and public joining of adjacent

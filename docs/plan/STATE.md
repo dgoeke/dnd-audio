@@ -7,15 +7,13 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 
 ## Right now
 
-- **Current milestone:** M9 — transcript assembly quality (**in progress**).
+- **Current milestone:** H1 — hardware fixture (**not started**; the M9 branch is complete and
+  ready to merge).
 - **Branch:** `milestone/M9-transcript-assembly-quality`
-- **Last closed milestone:** M8 — real-session readiness
-- **Gate status at milestone start (`9421d03`):** passes, zero skips (8 checks, 2 360 tests).
-  The five socket-guard tests require an execution environment that permits socket creation;
-  the identical gate passed there after the restricted sandbox failed those five at socket
-  construction. M8's close also proved the same default suite from `.venv-rocm`.
-- **Blocked on:** nothing for M9. The next hardware milestones remain blocked on real
-  recordings. Every remaining open question that
+- **Last closed milestone:** M9 — transcript assembly quality
+- **Gate status at HEAD:** passes, zero skips (8 checks, 2 397 tests); the same default suite
+  passes from `.venv-rocm`.
+- **Blocked on:** **real recordings, and nothing else.** Every remaining open question that
   blocks anything needs audio rather than code. The MVP's code path is complete: `inspect`,
   `ingest`, `activity`, `mix`, `transcribe` and `process` all run end to end, and
   `transcribe` now produces a real transcript from real speech with no `--fake-models`.
@@ -56,6 +54,14 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
   fragments and worsened two speech-reference clamps by up to 1.44 dB. `vad.pad_ms` stays at
   30. H1 records hard-onset phrases against intended track ids and compares 30 with 100; H2 or
   a real table decides.
+
+  **M9 recovers transcript edges without moving activity.** A 20 ms leading ownership grace is
+  applied after ASR and bounded by each submitted occurrence. Conservative contained-fragment
+  collapse removes only a proper word-sequence fragment under full graph evidence and decisive
+  source dominance. Granular records remain authoritative while JSON and Markdown share
+  lineage-preserving presentation joins. On the four-file replay, all intended openings remain,
+  long bleed fragments disappear, the final phrase renders coherently, and both unresolved
+  one-word `Okay` copies remain. Activity, mix and ASR cache identity are unchanged.
 
   **The jam/timing result remains strong.** Two receivers started 5.28 s apart and their
   independently written references agree on that offset to 17–30 ms, inside one 30 fps frame
@@ -99,7 +105,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | M6a | ROCm environment           | closed      | `f5c6632` |
 | M6b | Qwen adapter               | closed      | `07cebdb` |
 | M8  | Real-session readiness     | closed      | `8ad15e3` |
-| M9  | Transcript assembly quality | in progress | —         |
+| M9  | Transcript assembly quality | closed      | —         |
 | H1  | Hardware fixture (2 min)   | not started | —         |
 | H2  | Drift soak / first session | not started | —         |
 | M7  | Archival (sketch)          | sketch      | —         |
@@ -264,10 +270,9 @@ writer that cannot lose a stage, and a test suite that is provably offline.
 
 ## Next smallest step
 
-**M9 — transcript assembly quality.** Complete the transcript-only ownership, conservative
-contained-fragment collapse, and presentation-joining work established by the four-file local
-evaluation. Then return to **H1 — the real DJI hardware fixture.** Every remaining
-question that blocks anything needs audio. Read `docs/plan/milestones/H1-hardware-fixture.md`
+**H1 — the real DJI hardware fixture.** M9's transcript-assembly work is complete. Every
+remaining question that blocks anything needs audio. Read
+`docs/plan/milestones/H1-hardware-fixture.md`
 — its recording recipe is written for the owner, and the items that cannot be recovered
 afterwards (**the receiver displays read against wall clock**, for OQ-012 and OQ-015) are
 called out as such. (Claude Code: `/ms-start H1`.)
@@ -277,9 +282,10 @@ on arrival is already built: `inspect` names the strategy, the evidence and the 
 *by OQ id* in every manifest, so answering several of these is reading one manifest rather
 than writing an analysis. `tests/test_qwen_smoke.py` discovers `samples/*.wav` by glob, so
 dropping better recordings in re-runs every OQ-018 and OQ-022 measurement M6b took, without
-a code change. Keep the first pass at `activity.vad.pad_ms: 30`, compare 100 ms against the
-logged hard-onset phrases, and score direct-source retention and wrong-track content together;
-the M8 A/B proved that neither dropped-word count nor segment count is a loss function alone.
+a code change. Keep the first pass at `activity.vad.pad_ms: 30`, compare transcript ownership
+grace at 0, 20 and 100 ms against the logged hard-onset phrases, exercise the exact-short and
+320/350 ms pause controls, and score granular records and public turns separately. The M8/M9
+studies prove that neither dropped-word count nor rendered-line count is a loss function alone.
 
 **`pytest-xdist` parallelism is done** (2026-08-03), outside any milestone because it
 touches every milestone's tests. **The suite went from 120 s to ~30 s and the whole gate
