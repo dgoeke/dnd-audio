@@ -518,6 +518,11 @@
         "transcriber": {
           "$ref": "#/$defs/TranscriberIdentity"
         },
+        "transcript_assembly_semantics_version": {
+          "default": 1,
+          "title": "Transcript Assembly Semantics Version",
+          "type": "integer"
+        },
         "transcript_semantics_version": {
           "minimum": 1,
           "title": "Transcript Semantics Version",

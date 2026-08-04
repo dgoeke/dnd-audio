@@ -29,7 +29,10 @@ from dnd_audio.artifacts.records import (
 )
 from dnd_audio.artifacts.transcript import TranscriptSpeaker
 from dnd_audio.config import SessionConfig, config_hash
-from dnd_audio.transcript import TRANSCRIPT_SEMANTICS_VERSION
+from dnd_audio.transcript import (
+    TRANSCRIPT_ASSEMBLY_SEMANTICS_VERSION,
+    TRANSCRIPT_SEMANTICS_VERSION,
+)
 from dnd_audio.transcript.collapse import SegmentVerdict
 from dnd_audio.transcript.segments import SegmentDraft
 
@@ -74,6 +77,7 @@ def build_records(
         decisions=list(decisions),
         provenance=TranscriptRecordsProvenance(
             transcript_semantics_version=TRANSCRIPT_SEMANTICS_VERSION,
+            transcript_assembly_semantics_version=TRANSCRIPT_ASSEMBLY_SEMANTICS_VERSION,
             activity_semantics_version=ACTIVITY_SEMANTICS_VERSION,
             timeline_semantics_version=graph.provenance.timeline_semantics_version,
             inspection_semantics_version=graph.provenance.inspection_semantics_version,

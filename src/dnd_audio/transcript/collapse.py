@@ -105,12 +105,28 @@ def collapse(
     evidence = _evidence(graph)
     speakers = {track.track_id: track.speaker_id for track in graph.tracks}
 
+    comparisons = [
+        _compare(drafts, index, other, scores=scores, evidence=evidence)
+        for index, other in _pairs(drafts)
+    ]
+    # **The best-scoring segment absorbs first** (ADR-0032). In canonical order, A=800 absorbs
+    # B=700 and is then forbidden from being absorbed by C=900, so A and C both reach the
+    # transcript — contradicting this module's own rule that the survivor is the copy the
+    # model-independent evidence prefers. Resolving `(C, A)` before `(A, B)` makes that shape
+    # unreachable. It is a sort, not new logic: `_is_duplicate` still gates every pair, so the
+    # only thing that changes is *which* of two mutual duplicates survives.
+    #
+    # The tie-break is on segment ids, which are a function of time and track — of the input
+    # rather than of iteration order (INV-02).
+    comparisons.sort(
+        key=lambda item: (-_score(drafts[item.winner], scores), item.winner, item.loser)
+    )
+
     duplicate_of: dict[int, int] = {}
     absorbed: dict[int, list[_Comparison]] = {}
-    for index, other in _pairs(drafts):
-        if index in duplicate_of or other in duplicate_of:
+    for comparison in comparisons:
+        if comparison.winner in duplicate_of or comparison.loser in duplicate_of:
             continue
-        comparison = _compare(drafts, index, other, scores=scores, evidence=evidence)
         # A segment that has already absorbed another cannot itself be absorbed: a chain of
         # duplicates has no surviving text at the end of it, and the records artifact refuses
         # one. Only the *loser* is constrained — one survivor absorbing several copies of one

@@ -161,6 +161,11 @@ class TranscriptRecordsProvenance(_Artifact):
     """What produced these records. Deterministic, and no wall clock (INV-03)."""
 
     transcript_semantics_version: int = Field(ge=1)
+    #: What happened to the model's output — assignment, collapse, normalization, rendering.
+    #: Split from the field above in M8 so a change here costs a re-render rather than GPU
+    #: inference (ADR-0032). Additive and optional, so this artifact stays at schema 1; a
+    #: records file written before M8 reads as version 1, which is what it was.
+    transcript_assembly_semantics_version: int = 1
     #: The graph these segments were built from, and the placement underneath it. A records
     #: file whose upstream moved is not obviously wrong without them.
     activity_semantics_version: int = Field(ge=1)

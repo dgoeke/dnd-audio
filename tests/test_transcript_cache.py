@@ -102,6 +102,13 @@ class TestIdentity:
             "transcriber",
             "transcript_semantics_version",
         }
+        # And *not* `transcript_assembly_semantics_version`, which is the point of splitting
+        # them (ADR-0032). Everything downstream of the model's output — assignment,
+        # collapse, normalization, rendering — must be able to change without re-running
+        # inference over a four-hour session. Asserted here because the cheap mistake is to
+        # add the second version beside the first "for completeness".
+        assert "transcript_assembly_semantics_version" not in document
+
         # The spec's own list reaches the key through the transcriber identity rather than
         # being restated in a second place that could disagree with the first.
         assert set(document["transcriber"]) >= {

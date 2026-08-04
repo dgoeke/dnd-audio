@@ -27,8 +27,10 @@ from dnd_audio.models import SNAPSHOT_FETCH_COMMAND
 from dnd_audio.transcript import (
     ASR_DIRNAME,
     RECORDS_RELATIVE_PATH,
+    TRANSCRIPT_ASSEMBLY_SEMANTICS_VERSION,
     TRANSCRIPT_JSON_RELATIVE_PATH,
     TRANSCRIPT_MARKDOWN_RELATIVE_PATH,
+    TRANSCRIPT_SEMANTICS_VERSION,
 )
 from dnd_audio.transcript.runner import TranscriberBundle, run_render, run_transcribe
 from tests.conftest import UNINSTALLED_REVISION
@@ -219,6 +221,25 @@ class TestTheReport:
         assert recorded["package_version"] == "0.0.6"
         assert recorded["transformers_version"] == "4.57.6"
         assert recorded["truncation_margin_tokens"] == 16
+
+    def test_the_records_carry_both_semantics_versions(self, transcribed: Any) -> None:
+        """ADR-0032's split, from the artifact's side.
+
+        A `transcript-records.json` has to say what happened to the model's output as well as
+        what was asked of the model: after M8 two documents stamped
+        `transcript_semantics_version: 1` can carry different duplicate survivors for the same
+        audio, and without the second number no consumer could tell them apart (INV-08).
+        """
+        _, truth = transcribed
+        provenance = json.loads(
+            (truth.session_dir / RECORDS_RELATIVE_PATH).read_text(encoding="utf-8")
+        )["provenance"]
+        assert provenance["transcript_semantics_version"] == TRANSCRIPT_SEMANTICS_VERSION
+        assert (
+            provenance["transcript_assembly_semantics_version"]
+            == TRANSCRIPT_ASSEMBLY_SEMANTICS_VERSION
+        )
+        assert TRANSCRIPT_ASSEMBLY_SEMANTICS_VERSION >= 2, "M8 moved collapse"
 
     def test_every_deliverable_is_hashed(self, transcribed: Any) -> None:
         result, _ = transcribed

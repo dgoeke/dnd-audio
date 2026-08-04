@@ -382,6 +382,45 @@ class TestChainsAreImpossible:
             segment_id(0)
         }
 
+    def test_the_best_score_absorbs_first_however_the_drafts_are_ordered(self) -> None:
+        """M4's deferred defect, and ADR-0032's fix.
+
+        A=800, B=700, C=900 in canonical order. Taking pairs in that order, A absorbs B and
+        is then forbidden from being absorbed by C — so A *and* C both reach the transcript,
+        contradicting this module's own rule that the survivor is the best source score.
+        Resolving `(C, A)` first makes the shape unreachable.
+
+        The 2026-08-03 capture is why this is a fix rather than a deleted docstring: three
+        tracks within 32 ms carrying identical text, so three lavs do agree closely enough
+        for the shape to occur.
+        """
+        scores = {"tx-a": 800, "tx-b": 700, "tx-c": 900}
+        others = {name: [other for other in scores if other != name] for name in scores}
+        candidates = [
+            a_candidate(
+                name,
+                RATE,
+                RATE * 2,
+                score=score,
+                evidence=[
+                    an_evidence(candidate_id(other, RATE), other, 900) for other in others[name]
+                ],
+            )
+            for name, score in scores.items()
+        ]
+        drafts = [a_draft(name, RATE, RATE * 2, LONG) for name in scores]
+
+        result = run(drafts, a_graph(candidates, list(scores)))
+        assert [verdict.decision for verdict in result.verdicts] == [
+            "duplicate",
+            "duplicate",
+            "retained",
+        ]
+        # And both losers point at the survivor, so nothing is left dangling.
+        assert {result.verdicts[index].duplicate_of_segment_id for index in (0, 1)} == {
+            segment_id(2)
+        }
+
 
 class TestDeterminism:
     def test_the_same_input_gives_the_same_verdicts(self) -> None:

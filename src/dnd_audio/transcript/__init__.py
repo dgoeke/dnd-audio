@@ -37,6 +37,7 @@ __all__ = [
     "ASR_DIRNAME",
     "FAKE_MODELS_FILENAME",
     "RECORDS_RELATIVE_PATH",
+    "TRANSCRIPT_ASSEMBLY_SEMANTICS_VERSION",
     "TRANSCRIPT_CACHE_DIRNAME",
     "TRANSCRIPT_JSON_RELATIVE_PATH",
     "TRANSCRIPT_MARKDOWN_RELATIVE_PATH",
@@ -60,9 +61,22 @@ ASR_DIRNAME: Final = f"{TRANSCRIPT_CACHE_DIRNAME}/asr"
 #: Written by the fixture generator, read only under an explicit flag (ADR-0018).
 FAKE_MODELS_FILENAME: Final = "fake-models.json"
 
-#: Bumped when **any** module in this package changes what it would produce from unchanged
-#: inputs — how requests are cut, how words are assigned, how text is normalized, or what
-#: collapses. One version for the package, for the reason M1, M2 and M3 all give: a cache
-#: identity that varied one module's version but not another's keeps serving the answer a
-#: fixed bug produced.
+#: Bumped when anything that decides **what is submitted to the model** changes: how requests
+#: are cut, how much context they carry, what the transcriber is asked for. This is the half
+#: that is in the ASR cache key, so a bump here re-runs inference.
+#:
+#: Split from the version below in M8 (ADR-0032). One version for the whole package was the
+#: right shape while every change was cheap; it stops being right the moment a session's
+#: inference costs four hours, because a one-line change to how duplicates collapse would
+#: then re-transcribe audio nobody touched. Splitting now is free — no real session has been
+#: processed — and the two bump independently.
 TRANSCRIPT_SEMANTICS_VERSION: Final = 1
+
+#: Bumped when what happens **to the model's output** changes: how words are assigned to
+#: segments, what collapses, how text is normalized, how a transcript renders. Recorded in the
+#: records artifact's provenance and deliberately **not** in the ASR cache key — a change here
+#: costs a re-render, which `render` already does from the records alone.
+#:
+#: **2 (M8):** duplicate pairs resolve in order of descending source score, so the survivor of
+#: a three-way mutual duplicate is the copy the evidence prefers (ADR-0032).
+TRANSCRIPT_ASSEMBLY_SEMANTICS_VERSION: Final = 2
