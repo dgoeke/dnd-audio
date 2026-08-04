@@ -31,6 +31,7 @@ __all__ = [
     "DRIFT_END_SHIFT_SAMPLES",
     "QUANTIZED_BACKWARD_SAMPLES",
     "WALL_CLOCK_SKEW",
+    "constant_offset_session",
     "delayed_bleed_session",
     "drift_session",
     "drop_frame_session",
@@ -278,6 +279,34 @@ def drift_session() -> FixtureSession:
                 utterance_id="utt_drift_a",
                 text="Testing, one two.",
             ),
+        ),
+    )
+
+
+def constant_offset_session(shift_samples: int) -> FixtureSession:
+    """Two tracks whose shared transients are offset by the *same* amount at both ends.
+
+    The counterpart to :func:`drift_session`: a constant lag is two receivers disagreeing
+    about what time it is, and a lag that *changes* is two sample clocks running at
+    different rates. The two have thresholds three orders of magnitude apart, so a fixture
+    that could only produce the second could never test the first.
+
+    As there, the metadata on both tracks is identical and the offset exists only in the
+    samples — the correlator has to find it rather than read it.
+    """
+    length = 12 * _SECOND
+    return FixtureSession(
+        session_id="constant-offset",
+        title="Constant offset",
+        tracks=_two_tracks(
+            (FixtureChunk(start_sample=0, n_samples=length, sequence=1),),
+            (FixtureChunk(start_sample=0, n_samples=length, sequence=1),),
+        ),
+        claps=(
+            ClapInterval(start_sample=_SECOND, tracks=("tx-a",)),
+            ClapInterval(start_sample=_SECOND + shift_samples, tracks=("tx-b",)),
+            ClapInterval(start_sample=10 * _SECOND, tracks=("tx-a",)),
+            ClapInterval(start_sample=10 * _SECOND + shift_samples, tracks=("tx-b",)),
         ),
     )
 

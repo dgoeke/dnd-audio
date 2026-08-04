@@ -327,7 +327,15 @@ def build_timeline(
         for track in tracks
     ]
 
-    notes.extend(run_sync_qa(session_dir, config, tracks, builder=builder))
+    notes.extend(
+        run_sync_qa(
+            session_dir,
+            config,
+            tracks,
+            builder=builder,
+            evidence=tuple(start.evidence for start in origin.starts),
+        )
+    )
 
     builder.record_cache(hits=cache.hits, misses=cache.misses)
     builder.record_package_version("dnd_audio.timeline", str(TIMELINE_SEMANTICS_VERSION))

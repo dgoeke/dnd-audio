@@ -22,6 +22,7 @@ import datetime as dt
 import math
 import re
 from collections import Counter
+from fractions import Fraction
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Final, Literal
 
@@ -521,13 +522,31 @@ class SyncQaConfig(_Strict):
     #: `activity.correlation_max_lag_ms`, which is about acoustic bleed across a table;
     #: this one is about receivers whose timecode disagrees.
     max_lag_ms: int = Field(default=100, gt=0, le=5000)
-    #: A start-to-end change in measured lag beyond this warns. Integer milliseconds
+    #: A start-to-end *change* in measured lag beyond this warns. Integer milliseconds
     #: rather than a float, so a threshold comparison cannot depend on binary rounding.
+    #:
+    #: Only the change. A constant offset is governed by `offset_warn_ms` below, because
+    #: the two quantities have floors three orders of magnitude apart: a change of a few
+    #: milliseconds across a session is real evidence of drift, while a constant offset
+    #: finer than one tick of the recorder's timecode counter cannot be measured at all.
     drift_warn_ms: int = Field(default=5, gt=0, le=1000)
-    #: Below this normalized peak correlation, QA reports that it found no shared
-    #: transient instead of reporting a lag. Without it, correlating two independent noise
-    #: floors yields a confident-looking number for a clap that was never recorded. The
-    #: value is a starting point; H1 and H2 are what will tune it (OQ-006).
+    #: A constant cross-receiver offset beyond this warns. ``None`` — the default — derives
+    #: it from the coarsest timing evidence the session actually contains, which is the only
+    #: honest floor: a jam is propagated in whole frames, so two receivers agreeing to
+    #: within one tick is a *healthy* session (OQ-004, OQ-024).
+    #:
+    #: Using `drift_warn_ms` for both, as this did before M8, meant a 5 ms threshold against
+    #: a 33.3 ms quantum — so `timecode_disagreement` fired on every healthy session and
+    #: trained the operator to ignore the one warning that matters. A stated value below one
+    #: frame is refused rather than silently raised.
+    offset_warn_ms: int | None = Field(default=None, gt=0, le=5000)
+    #: Below this normalized peak correlation, a lag is reported as **low confidence**
+    #: rather than as a measurement: it is kept, with its correlation beside it, and does
+    #: not raise a disagreement. Without the threshold, two independent noise floors yield a
+    #: confident-looking number for a clap that was never recorded — but discarding the
+    #: number entirely threw away six correct measurements on the 2026-08-03 capture, whose
+    #: lags matched an independent hand measurement. The value is a starting point; H1 and
+    #: H2 are what will tune it (OQ-006, OQ-025).
     min_correlation: float = Field(default=0.5, gt=0.0, le=1.0)
 
 
@@ -823,6 +842,34 @@ class SessionConfig(_Strict):
                 f"share, and max_level_correction_db={envelope.max_level_correction_db} can "
                 f"cut it further. Raise min_active_share, lower room_tone_share, tighten the "
                 f"correction clamp, or lower the promise."
+            )
+            raise ValueError(message)
+        return self
+
+    @model_validator(mode="after")
+    def _check_offset_threshold_is_measurable(self) -> SessionConfig:
+        """Refuse a constant-offset threshold finer than one tick of a timecode counter.
+
+        Here rather than on `SyncQaConfig` for the same reason as the check above: the floor
+        depends on another section — `timecode.frame_rate` — and a validator that cannot see
+        it would have to assume one.
+
+        Refused rather than silently raised. An operator who states 5 ms has a belief about
+        what this instrument can resolve, and quietly widening it to 33 leaves that belief
+        intact and wrong; the run that then reports nothing looks like a clean session.
+        """
+        stated = self.sync_qa.offset_warn_ms
+        if stated is None:
+            return self
+        frame_rate = parse_frame_rate(self.timecode.frame_rate)
+        floor_ms = math.ceil(Fraction(1000) / frame_rate.rate)
+        if stated < floor_ms:
+            message = (
+                f"sync_qa.offset_warn_ms={stated} ms is finer than one frame at "
+                f"{frame_rate.label} ({floor_ms} ms), which is the coarsest a receiver's "
+                f"timecode counter ticks — so a threshold below it fires on sessions that "
+                f"are working correctly (OQ-004, OQ-024). Raise it to at least {floor_ms}, "
+                f"or remove it to let the session's own evidence decide."
             )
             raise ValueError(message)
         return self

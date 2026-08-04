@@ -16,6 +16,7 @@ already declared.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -24,10 +25,18 @@ import yaml
 
 from dnd_audio.errors import ExitCode
 from dnd_audio.fixtures import FixtureSession, FixtureTruth, build_session, canonical_session
-from dnd_audio.fixtures.variants import DRIFT_END_SHIFT_SAMPLES, drift_session
+from dnd_audio.fixtures.variants import (
+    DRIFT_END_SHIFT_SAMPLES,
+    constant_offset_session,
+    drift_session,
+)
 from dnd_audio.timeline import CANONICAL_SAMPLE_RATE, DERIVATIVE_SAMPLE_RATE
+from dnd_audio.timeline.pcm import open_pcm
 from dnd_audio.timeline.runner import run_ingest
-from dnd_audio.timeline.syncqa import measure_lag
+from dnd_audio.timeline.syncqa import measure_lag, offset_floor_samples
+from tests.manifests import bwf, config_for, timecode
+
+RATE = CANONICAL_SAMPLE_RATE
 
 
 def with_qa(session_dir: Path, **settings: object) -> None:
@@ -45,13 +54,34 @@ def with_qa(session_dir: Path, **settings: object) -> None:
     path.write_text(yaml.safe_dump(document, sort_keys=True), encoding="utf-8")
 
 
-def measurements(report_path: Path) -> dict[str, dict[str, str]]:
+def decisions(report_path: Path, code: str) -> dict[str, dict[str, str]]:
+    """Every QA decision of one kind, by `track:position`."""
     report = json.loads(report_path.read_text(encoding="utf-8"))
     return {
         decision["subject"]: decision["details"]
         for decision in report["decisions"]
-        if decision["code"] == "sync_qa_measured"
+        if decision["code"] == code
     }
+
+
+def measurements(report_path: Path) -> dict[str, dict[str, str]]:
+    return decisions(report_path, "sync_qa_measured")
+
+
+def _silence_one_track(truth: FixtureTruth) -> None:
+    """Overwrite `tx-b`'s audio with digital silence, before the run reads anything.
+
+    A dead channel is what `sync_qa_no_signal` exists to name, and the fixture generator
+    always writes a noise floor — deliberately, because a real recording has one. Writing
+    the zeros here rather than teaching the generator to produce silence keeps that default
+    honest, and it happens before `run_ingest` takes its INV-01 snapshot.
+    """
+    for chunk in truth.for_track("tx-b"):
+        path = truth.session_dir / chunk.relative_path
+        source = open_pcm(path)
+        with path.open("r+b") as handle:
+            handle.seek(source.data_offset)
+            handle.write(bytes(source.data_bytes))
 
 
 @pytest.fixture
@@ -162,30 +192,119 @@ class TestDriftDetection:
         assert run_ingest(drift.session_dir).exit_code is ExitCode.OK
 
 
-class TestConfidence:
-    def test_a_high_threshold_reports_the_measurement_as_inconclusive(
-        self, drift: FixtureTruth
-    ) -> None:
-        """Above the achievable correlation, QA says so rather than reporting a lag."""
+class TestThreeOutcomes:
+    """A weak peak, a silent window, and a good measurement are three different facts.
+
+    Before M8 the first two shared one code that said "no shared transient found", which
+    cost the 2026-08-03 capture six correct measurements: ordinary speech does not
+    correlate like a clap, and the lags it reported matched an independent hand
+    measurement. The instrument had the answer and threw it away.
+    """
+
+    def test_a_weak_peak_keeps_its_lag_and_raises_nothing(self, drift: FixtureTruth) -> None:
+        """Above the achievable correlation, the measurement is kept and marked."""
         with_qa(drift.session_dir, min_correlation=1.0)
         result = run_ingest(drift.session_dir)
         assert result.timeline is not None
         codes = {note.code for note in result.timeline.warnings}
-        assert "sync_qa_inconclusive" in codes
+        assert "sync_qa_low_confidence" in codes
         assert "clock_drift_suspected" not in codes
+        assert "timecode_disagreement" not in codes
 
-    def test_a_session_with_no_shared_transient_is_inconclusive(self, tmp_path: Path) -> None:
+        # The evidence survives: the lag it found is in the report, with its correlation.
+        weak = decisions(result.report_path, "sync_qa_low_confidence")
+        assert weak, "a low-confidence measurement must still be recorded"
+        assert float(weak["tx-b:end"]["lag_ms"]) == DRIFT_END_SHIFT_SAMPLES * 1000 / RATE
+        assert 0.0 < float(weak["tx-b:end"]["correlation"]) < 1.0
+
+    def test_a_silent_window_is_not_a_weak_measurement(self, tmp_path: Path) -> None:
+        """ "Nobody clapped" and "the jam failed" must not read the same way."""
+        spec = drift_session()
+        truth = build_session(replace(spec, claps=(), speech=()), tmp_path / "silent")
+        _silence_one_track(truth)
+        with_qa(truth.session_dir, window_s=2)
+
+        result = run_ingest(truth.session_dir)
+        assert result.timeline is not None
+        codes = {note.code for note in result.timeline.warnings}
+        assert "sync_qa_no_signal" in codes
+        assert "sync_qa_low_confidence" not in codes
+        assert not decisions(result.report_path, "sync_qa_measured")
+
+    def test_a_session_with_no_shared_transient_reports_low_confidence(
+        self, tmp_path: Path
+    ) -> None:
         """The canonical fixture's second half has no clap in it.
 
         Its only shared transient is at 4 s, so a window at the end correlates two
-        unrelated noise floors — and the honest answer is that nothing was found, not a
-        lag derived from whichever noise sample happened to line up.
+        unrelated noise floors. That is a *weak* peak rather than nothing at all — there is
+        audio, it simply does not agree — and it must not raise a disagreement.
         """
         truth = build_session(canonical_session(), tmp_path / "canonical")
         with_qa(truth.session_dir, window_s=2, min_correlation=0.5)
         result = run_ingest(truth.session_dir)
         assert result.timeline is not None
-        assert any(note.code == "sync_qa_inconclusive" for note in result.timeline.warnings)
+        codes = {note.code for note in result.timeline.warnings}
+        assert "sync_qa_low_confidence" in codes
+        assert "timecode_disagreement" not in codes
+
+
+class TestTheConstantOffsetThreshold:
+    """Defect 5a. A constant offset cannot be finer than one tick of a timecode counter.
+
+    The jam-verification run raised `timecode_disagreement` at **+11.31 ms** — well inside
+    the 33.3 ms quantum OQ-024 established as this hardware's floor — because a single
+    5 ms `drift_warn_ms` governed both the constant offset and the start-to-end change. A
+    threshold below the quantization floor fires on every healthy session, which trains an
+    operator to ignore the one warning that matters.
+    """
+
+    def test_an_offset_inside_one_frame_raises_nothing(self, tmp_path: Path) -> None:
+        """543 samples is 11.31 ms: the number the real capture warned about."""
+        truth = build_session(constant_offset_session(543), tmp_path / "inside")
+        with_qa(truth.session_dir)
+        result = run_ingest(truth.session_dir)
+        assert result.timeline is not None
+
+        found = decisions(result.report_path, "sync_qa_measured")
+        assert float(found["tx-b:start"]["lag_ms"]) == pytest.approx(11.3125, abs=0.07)
+        assert "timecode_disagreement" not in {n.code for n in result.timeline.warnings}
+
+    def test_an_offset_far_beyond_one_frame_still_warns(self, tmp_path: Path) -> None:
+        """The threshold widened to the hardware's floor, not into silence."""
+        truth = build_session(constant_offset_session(120 * RATE // 1000), tmp_path / "beyond")
+        with_qa(truth.session_dir, max_lag_ms=200)
+        result = run_ingest(truth.session_dir)
+        assert result.timeline is not None
+        assert "timecode_disagreement" in {n.code for n in result.timeline.warnings}
+
+    def test_the_floor_comes_from_the_evidence_not_the_configured_frame_rate(self) -> None:
+        """OQ-024: a receiver set to 60 fps wrote 30/1 references anyway.
+
+        So a 60F session's `bext` evidence still moves in 1600-sample steps, and deriving
+        the floor from `timecode.frame_rate` would give it a 16.7 ms threshold against
+        source timing that has not changed — reinstating the false alarm.
+        """
+        settings = config_for(("tx-a",), frame_rate="60F")
+        from_bwf = offset_floor_samples([bwf(0)], settings, rate=DERIVATIVE_SAMPLE_RATE)
+        assert from_bwf == 534  # ceil(1600 * 16000 / 48000): 33.375 ms
+
+        # A timecode tag really is finer at 60 fps, and a session carrying only those says so.
+        from_timecode = offset_floor_samples(
+            [timecode("00:00:00:00", "60F")], settings, rate=DERIVATIVE_SAMPLE_RATE
+        )
+        assert from_timecode == 267  # ceil(16000 / 60): 16.7 ms
+
+        # The pair takes the coarser, which is the only safe reading.
+        both = offset_floor_samples(
+            [bwf(0), timecode("00:00:00:00", "60F")], settings, rate=DERIVATIVE_SAMPLE_RATE
+        )
+        assert both == 534
+
+    def test_an_unmeasurable_threshold_is_refused_rather_than_widened(self) -> None:
+        """Silently raising 5 ms to 33 leaves the operator's belief intact and wrong."""
+        with pytest.raises(Exception, match="finer than one frame"):
+            config_for(("tx-a",), frame_rate="30F", sync_qa={"enabled": True, "offset_warn_ms": 5})
 
 
 class TestWhenQaDoesNotRun:

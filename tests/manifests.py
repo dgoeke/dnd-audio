@@ -164,12 +164,18 @@ def config(**timecode_fields: Any) -> SessionConfig:
     return config_for(("tx-a", "tx-b"), **timecode_fields)
 
 
-def config_for(track_ids: tuple[str, ...], **timecode_fields: Any) -> SessionConfig:
+def config_for(
+    track_ids: tuple[str, ...],
+    *,
+    sync_qa: dict[str, Any] | None = None,
+    **timecode_fields: Any,
+) -> SessionConfig:
     return SessionConfig.model_validate(
         {
             "session_id": "test",
             "title": "Test",
             "timecode": timecode_fields,
+            **({"sync_qa": sync_qa} if sync_qa is not None else {}),
             "tracks": [
                 {
                     "track_id": track_id,

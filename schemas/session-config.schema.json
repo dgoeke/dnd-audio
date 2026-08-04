@@ -533,6 +533,20 @@
           "title": "Min Correlation",
           "type": "number"
         },
+        "offset_warn_ms": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 5000,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Offset Warn Ms"
+        },
         "window_s": {
           "default": 30,
           "exclusiveMinimum": 0,
