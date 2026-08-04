@@ -21,7 +21,7 @@ rather than inferred by hand.
 The MVP code path is complete and the timing model is settled: a jam propagates into
 `bext.time_reference` and places receivers to one frame (**OQ-023**), and sample-clock drift
 is ≈1 ppm (**OQ-006**). What has never been true is that the pipeline is safe to point at a
-session that cost six people an evening. The 2026-08-03 `samples2` run — four tracks, two
+session that cost six people an evening. The 2026-08-03 `samples` jam-capture run — four tracks, two
 receivers, real GPU, exit 0 — surfaced the specific reasons, and they are not thresholds.
 
 Full evidence: `docs/fixtures/2026-08-03-jam-verification.md` and the run's findings.
@@ -36,7 +36,7 @@ together. `veto_db` (12.0) then keeps any candidate within 12 dB of it. When mos
 candidates are bleed, the percentile lands on bleed, and the veto protects bleed from
 suppression.
 
-Measured on `samples2`, where direct-to-bleed is 17.4 dB:
+Measured on the jam capture (`samples/`), where direct-to-bleed is 17.4 dB:
 
 | track | candidates | reference the pipeline computed | what it actually is |
 | --- | --- | --- | --- |
@@ -73,6 +73,26 @@ setting the operator had not matched across kits — the exact mistake H1's reci
 which means it will be made again. **This is the item that can cost a whole session**, and it
 would be discovered after the recording, not during it. **OQ-007.**
 
+### 2b. A real DJI track's second chunk can be refused as a "material overlap"
+
+_Added during the start phase, from the plan review (`../reviews/M8-plan-20260803-1729.md`,
+finding 2). Same class as defect 2 — a real recording `ingest` refuses — and invisible on every
+fixture in this repository._
+
+`rasterize.is_frame_quantized` recognizes only a `TimecodeRecord`, so two chunks placed from
+`bext` references get a **one-sample** overlap tolerance (`rasterize.py:88`). OQ-004 measured
+DJI's references as quantized to **1600 samples**. A perfectly ordinary later chunk whose
+reference rounds backward by a few hundred samples is then a *material* overlap, and
+`timecode.chunk_overlap_policy` defaults to `reject` — so the session fails.
+
+Nothing has caught it because the synthetic fixtures' references are sample-exact by
+construction, and the jam capture has one chunk per track. A four-hour session has several.
+
+The quantum is not derivable from the file: FFprobe does not surface the iXML that declares
+the rate, and **OQ-024** proved the receiver's configured rate does not reach an `orig` file.
+So it is configuration with a measured default — `timecode.bwf_reference_quantum_samples`,
+1600 at 48 kHz, citing OQ-004 and OQ-024 — feeding both this tolerance and defect 5a's floor.
+
 ### 3. The timing model still encodes the semantic known to be false
 
 `timeline/rasterize.py:72` treats a BWF reference as samples since **midnight at the file's own
@@ -97,7 +117,7 @@ stops that use, and OQ-004 previously recorded it as a promising hint.
 Two independent problems, both structural:
 
 **(a) The constant-offset threshold sits below the hardware quantum.** `sync_qa.drift_warn_ms`
-defaults to 5 ms, and the `samples2` run raised `timecode_disagreement` at **+11.31 ms** — well
+defaults to 5 ms, and the `samples` jam-capture run raised `timecode_disagreement` at **+11.31 ms** — well
 inside the 33.3 ms frame quantum that **OQ-024** established as the floor. Any cross-receiver
 disagreement under one frame is expected. A threshold below the quantization floor fires on
 every healthy session, which trains the operator to ignore the one warning that matters.
@@ -118,7 +138,7 @@ this robust). Preserving the measurement is not.
 ### 6. The mix's level-correction warning names the wrong cause
 
 `mix_level_correction_clamped` says *"a lav this far out is usually a mounting or gain problem
-the mix should not hide."* On `samples2` it fired for tx-d against a reference of −57.80 dBFS —
+the mix should not hide."* On the jam capture it fired for tx-d against a reference of −57.80 dBFS —
 which is the bleed level, not a mounting problem. The transmitter gains match to **2.7 dB**
 (held levels −38.4, −38.5, −38.8, −41.1). The message would send an operator to check hardware
 that is fine.
@@ -182,14 +202,25 @@ session, without changing it now.
 - [ ] **Defect 4:** a test asserts no cross-receiver placement depends on
       `bext.origination_date`/`origination_time`, and that a session whose two receivers'
       wall clocks disagree by 48.7 s still places correctly.
-- [ ] **Defect 5a:** constant-offset and drift thresholds are separate settings; the
-      constant-offset default is at least one frame at the session's rate. A session with a
-      cross-receiver offset of 11.31 ms produces **no** `timecode_disagreement`; one at 120 ms
-      does.
+- [ ] **Defect 2b:** two chunks placed from `bext` references get an overlap tolerance of the
+      configured BWF quantum, not one sample. A 1600-sample backward rounding on a second chunk
+      places cleanly under the default `reject` policy; a genuinely material overlap still
+      fails.
+- [ ] **Defect 5a:** constant-offset and drift thresholds are separate settings, and every
+      threshold comparison is in **integer samples** (INV-04), never floating-point
+      milliseconds. The constant-offset default is the largest **effective quantization among
+      the session's own evidence** — not the configured frame rate, which **OQ-024** proved does
+      not reach an `orig` file. A session with a cross-receiver offset of 11.31 ms produces
+      **no** `timecode_disagreement`; one at 120 ms does; and a session configured `60F`
+      behaves like the 30 fps one, because the source quantum is unchanged.
+      _Amended during the start phase: the original criterion said "at least one frame at the
+      session's rate", which the plan review showed would give a `60F` session a ~17 ms floor
+      against source timing that still has a 33.3 ms quantum — reinstating the false alarm this
+      defect exists to remove (`../reviews/M8-plan-20260803-1729.md`, finding 4)._
 - [ ] **Defect 5b:** a measurement below `min_correlation` is reported with its lag and
       correlation, marked low-confidence, and is distinguishable in the report from "no
       transient found at all".
-- [ ] **Defect 6:** with defect 1 fixed, the `samples2` fixture no longer clamps level
+- [ ] **Defect 6:** with defect 1 fixed, the calibrated fixture no longer clamps level
       correction, or if it does, the warning names the real cause.
 - [ ] **Defect 7:** decided and recorded — either the chain-resolution pass exists with the
       A/B/C case as a test, or `collapse.py`'s docstring describes actual behaviour. An ADR
@@ -197,10 +228,16 @@ session, without changing it now.
 - [ ] **Diagnostic 8:** the activity artifact and report carry per-track reference level,
       candidate count, and suppression count. Reproducing defect 1 from the artifact alone
       requires no audio measurement.
+- [ ] **Defect 7 (identity):** changing collapse changes what a `transcript-records.json`
+      *means*, so transcript semantics are versioned separately from ASR semantics — a future
+      collapse change costs a re-render, not four hours of re-inference. An ADR states the
+      split. _Added during the start phase from the plan review, finding 6._
 - [ ] **Diagnostic 9:** dropped words are counted per track, reported, and their segments
       named. A fixture with a word starting 50 ms before its ownership interval reports
-      exactly one dropped word.
-- [ ] A fixture reproducing the `samples2` acoustics is checked in — **synthetic audio
+      exactly one dropped word. The metric is **defined** — dropped `(request, word)` pairs —
+      and tested over a merged outcome owning two candidate groups, a true padding-only word,
+      and the same padding word returned by two overlapping requests.
+- [ ] A fixture reproducing the jam capture's acoustics is checked in — **synthetic audio
       calibrated from the measurements** (direct ≈ −39 dBFS, bleed ≈ −56, floor ≈ −66,
       17.4 dB rejection), not committed session audio (INV-06, and H1's no-audio rule).
 - [ ] Every deliverable stays byte-stable on rerun (INV-02) and `raw/` is untouched (INV-01).
@@ -225,17 +262,263 @@ session, without changing it now.
   outright: prefer keeping both and marking overlap. A two-pass attribution changes what gets
   suppressed; every existing bleed test is load-bearing and none should be weakened to
   accommodate it.
-- **Answers/advances:** OQ-007 (defect 2), OQ-004 (defect 3), OQ-017 (diagnostics 8 and 9
-  make it measurable), OQ-024 (defect 5a consumes its answer). **Does not answer** OQ-017's
-  actual thresholds, which need H1.
-- **Invariants at risk:** INV-09 (nothing text-derived may flow into the activity graph — the
-  two-pass attribution must stay entirely inside the activity package), INV-02 (byte-stable
-  artifacts — new report fields must be deterministically ordered), INV-08 (new activity
-  fields change the graph identity, so caches miss once, which is correct), INV-12 (never
-  invent timing — defect 3 removes an invented semantic rather than adding one).
+  The plan review found the specific case that makes a naive two-pass *worse* than the code it
+  replaces: **a quieter person who speaks only during overlap has no solo winners**, so a
+  winners-only reference is absent, the veto cannot fire, and they are deleted — where today's
+  contaminated reference happens to save them. `mutual_bleed_session` cannot show it, because
+  that fixture gives its quiet speaker three solo utterances. Any fix here needs that
+  regression before it needs anything else.
+- **Answers/advances:** OQ-007 (defect 2), OQ-004 (defects 2b and 3), OQ-017 (diagnostics 8
+  and 9 make it measurable), OQ-024 (defects 2b and 5a consume its answer). **Raises OQ-026** —
+  whether a DJI receiver's timecode counter wraps at all, and with what period, which
+  "device-local counter" no longer implies. **Does not answer** OQ-017's actual thresholds,
+  which need H1.
+- **The spec is amended by this milestone**, per AGENTS.md's rule that a proved correction
+  moves code and spec in one commit: `orig` input is not always 32-bit float, a BWF
+  `time_reference` is not samples since midnight, and origins are not calendar-day based.
+- **Invariants at risk:** INV-04 (**exact time arithmetic** — `syncqa` already compares
+  floating-point milliseconds against a float threshold, and defect 5a adds a second threshold;
+  every comparison becomes integer samples), INV-09 (nothing text-derived may flow into the
+  activity graph — the two-pass attribution must stay entirely inside the activity package),
+  INV-02 (byte-stable artifacts — new report fields must be deterministically ordered, and the
+  report's decision subsection must stay semantically stable cold and warm), INV-07 (the
+  24-bit reader must stay windowed — NumPy has no packed 24-bit dtype, so unpacking is exactly
+  where a whole source gets expanded; proved over the composed path in `test_memory.py`, not by
+  a helper assertion), INV-08 (new activity fields change the graph identity, so caches miss
+  once, which is correct), INV-12 (never invent timing — defect 3 removes an invented semantic
+  rather than adding one).
 - **The activity graph schema was frozen at M3's gate.** Diagnostic 8 adds fields to it.
   Additive optional fields only (ADR-0005); if anything more is needed, that is an ADR and a
   schema version bump, not a quiet edit.
+
+## Working plan
+
+_Scratch. Replaced by the Closeout at the end of the milestone._
+
+**Preconditions.** Tree clean; M6b `closed`; `./scripts/gate.sh` green at `6d00b35` — 8 checks,
+2294 tests, zero skips.
+
+**A charter correction, made at the start phase.** This document and `STATE.md` call the jam
+capture `samples2`. The operator has since deleted the old `samples/` (the 2026-08-02 probe) and
+moved `samples2/` into its place, so every reference here is renamed to `samples/`. The
+consequence is not cosmetic: `tests/test_qwen_smoke.py` discovers `samples/*.wav` by glob, so
+the `host_smoke` suite is now measuring **different audio**, and M6b's closeout warns that its
+OQ-018(2) delta bound "is a bound on which file sorts first". Re-running `host_smoke` and
+re-recording those numbers is part of verify.
+
+### Order, and the files each item touches
+
+Defect 1 first — it is the root cause of defect 6 and of the contaminated mix gains. Each item
+lands as its own commit with its tests.
+
+**1. The two-pass speech reference** (`activity/bleed.py`). `attribute` runs the gate twice:
+a **bootstrap** pass scored against today's all-candidates percentile with the veto disabled,
+to find out which candidates win attribution; then the reference recomputed as
+`REFERENCE_PERCENTILE` of the **winners'** levels; then a rescore and the authoritative gate
+with the veto.
+
+The reference falls back in one direction only, and the direction matters:
+
+| winners | reference | why |
+| --- | --- | --- |
+| ≥ `bleed.min_attributed_reference_candidates` (**new**, default 1) | percentile of the winners | a winner is direct evidence that this is the wearer speaking; one of those beats three of an unclassified mixture, which is why it does not reuse `min_reference_candidates` |
+| zero, but ≥ `min_reference_candidates` candidates overall | today's all-candidates percentile | **the plan review's case**: a quieter person who speaks *only* during overlap has no solo winners, and a winners-only rule would delete them. Today's contaminated reference happens to save them, and losing that would be a regression |
+| zero, and below `min_reference_candidates` | `None` | `delayed_bleed_session`'s silent listener — a track that only ever *hears* is exactly what the gate must suppress |
+
+`mutual_bleed_session` proves the main path safe: the bootstrap pass suppresses `tx-b`'s
+contested overlap, so `tx-b`'s winners are its three solo utterances — precisely the right
+reference — and the veto then fires on a cleaner number than today's. Its contrast test keeps
+its exact shape by raising **both** floors beyond reach. Bumps `ACTIVITY_SEMANTICS_VERSION`.
+
+**2. Exactly-convertible PCM** (`timeline/pcm.py`, `timeline/layout.py`, `fixtures/wav.py`,
+`fixtures/session.py`). The allowlist becomes a principle, stated in two parts: a format is
+accepted when it is a **signed little-endian integer or IEEE float** *and* converts to float32
+with **zero error**. That is `pcm_f32le`, `pcm_s24le` and `pcm_s16le`. `pcm_s32le` fails the
+second half; `u8` fails the first — WAV 8-bit PCM is *unsigned with an offset of 128*, so the
+plan's original "signed integer PCM at 8 bits" was simply wrong — and each is refused with the
+reason that is true of it. `PcmSource` gains a sample format and `bytes_per_sample`; integer
+decode scales by `2**(bits-1)`, a power of two, so the division is exact. Chosen over an
+s24-only allowlist because refusing s16 with "an integer format cannot be converted exactly"
+would be the same defect one format over.
+
+**2b. The BWF overlap tolerance** (`timeline/rasterize.py`, `config.py`). `is_frame_quantized`
+learns about `BwfSampleReferenceRecord`, and `quantization_tolerance_samples` uses
+`timecode.bwf_reference_quantum_samples` (default 1600, citing OQ-004/OQ-024) for it. One
+number, evidence-derived rather than read off the receiver's menu, and it also supplies item
+5's floor.
+
+**3. The recorder's origin, not midnight** (`inspection/starttime.py`, `timeline/rasterize.py`,
+`artifacts/manifest.py`, `artifacts/timeline.py`, `timeline/origin.py`). A `bext.time_reference`
+is an unsigned sample count from **the recorder's own timecode origin** at the file's own rate.
+Three consequences and one deliberate non-change:
+
+- The *arithmetic* stays, and the assumption under it gets registered. "Device-local counter"
+  no longer implies a 24-hour period, which the plan review was right to call out — but
+  removing the wrap would delete a spec-required, tested capability (`rollover_session`, M2's
+  gate) on the strength of a hypothesis about one vendor. So `SECONDS_PER_DAY` and the unwrap
+  survive, the name and comment are corrected, and **OQ-026** records the open question, cited
+  from `cycle_units`. The existing `midnight_rollover_inferred` warning already refuses ties
+  rather than guessing, and a real DJI session never reaches the inference: its counters are a
+  few hundred seconds apart.
+- Mixing a `bext` reference with a timecode tag stays **permitted**, because on this hardware
+  `time_reference` *is* the jammed timecode count (OQ-023) — the two genuinely share the
+  recorder's origin. A configured `origin_timecode` is likewise a statement in that domain,
+  which is how an operator reading a receiver display uses it. The canonical fixture stays
+  valid; `mixed_time_domains` keeps its fractional-rate condition and stops saying "real
+  midnight".
+- The artifact stops claiming a day origin it does not have. `ZeroDomain`'s `real_time` becomes
+  `recorder_epoch` and `since_day_origin_samples` becomes `since_domain_origin_samples`. That is
+  not the additive change ADR-0005 permits, so `TIMELINE_SCHEMA_VERSION` goes to **2** with a
+  regenerated `schemas/timeline.schema.json` and an ADR. Keeping the *value* rather than nulling
+  it preserves M2's consistency check — zero plus a source's placement equals that source's own
+  time in its domain.
+
+**4. Wall clock never anchors placement** (`timeline/origin.py::_cycles_from_dates`). This is
+where `origination_date` actually reaches placement, and it assigns **whole 24-hour cycles** —
+two receivers whose wall clocks straddle midnight would be placed a day apart on evidence
+measured 48.7 s wrong. A date read *from a file* becomes descriptive only; only an operator
+assertion (`timecode.origin_date`, a `source_time_overrides` entry's `recording_date`) may
+assign a cycle. No schema change is needed: `ManifestStartTime.strategy` already says which
+strategy produced the evidence, and `recovery_*` is exactly the operator half. Falling through
+to the existing inference reads the counters themselves and involves no wall clock.
+`creation_time` — FFprobe's name for `bext.origination_time` — is read nowhere, and a test keeps
+it that way.
+
+**5. `sync_qa`'s two defects** (`timeline/syncqa.py`, `config.py`). **(a)** `SyncQaConfig` gains
+`offset_warn_ms: int | None = None`, defaulting to the **largest effective quantization among
+the session's own evidence** — `bwf_reference_quantum_samples` for a BWF reference, one frame at
+the configured rate for a timecode tag. Not the frame-rate setting, which OQ-024 proved does not
+reach an `orig` file: deriving it from `60F` would give a 17 ms floor against a 33.3 ms source
+quantum and reinstate the false alarm. `drift_warn_ms` keeps 5 ms and now governs only the
+start-to-end *change*. The achievability check lives on `SessionConfig` — M5's
+`overlap_min_gain_db` pattern — and **refuses** a value below the quantum rather than silently
+raising it.
+
+**Every comparison becomes integer samples** (INV-04). `_assess` currently compares
+`found.lag_ms`, a float, against a float threshold; the plan review caught that the plan was
+about to add a second one. Thresholds convert to exact derivative-sample counts once, lags and
+lag deltas compare as integers, and milliseconds appear only in rendered report text.
+
+**(b)** Three outcomes replace two: `sync_qa_measured`, `sync_qa_low_confidence` (below
+`min_correlation` but a real peak — **the lag and correlation are reported**, marked
+low-confidence, and raise no disagreement), and `sync_qa_no_signal` (no energy at all). "No
+transient was recorded" and "the jam failed" stop looking identical.
+
+**6. The mix's clamp warning** (`mix/levels.py`). Verify defect 1's fix removes the clamp on the
+calibrated fixture *first*, as the charter requires, then reword what remains to name both
+readings and carry diagnostic 8's candidate count.
+
+**7. Duplicate-chain resolution** (`transcript/collapse.py`). **Decided: implement**, at the
+operator's direction. `_pairs` is resolved in order of descending winner score, tie-broken by
+(winner id, loser id), so the best-scoring segment absorbs first and the chain shape cannot
+arise. A deterministic sort, not new logic: `_is_duplicate` still gates everything, so only
+*which* of two mutual duplicates survives changes, and the segment now deleted is one the
+three-condition test already called a duplicate. The alternative — rewriting the docstring to
+match a greedy accident — was rejected because the docstring states the rule that is right.
+
+**7b. Transcript semantic identity, split rather than bumped.** After this change two
+`transcript-records.json` documents both stamped version 1 could carry different duplicate
+survivors, and no consumer could tell them apart (INV-08). Request-shaping and submission
+semantics stay in the ASR cache key; **assembly, collapse and rendering get their own version**,
+recorded in the records artifact and kept *out* of that key, so a future collapse change costs a
+re-render rather than four hours of GPU inference. The plan review is right that this is
+cheapest now, before any real-session cache exists — which is this milestone's whole premise.
+
+**8. Per-track diagnostics** (`artifacts/activity.py`, `activity/runner.py`,
+`artifacts/report.py`). `ActivityTrack` gains **additive optional** fields (schema stays at 1):
+`candidate_count`, `reference_candidate_count` (what the reference was actually measured from),
+`retained_candidate_count` and `suppressed_candidate_count`, plus a per-track report decision
+carrying the same numbers. The first two are deliberately distinct names — after item 1 the
+winners and the final retained set are no longer the same population, and one field called
+"attributed" would be unreadable. The hardcoded field allowlist in
+`tests/test_activity_artifact.py` moves in the same change.
+
+**9. Dropped-word counting** (`transcript/segments.py`). Computed **per outcome**, in
+`draft_segments`, across all of that outcome's ownership intervals — *not* inside `_owned_words`,
+which runs once per candidate group and would therefore count group B's legitimately owned words
+as drops while processing group A. The metric is stated rather than left to inference: dropped
+`(request, word)` pairs, so a padding word that two overlapping requests both return and both
+drop counts twice, and the note says so. Emitted per track as a `TranscriptNote`, with affected
+candidates as structured `Decision.details` rather than prose. Behaviour unchanged; only
+visibility.
+
+**10. The calibrated fixture** (`fixtures/variants.py`). `bleed_dominated_session()` —
+**synthetic audio calibrated from the jam capture**, not committed session audio (INV-06):
+direct ≈ −39 dBFS, bleed ≈ −56, floor ≈ −66, 17.4 dB rejection. Shaped so the current code
+reproduces the defect and the fixed code does not.
+
+### Gate criteria → the proof for each
+
+| Criterion | Proof |
+| --- | --- |
+| Gate green, no new skips, suite also green from `.venv-rocm` | `./scripts/gate.sh`; the FHS invocation in M6b's closeout |
+| **1** reference from attributed candidates only | `test_activity_bleed.py` — one own-speech candidate against *N* bleed candidates, asserted **for every N in 1..8**. Today's code passes at N=2 and fails at N=3, so the test spans the boundary and fails on the current implementation |
+| **1** veto suppresses bleed at 17.4 dB and still saves real overlap | The calibrated fixture end to end, plus every existing `mutual_bleed_session` test unweakened — including the contrast test that removes the reference and watches the overlap get suppressed |
+| **1** the overlap-only speaker is **not** deleted | The plan review's regression: a quieter track whose every candidate is contested, so it has no solo winners. Retained via the fallback. Written **before** the two-pass code, because it is the case the fix is most likely to get wrong |
+| **2** 24-bit ingests bit-exactly; s32 and u8 refused for their own reasons | Round-trip over 2 000 000 random values plus both range edges, parametrized over 16/24 and **failing at 32**; a cross-check that FFmpeg's own decode agrees sample for sample; end-to-end `ingest` on a mixed-format session |
+| **2** the 24-bit path stays bounded (INV-07) | A 24-bit case in `test_memory.py`'s ordered event log — every read bounded by the requested window, every expanded array window-sized, a write before the last read. NumPy has no packed 24-bit dtype, so unpacking is exactly where a source gets expanded |
+| **2b** a rounded-back second chunk places cleanly | `test_layout.py` — a 1600-sample backward rounding under the default `reject` policy places without a nudge; a genuinely material overlap still fails; `test_rasterize.py` asserts the tolerance comes from the configured quantum |
+| **3** nothing claims a midnight-relative reference | `rg 'OQ-004'`; `test_starttime.py` and `test_artifacts.py` on the new assumption text; the schema drift test proves the v2 regeneration |
+| **4** no cross-receiver placement depends on wall clock | A session whose every `date`/`creation_time` tag is rewritten — including two receivers **48.7 s apart across midnight** — produces a **byte-identical `timeline.json`**; plus a structural test that `creation_time` is read nowhere |
+| **5a** 11.31 ms raises nothing, 120 ms does | `test_syncqa.py`, both directions, **and at `60F`** where the charter's original rule would have reinstated the alarm; plus a configured `offset_warn_ms` below the quantum refused at configuration load |
+| **5a** thresholds compare as integers (INV-04) | `test_syncqa.py` — a lag exactly one sample either side of the threshold, which no float-millisecond comparison resolves correctly; plus a structural check that `lag_ms` reaches only report prose |
+| **5b** a weak measurement keeps its lag | `test_syncqa.py` — `sync_qa_low_confidence` carries lag and correlation and is distinguishable from `sync_qa_no_signal` |
+| **6** the clamp warning names the real cause | The calibrated fixture no longer clamps; a fixture that legitimately does carries the candidate count |
+| **7** decided and recorded | The A/B/C case asserting C survives alone, mutation-checked by reverting the sort; ADR |
+| **8** defect 1 reproducible from the artifact alone | A test that reads `work/activity.json` for the calibrated fixture and derives the defect with no audio measurement |
+| **9** exactly one dropped word | A fixture with a word starting 50 ms before its ownership interval; zero on the canonical fixture; plus a merged outcome owning two candidate groups (no false drops), a true padding-only word, and one padding word returned by two overlapping requests |
+| Fixture checked in, no session audio | `bleed_dominated_session()`; `.gitignore` already refuses `*.wav` |
+| INV-02 / INV-01 | Byte-stability across two runs for all six deterministic artifacts; **plus** the report's provenance and decision subsections asserted semantically identical cold and warm, since the report itself is exempt as a whole and the new decisions live there; the five composed runners already parametrized in `test_raw_guard.py` |
+| The spec agrees with the code | `dnd-audio-ingestion-agent-spec.md` amended in the same commits — `orig` is not always 32-bit float, `time_reference` is not samples since midnight, origins are not calendar-day based. Swept on `midnight`, `calendar`, `day origin` and `absolute timecode` as well as `rg 'OQ-004'`, because a false claim carrying no citation is exactly what the id search cannot find. `manifest.schema.json` regenerated alongside `timeline.schema.json` |
+
+### ADRs this milestone will write
+
+- **ADR-0029** — the two-pass speech reference.
+- **ADR-0030** — the exactly-convertible PCM rule. **Amends ADR-0011**, whose principle stands
+  and whose implementation was too broad.
+- **ADR-0031** — the recorder's origin, not midnight: what a BWF reference means, its
+  quantization and what that costs the overlap tolerance (defect 2b), what may assign a 24-hour
+  cycle, and `timeline.json` schema v2. **Amends the spec** and supersedes the relevant parts of
+  ADR-0006/0008/0009.
+- **ADR-0032** — duplicate-chain resolution by source score, and the transcript semantic-version
+  split that makes it identifiable.
+
+### Invariants at risk, and what stops each
+
+- **INV-04** — every `sync_qa` threshold comparison becomes integer derivative samples;
+  milliseconds survive only in rendered prose. A boundary test one sample either side is what
+  proves it, because the charter's own 11.31/120 ms cases are far enough from the threshold to
+  pass with the violation intact.
+- **INV-09** — the two-pass attribution stays entirely inside the activity package. The
+  transitive-import test and the prose-rewrite test both still run.
+- **INV-02** — new report and artifact fields are deterministically ordered, and the report's
+  decision subsection is asserted stable cold and warm.
+- **INV-07** — the 24-bit reader stays windowed, proved over the composed path rather than by a
+  helper assertion.
+- **INV-08** — `ACTIVITY_SEMANTICS_VERSION`, `TIMELINE_SEMANTICS_VERSION` and the new transcript
+  assembly version move where behaviour moved, so caches miss once. Correct, not a cost.
+- **INV-12** — defect 3 removes an invented semantic rather than adding one; defect 4 removes a
+  wall clock from placement entirely.
+- **INV-01, INV-05** — no new write path and no new import.
+
+### Amended after the plan review
+
+`./scripts/codex-review.sh plan 8` produced twelve findings
+(`../reviews/M8-plan-20260803-1729.md`). **Ten accepted outright, two with a narrower remedy.**
+The two that changed this milestone's shape rather than its detail:
+
+- **The planned fix to the bleed veto was a regression** in one case the current code handles
+  correctly — an overlap-only speaker with no solo winners. The fallback table in item 1 is the
+  remedy, and the regression is written before the code.
+- **A defect the charter never listed** — a real DJI track's second chunk refused as a material
+  overlap, because a BWF reference gets a one-sample tolerance against a 1600-sample quantum.
+  Added as defect 2b.
+
+Rejected in part: removing the 24-hour BWF wrap (registered as OQ-026 instead, because deleting
+a spec-required tested capability on a hypothesis is the larger risk), and "no suppression at
+all when a track has too few trusted winners" (too strong in the other direction — it makes a
+track that only ever hears bleed unsuppressible). Both refusals are recorded in the review with
+their reasons.
 
 ---
 

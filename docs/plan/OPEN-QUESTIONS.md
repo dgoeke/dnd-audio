@@ -1027,3 +1027,35 @@ accuracy — it is that a *failed* jam is invisible (**OQ-023**). A chirp would 
 verification robust and cheap, and that is worth doing on its own merits even while the jam
 remains the alignment mechanism. Revisit replacing the jam only if H2 shows the ritual failing
 in practice, or if the power-cycle case turns out never to occur.
+
+## OQ-026 — Does a DJI receiver's timecode counter wrap, and with what period?
+**Assumption:** Yes, at 24 hours — `rasterize.SECONDS_PER_DAY` adds `86400 * sample_rate`
+whole samples to unwrap a `bwf_sample_reference`, and `cycle_units` reports that as the
+evidence's cycle.
+**Why it matters:** Only for a session whose sources' references appear to wrap. Until M8 this
+assumption was implied by a *different* one — that a BWF reference counts samples since real
+midnight, which **OQ-004** disproved. "Device-local counter" does not imply a 24-hour period,
+so the wrap arithmetic lost the reason that used to make it obvious and now stands on its own.
+
+DJI's documentation describes timecode as "a frame counter relative to recording duration"
+that "resets to zero and restarts". A counter with that description might roll at 24 hours
+like SMPTE timecode, at some device-specific width, or never within a battery's life. Nothing
+observed so far distinguishes them: the four jam-capture references sit at ~284 s and ~290 s,
+six orders of magnitude from any plausible wrap.
+
+**Why it is not fixed by removing the wrap.** The inference is spec-required and tested
+(`rollover_session`, M2's completion gate), and a recorder whose reference genuinely *is*
+midnight-relative — which the BWF standard specifies — needs it. Deleting a tested capability
+on a hypothesis about one vendor is the larger risk. What was missing was the registration,
+which is this entry. INV-12 keeps it safe meanwhile: the inference warns
+(`midnight_rollover_inferred`), refuses a tie rather than guessing, and a real DJI session
+never reaches it, because its counters are a few hundred seconds apart and nothing appears to
+wrap.
+**Evidence:** A receiver left running long enough for its counter to approach 24 hours, or
+vendor documentation stating the counter's width. Either settles it; neither is urgent.
+**Needs:** H2, or DJI documentation · **Blocks:** nothing · **Status:** open
+
+**Raised by M8's plan review** (`reviews/M8-plan-20260803-1729.md`, finding 2), which noticed
+that OQ-004's answer had quietly orphaned an assumption nobody had written down. The reviewer
+argued for removing the wrap; the narrower remedy — register it and cite it — is recorded there
+with the reason.

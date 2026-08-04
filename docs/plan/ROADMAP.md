@@ -164,7 +164,7 @@ silently dropped at the ownership boundary.
 **Gate:** each defect has a test that would fail if it regressed; a 24-bit source converts
 bit-exactly; a 11.31 ms cross-receiver offset raises no disagreement and a 120 ms one does;
 dropped words are counted and named; a synthetic fixture calibrated from the measured
-`samples2` acoustics (17.4 dB rejection) is checked in, with no session audio committed.
+jam-capture acoustics (17.4 dB rejection) is checked in, with no session audio committed.
 
 ### M7 — Archival and local disk reclamation (sketch)
 
