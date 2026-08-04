@@ -123,7 +123,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | M5  | Automix                    | closed      | `d282688` |
 | M6a | ROCm environment           | closed      | `f5c6632` |
 | M6b | Qwen adapter               | closed      | `07cebdb` |
-| M8  | Real-session readiness     | in progress | —         |
+| M8  | Real-session readiness     | verified    | —         |
 | H1  | Hardware fixture (2 min)   | not started | —         |
 | H2  | Drift soak / first session | not started | —         |
 | M7  | Archival (sketch)          | sketch      | —         |
