@@ -80,6 +80,30 @@ class TestVoiceLevelCorrection:
         assert "-60.00 dBFS" in message
         assert "+6.00 dB" in message
 
+    def test_a_clamped_track_says_how_much_speech_its_reference_came_from(self) -> None:
+        """M8 defect 6: the old message named one cause and it was the wrong one.
+
+        On the 2026-08-03 capture this fired for a track whose transmitter gain matched the
+        others to 2.7 dB, against a reference of -57.80 dBFS that was measuring the room —
+        and it told the operator to go and check the hardware. Both readings are now named,
+        with the number that distinguishes them (diagnostic 8).
+        """
+        found = level_corrections(
+            a_graph(
+                tracks=[
+                    a_track("tx-a", speech_reference_mbfs=-6000, reference_candidate_count=0),
+                    a_track("tx-b", speech_reference_mbfs=-2800, reference_candidate_count=9),
+                    a_track("tx-c", speech_reference_mbfs=-2700, reference_candidate_count=7),
+                ]
+            ),
+            settings=EnvelopeConfig(max_level_correction_db=6.0),
+        )
+        message = next(note.message for note in found.warnings)
+        assert "0 attributed candidate(s)" in message
+        assert "too little of this person's own speech" in message
+        # And it no longer asserts the cause it cannot know.
+        assert "usually a mounting" not in message
+
     def test_a_track_with_no_reference_is_corrected_by_zero_and_warned_about(self) -> None:
         """`None` is "unknown", never zero (ADR-0014, and M3's closeout says so twice).
 

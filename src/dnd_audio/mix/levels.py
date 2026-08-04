@@ -153,8 +153,12 @@ def level_corrections(graph: ActivityGraph, *, settings: EnvelopeConfig) -> Leve
                         f"{track.track_id} speaks at {reference / MILLIBELS_PER_DB:.2f} dBFS "
                         f"against a session target of {target / MILLIBELS_PER_DB:.2f}, which "
                         f"wants {wanted / MILLIBELS_PER_DB:+.2f} dB of correction. Clamped to "
-                        f"{correction / MILLIBELS_PER_DB:+.2f} dB. A lav this far out is "
-                        f"usually a mounting or gain problem the mix should not hide."
+                        f"{correction / MILLIBELS_PER_DB:+.2f} dB. That reference was measured "
+                        f"from {track.reference_candidate_count} attributed candidate(s). "
+                        f"Two readings fit: a lav mounted or gained differently from the rest, "
+                        f"which the mix should not hide — or a reference measured from too "
+                        f"little of this person's own speech, which is not a hardware problem "
+                        f"at all. The candidate count is which."
                     ),
                     path=track.track_id,
                 )

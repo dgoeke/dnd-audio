@@ -26,11 +26,13 @@ from dnd_audio.fixtures.session import (
 )
 
 __all__ = [
+    "BLEED_REJECTION_DB",
     "BWF_REFERENCE_QUANTUM_SAMPLES",
     "DELAYED_BLEED_SAMPLES",
     "DRIFT_END_SHIFT_SAMPLES",
     "QUANTIZED_BACKWARD_SAMPLES",
     "WALL_CLOCK_SKEW",
+    "bleed_dominated_session",
     "constant_offset_session",
     "delayed_bleed_session",
     "drift_session",
@@ -279,6 +281,86 @@ def drift_session() -> FixtureSession:
                 utterance_id="utt_drift_a",
                 text="Testing, one two.",
             ),
+        ),
+    )
+
+
+#: Bleed rejection measured on the 2026-08-03 jam capture: direct speech about -39 dBFS,
+#: the same speech on a neighbouring lav about -56, over a -66 dBFS floor. Every other
+#: number in :func:`bleed_dominated_session` is chosen to land on those.
+BLEED_REJECTION_DB: Final = 17.4
+
+
+def bleed_dominated_session() -> FixtureSession:
+    """Four people at one table, so three quarters of every track is somebody else.
+
+    This is the shape M8's defect 1 was invisible on every other fixture: with four
+    speakers each talking a quarter of the time, **three of any track's four candidates are
+    bleed**, so a speech reference taken as a percentile of *all* candidates lands in bleed
+    territory for everyone. On the real capture that moved one track's reference by 17 dB
+    and pulled the mix's level correction into its clamp — against a reference that was
+    measuring the room rather than the wearer.
+
+    Calibrated from the capture rather than invented: :data:`BLEED_REJECTION_DB` of
+    rejection, over the generator's own noise floor. Synthetic, because no session audio is
+    ever committed (INV-06) — what is reproduced is the *ratio*, which is what the estimator
+    sees.
+
+    **`tx-a` speaks twice and everyone else once**, which is what makes this fixture
+    discriminating rather than merely wrong. With four equal speakers every track's
+    percentile lands in bleed together, the median moves with them, and the mix's level
+    correction never notices. Give one person a second turn and their old-style reference
+    crosses to their own speech while the other three stay in the room — a 17 dB spread
+    across tracks whose transmitter gains actually match, which is exactly what pulled the
+    real capture's correction into its clamp and pointed the operator at hardware that was
+    fine.
+
+    Utterances are staggered with no overlap at all, so every candidate is unambiguously one
+    person's own speech or one person's bleed. A fixture with genuine simultaneous speech
+    would be testing the veto instead, and `mutual_bleed_session` already does that.
+    """
+    speakers = ("tx-a", "tx-b", "tx-c", "tx-d", "tx-a")
+    length = 24 * _SECOND
+    return FixtureSession(
+        session_id="bleed-dominated",
+        title="Bleed dominated",
+        tracks=(
+            _track("tx-a", "alice", (FixtureChunk(start_sample=0, n_samples=length, sequence=1),)),
+            _track(
+                "tx-b",
+                "bob",
+                (FixtureChunk(start_sample=0, n_samples=length, sequence=1),),
+                tx_label="TX02",
+                channel=2,
+            ),
+            _track(
+                "tx-c",
+                "carol",
+                (FixtureChunk(start_sample=0, n_samples=length, sequence=1),),
+                receiver="rx-b",
+                tx_label="TX01",
+            ),
+            _track(
+                "tx-d",
+                "dave",
+                (FixtureChunk(start_sample=0, n_samples=length, sequence=1),),
+                receiver="rx-b",
+                tx_label="TX02",
+                channel=2,
+            ),
+        ),
+        speech=tuple(
+            SpeechInterval(
+                track_id=speaker,
+                start_sample=(2 + 4 * index) * _SECOND,
+                n_samples=2 * _SECOND,
+                bleeds_into=tuple(dict.fromkeys(other for other in speakers if other != speaker)),
+                bleed_attenuation_db=BLEED_REJECTION_DB,
+                gain=0.08,
+                utterance_id=f"utt_bleed_{index}_{speaker}",
+                text=f"This is {speaker}, turn {index + 1}.",
+            )
+            for index, speaker in enumerate(speakers)
         ),
     )
 

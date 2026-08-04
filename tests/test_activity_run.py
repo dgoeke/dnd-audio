@@ -31,16 +31,20 @@ from dnd_audio.activity import ACTIVITY_RELATIVE_PATH, DETECTION_DIRNAME
 from dnd_audio.activity.runner import ActivityResult, DetectorBundle, run_activity
 from dnd_audio.artifacts.activity import ActivityGraph
 from dnd_audio.artifacts.report import StageName, StageStatus
+from dnd_audio.config import load_session_config
 from dnd_audio.errors import ExitCode
 from dnd_audio.fakes import ScriptedActivityDetector
 from dnd_audio.fixtures import FixtureSession, FixtureTruth, build_session
 from dnd_audio.fixtures.variants import (
+    BLEED_REJECTION_DB,
     DELAYED_BLEED_SAMPLES,
+    bleed_dominated_session,
     delayed_bleed_session,
     mutual_bleed_session,
 )
 from dnd_audio.inspection import OUTPUT_DIRNAME
 from dnd_audio.interfaces import AudioWindow, SpeechSpan
+from dnd_audio.mix.levels import level_corrections
 from dnd_audio.timeline import DERIVATIVE_SAMPLE_RATE, TIMELINE_RELATIVE_PATH
 
 #: The fixture's declared bleed delay, on the grid the detector works at.
@@ -246,6 +250,75 @@ class TestTheBleedFixtures:
         truth = a_session(mutual_bleed_session())
         graph = graph_of(run_activity(truth.session_dir, detector=leaky(truth)))
         assert all(track.speech_reference_mbfs is not None for track in graph.tracks)
+
+
+class TestTheBleedDominatedSession:
+    """M8 defect 1, over real audio calibrated from the 2026-08-03 capture.
+
+    Four people at one table: three quarters of every track's candidates are somebody
+    else's voice, at the measured 17.4 dB of rejection. That ratio is what defeated the
+    old all-candidates percentile, and it appears on no other fixture here — the canonical
+    session's tracks each have too few candidates for a reference at all.
+    """
+
+    def test_every_reference_is_its_own_wearers_speech(
+        self, a_session: Callable[[FixtureSession], FixtureTruth]
+    ) -> None:
+        """Direct speech is about -39 dBFS and bleed about -56. Nothing lands between."""
+        truth = a_session(bleed_dominated_session())
+        graph = graph_of(run_activity(truth.session_dir, detector=leaky(truth)))
+
+        references = {
+            track.track_id: track.speech_reference_mbfs
+            for track in graph.tracks
+            if track.speech_reference_mbfs is not None
+        }
+        assert len(references) == 4
+        for track_id, reference in references.items():
+            assert -4200 <= reference <= -3600, f"{track_id} at {reference / 100:.2f} dBFS"
+
+        # Diagnostic 8 makes that reproducible from the artifact alone: every reference was
+        # measured from candidates this track actually won, not from what it overheard.
+        counts = {track.track_id: track.reference_candidate_count for track in graph.tracks}
+        assert all(count >= 1 for count in counts.values()), counts
+        assert counts["tx-a"] == 2, "the one speaker with two turns"
+
+    def test_the_spread_across_tracks_is_smaller_than_the_bleed_rejection(
+        self, a_session: Callable[[FixtureSession], FixtureTruth]
+    ) -> None:
+        """The property defect 6 turns on, stated as a bound rather than as four numbers.
+
+        These transmitters are set identically. Under the old estimator one track's
+        reference crossed to its own speech while three stayed in the room, giving a 16 dB
+        spread — which the mix then read as one lav being mounted wrong.
+        """
+        truth = a_session(bleed_dominated_session())
+        graph = graph_of(run_activity(truth.session_dir, detector=leaky(truth)))
+        references = [
+            track.speech_reference_mbfs
+            for track in graph.tracks
+            if track.speech_reference_mbfs is not None
+        ]
+        spread_db = (max(references) - min(references)) / 100
+        assert spread_db < 3.0, f"{spread_db:.2f} dB apart"
+        assert spread_db < BLEED_REJECTION_DB
+
+    def test_the_mix_does_not_clamp_a_correction_on_it(
+        self, a_session: Callable[[FixtureSession], FixtureTruth]
+    ) -> None:
+        """Defect 6, resolved by defect 1's fix rather than by editing the message.
+
+        The charter is explicit that this is the order: a warning naming the wrong cause is
+        a symptom, and rewording it while the reference is still measuring the room would
+        leave the mix applying a correction computed from bleed.
+        """
+        truth = a_session(bleed_dominated_session())
+        graph = graph_of(run_activity(truth.session_dir, detector=leaky(truth)))
+        config = load_session_config(truth.session_dir / "session.yaml")
+
+        corrections = level_corrections(graph, settings=config.mix.envelope)
+        assert [item.track_id for item in corrections.corrections if item.clamped] == []
+        assert [note.code for note in corrections.warnings] == []
 
 
 class TestDeterminism:
