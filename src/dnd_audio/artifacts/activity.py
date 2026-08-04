@@ -355,6 +355,20 @@ class ActivityTrack(_Artifact):
     #: of it, which disables the veto for this track rather than silently setting it to zero
     #: (ADR-0014). M5 reads this as its per-track voice-level correction.
     speech_reference_mbfs: int | None = None
+    #: How many candidates the reference above was measured from, and how the track's
+    #: candidates were decided. Additive optional fields (ADR-0005); the schema stays at 1.
+    #:
+    #: These exist because the defect ADR-0029 fixes was **invisible**: the reference was
+    #: landing on bleed, and finding that out meant measuring the audio by hand and
+    #: reverse-engineering a percentile. Since ADR-0029 the reference's population is a
+    #: *subset* of the track's candidates, so it can no longer be reconstructed from the
+    #: candidate list at all — which would have made the same defect permanently unauditable
+    #: from the artifact. `reference_candidate_count` is zero exactly when there is no
+    #: reference, and equals `candidate_count` when the fallback supplied one.
+    candidate_count: int = Field(default=0, ge=0)
+    reference_candidate_count: int = Field(default=0, ge=0)
+    retained_candidate_count: int = Field(default=0, ge=0)
+    suppressed_candidate_count: int = Field(default=0, ge=0)
 
 
 class ActivityGraph(_Artifact):

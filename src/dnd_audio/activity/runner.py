@@ -582,6 +582,7 @@ def _graph(
 ) -> ActivityGraph:
     """Assemble the frozen document from the decisions (ADR-0012)."""
     ids = [candidate_id(item.track_id, item.start_sample) for item in candidates]
+    tallies = _tallies(candidates, decided)
 
     tracks = [
         ActivityTrack(
@@ -593,6 +594,10 @@ def _graph(
             probability_frames=frames[track.track_id][0],
             frame_samples=DETECTOR_FRAME_SAMPLES,
             speech_reference_mbfs=decided.speech_references.get(track.track_id),
+            candidate_count=tallies[track.track_id][0],
+            retained_candidate_count=tallies[track.track_id][1],
+            suppressed_candidate_count=tallies[track.track_id][2],
+            reference_candidate_count=decided.reference_candidate_counts.get(track.track_id, 0),
         )
         for track in timeline.tracks
         if track.track_id in keys
@@ -644,6 +649,34 @@ def _graph(
         warnings=notes,
         decisions=_decisions(candidates, ids, decided.attributions),
     )
+
+
+def _tallies(
+    candidates: list[CandidateInput], decided: AttributionResult
+) -> dict[str, tuple[int, int, int]]:
+    """Per track: ``(candidates, retained, suppressed)``, defaulting to zero.
+
+    Every track in the roster gets an entry, including one the detector found nothing on — a
+    track absent from this mapping would make the graph's tallies depend on whether anyone
+    spoke, and "no candidates" is a fact worth stating rather than a gap.
+    """
+    tallies = {candidate.track_id: (0, 0, 0) for candidate in candidates}
+    for item in decided.attributions:
+        track_id = candidates[item.index].track_id
+        total, retained, suppressed = tallies[track_id]
+        tallies[track_id] = (
+            total + 1,
+            retained + (item.decision == "retained"),
+            suppressed + (item.decision == "suppressed"),
+        )
+    return _WithZero(tallies)
+
+
+class _WithZero(dict[str, tuple[int, int, int]]):
+    """A tally mapping that answers zero for a track nothing was detected on."""
+
+    def __missing__(self, key: str) -> tuple[int, int, int]:
+        return (0, 0, 0)
 
 
 def _candidate(source: CandidateInput, ids: list[str], found: Attribution) -> ActivityCandidate:
@@ -783,6 +816,26 @@ def _record_decisions(builder: ReportBuilder, graph: ActivityGraph) -> None:
     vanished needs the four terms, the correlation, the lag, and the level difference — the
     same values the graph carries, in the artifact a human opens first.
     """
+    for track in graph.tracks:
+        builder.record_decision(
+            Decision(
+                code="activity_track_reference",
+                subject=track.track_id,
+                detail=_reference_detail(track),
+                details={
+                    "speech_reference_mbfs": (
+                        "unknown"
+                        if track.speech_reference_mbfs is None
+                        else str(track.speech_reference_mbfs)
+                    ),
+                    "reference_candidate_count": str(track.reference_candidate_count),
+                    "candidate_count": str(track.candidate_count),
+                    "retained_candidate_count": str(track.retained_candidate_count),
+                    "suppressed_candidate_count": str(track.suppressed_candidate_count),
+                },
+            )
+        )
+
     scored = {candidate.candidate_id: candidate for candidate in graph.candidates}
     for decision in graph.decisions:
         candidate = scored.get(decision.subject)
@@ -794,6 +847,38 @@ def _record_decisions(builder: ReportBuilder, graph: ActivityGraph) -> None:
                 details={} if candidate is None else _diagnostics(candidate),
             )
         )
+
+
+def _reference_detail(track: ActivityTrack) -> str:
+    """Why this track's veto is set where it is, in the operator's own terms.
+
+    The three cases ADR-0029 distinguishes read very differently to someone debugging a
+    session, and the numbers alone do not separate them: a reference measured from one
+    attributed candidate and one inherited from the unclassified fallback are the same integer
+    with very different standing.
+    """
+    if track.speech_reference_mbfs is None:
+        return (
+            f"{track.track_id} has no speech reference: {track.candidate_count} candidate(s), "
+            f"none of which established what its wearer sounds like, so its bleed veto is "
+            f"inactive and its candidates are decided on margin and correlation alone."
+        )
+    level = track.speech_reference_mbfs / 100
+    if track.reference_candidate_count and track.retained_candidate_count:
+        source = (
+            f"measured from {track.reference_candidate_count} candidate(s) that won attribution"
+        )
+    else:
+        source = (
+            f"measured from all {track.reference_candidate_count} of its candidates, because "
+            f"none won attribution outright — the fallback that keeps a speaker who is always "
+            f"overlapped from losing their veto (ADR-0029)"
+        )
+    return (
+        f"{track.track_id} speaks at {level:.2f} dBFS, {source}. "
+        f"{track.retained_candidate_count} retained, {track.suppressed_candidate_count} "
+        f"suppressed of {track.candidate_count}."
+    )
 
 
 def _first_vetoed(candidate: ActivityCandidate) -> CandidateEvidence | None:

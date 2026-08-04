@@ -74,7 +74,7 @@ DETECTOR_CONTEXT_SAMPLES: Final = 64
 #: One version for the package, for the reason M1 and M2 both give: a cache identity that
 #: varied one module's version but not another's keeps serving the answer a fixed bug
 #: produced.
-ACTIVITY_SEMANTICS_VERSION: Final = 1
+ACTIVITY_SEMANTICS_VERSION: Final = 2
 
 
 def to_permille(value: float) -> int:

@@ -279,6 +279,12 @@
       "additionalProperties": false,
       "description": "One transmitter's detection results and the person wearing it.",
       "properties": {
+        "candidate_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Candidate Count",
+          "type": "integer"
+        },
         "detection_cache_key": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Detection Cache Key",
@@ -298,6 +304,18 @@
           "minLength": 1,
           "title": "Probability Relative Path",
           "type": "string"
+        },
+        "reference_candidate_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Reference Candidate Count",
+          "type": "integer"
+        },
+        "retained_candidate_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Retained Candidate Count",
+          "type": "integer"
         },
         "speaker_id": {
           "minLength": 1,
@@ -320,6 +338,12 @@
           ],
           "default": null,
           "title": "Speech Reference Mbfs"
+        },
+        "suppressed_candidate_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Suppressed Candidate Count",
+          "type": "integer"
         },
         "track_id": {
           "minLength": 1,

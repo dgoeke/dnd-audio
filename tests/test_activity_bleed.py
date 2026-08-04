@@ -274,12 +274,23 @@ class TestTheVeto:
     def test_the_same_audio_is_suppressed_when_the_track_has_no_reference(self) -> None:
         """The contrast that makes the previous test mean something.
 
-        One knob — whether `tx-b` has enough of its own speech to know what its wearer sounds
+        One thing — whether `tx-b` has enough of its own speech to know what its wearer sounds
         like — flips the outcome on identical audio. That is the veto being load-bearing
         rather than incidental.
+
+        **Both floors are raised, and that is the only change ADR-0029 made here.** After the
+        two-pass estimator there are two populations a reference can come from — the
+        candidates that won attribution, and the unclassified mixture it falls back to — so
+        putting a track beyond reach of a reference means putting it beyond reach of both. The
+        claim under test is unchanged: no reference, no veto, and the identical overlap is
+        suppressed.
         """
         room, candidates = self.room(overlap_gain=0.03)
-        found, decided = self.overlap(room, candidates, settings(min_reference_candidates=99))
+        found, decided = self.overlap(
+            room,
+            candidates,
+            settings(min_reference_candidates=99, min_attributed_reference_candidates=99),
+        )
 
         assert found.speech_references["tx-b"] is None
         assert decided.decision == "suppressed"
@@ -372,11 +383,26 @@ class TestTheEvidenceSaysWhatActuallyHappened:
 
 class TestSpeechReferences:
     def test_a_track_below_the_minimum_has_no_reference(self) -> None:
-        """Recorded as absent rather than defaulted: a reference estimated from one region is
-        as likely to be measuring bleed as speech, and a veto built on it fires backwards."""
+        """Recorded as absent rather than defaulted: a reference estimated from one region of
+        an *unclassified mixture* is as likely to be measuring bleed as speech, and a veto
+        built on it fires backwards.
+
+        The two tracks here take the two different paths ADR-0029 separates, on one run:
+
+        * `tx-a` speaks and wins its candidate, so **one winner is enough** — the gate has
+          already concluded that region is this wearer, which is direct evidence in a way
+          three candidates of a mixture are not.
+        * `tx-b` only ever *hears* `tx-a`. It wins nothing, so it falls back to the mixture,
+          where one candidate is below `min_reference_candidates` and the answer is `None`.
+          That is what keeps a pure listener suppressible, which is the gate's whole purpose.
+        """
         room, candidates = two_speaker_room(speaker_gain=0.3, listener_gain=0.05, correlated=True)
         found = attribute(candidates, read=room.read, config=settings())
-        assert found.speech_references == {"tx-a": None, "tx-b": None}
+
+        assert found.speech_references["tx-b"] is None
+        assert found.reference_candidate_counts["tx-b"] == 0
+        assert found.speech_references["tx-a"] is not None
+        assert found.reference_candidate_counts["tx-a"] == 1
 
     def test_the_reference_is_the_upper_quartile_of_a_tracks_own_levels(self) -> None:
         """Not the median.
@@ -407,6 +433,144 @@ class TestSpeechReferences:
             "people would set its own speech level at bleed"
         )
         assert references["tx-a"] in levels, "nearest, not interpolated: no invented level"
+
+
+class TestTheReferenceComesFromTheWinners:
+    """ADR-0029, and the defect that produced it.
+
+    `speech_references` — the bootstrap estimator — takes the upper quartile of *every*
+    candidate on a track. On the 2026-08-03 jam capture that put `tx-d`'s reference at
+    -57.80 dBFS, which is the level of the bleed it was hearing, not the level its wearer
+    speaks at. One extra bleed candidate moved it 17 dB, because `nearest` interpolation
+    lands on the largest of three values and the second-largest of four.
+
+    The arithmetic gets worse with the roster, not better: at six speakers roughly 83% of any
+    track's candidates are bleed, so the upper quartile sits in bleed territory for *every*
+    participant. That is why raising the percentile is not a fix and why the population had to
+    change instead.
+    """
+
+    def room(self, *, bleed_candidates: int) -> tuple[Room, list[CandidateInput]]:
+        """One own-speech candidate on `tx-a`, and `bleed_candidates` copies of `tx-b`.
+
+        Calibrated to the jam capture's measured acoustics: `tx-a`'s wearer is 17.4 dB above
+        what `tx-a` hears of `tx-b`, which is the separation that recording actually had.
+        """
+        total = (4 + 3 * (bleed_candidates + 1)) * SECOND
+        speaker = synth.noise_floor(total, seed=11)
+        other = synth.noise_floor(total, seed=12)
+
+        candidates: list[CandidateInput] = []
+        own_at = 2 * SECOND
+        speaker[own_at : own_at + SECOND] += voice(21, gain=0.30, n_samples=SECOND)
+        candidates.append(candidate("tx-a", own_at, own_at + SECOND))
+
+        for index in range(bleed_candidates):
+            at = (5 + 3 * index) * SECOND
+            spoken = voice(30 + index, gain=0.30, n_samples=SECOND)
+            other[at : at + SECOND] += spoken
+            # 17.4 dB down on `tx-a`: what a lav across the table hears of someone else.
+            speaker[at : at + SECOND] += synth.bleed_of(
+                spoken, delay_samples=BLEED_LAG, attenuation_db=17.4
+            )[:SECOND]
+            candidates.append(candidate("tx-a", at, at + SECOND))
+            candidates.append(candidate("tx-b", at, at + SECOND))
+
+        return Room({"tx-a": speaker, "tx-b": other}), candidates
+
+    @pytest.mark.parametrize("bleed_candidates", range(1, 9))
+    def test_the_reference_lands_on_own_speech_however_much_bleed_there_is(
+        self, bleed_candidates: int
+    ) -> None:
+        """The completion criterion, spanning the boundary the old estimator fails at.
+
+        The old rule passes at two bleed candidates and fails from three onward, so a test at
+        a single N would have been a coin flip on which side it landed. `tx-a` has exactly one
+        candidate of its own throughout; everything else on that track is someone else.
+        """
+        room, candidates = self.room(bleed_candidates=bleed_candidates)
+        found = attribute(candidates, read=room.read, config=settings())
+
+        levels = measure_levels(candidates, read=room.read, config=settings())
+        own = levels[0]
+        reference = found.speech_references["tx-a"]
+
+        assert reference == own, (
+            f"with {bleed_candidates} bleed candidate(s) the reference is {reference}, not "
+            f"tx-a's own speech at {own}. A reference anchored on bleed sets the veto at "
+            f"bleed, which protects bleed from suppression."
+        )
+        assert found.reference_candidate_counts["tx-a"] == 1
+
+    def test_the_old_estimator_really_does_fail_here(self) -> None:
+        """A contrast, so the parametrized test above is known to be capable of failing.
+
+        Asserting that a fixed estimator succeeds proves nothing unless the broken one is
+        shown to fail on the identical audio. Three bleed candidates is where `nearest`
+        interpolation crosses over.
+        """
+        room, candidates = self.room(bleed_candidates=3)
+        levels = measure_levels(candidates, read=room.read, config=settings())
+        bootstrap = speech_references(candidates, levels, config=settings())
+
+        assert bootstrap["tx-a"] != levels[0], (
+            "the all-candidates estimator is supposed to be wrong here — if it is not, this "
+            "fixture no longer reproduces the defect ADR-0029 exists for"
+        )
+
+    def test_a_speaker_who_only_ever_overlaps_is_not_deleted(self) -> None:
+        """The regression the plan review produced, and the reason the fallback exists.
+
+        A quieter person who speaks *only* while someone else is speaking wins nothing in the
+        first pass — every one of their candidates is contested. A winners-only reference
+        would therefore leave them with none, disable their veto, and suppress them: exactly
+        the failure ADR-0014 was written against, reintroduced by the fix for a different one.
+
+        `mutual_bleed_session` cannot show this, because it gives its quiet speaker three solo
+        utterances. Here `tx-b` has none: every one of its candidates is dominated by `tx-a`
+        and correlated with it, so the first pass condemns all three.
+
+        **The fixture is asserted to have that shape rather than assumed to.** A first draft
+        of this test used a gain that left `tx-b` one surviving candidate in the first pass,
+        so the fallback never ran and the test passed for the wrong reason — it was caught by
+        reverting the fallback and watching nothing fail. `reference_candidate_count` counts
+        *attributed* candidates, so zero-with-a-reference is the fallback's signature and is
+        what makes the mechanism visible from the public result.
+        """
+        total = 14 * SECOND
+        loud = synth.noise_floor(total, seed=13)
+        quiet = synth.noise_floor(total, seed=14)
+
+        candidates: list[CandidateInput] = []
+        for index in range(3):
+            at = (2 + 4 * index) * SECOND
+            speech = voice(50 + index, gain=0.30, n_samples=2 * SECOND)
+            answer = voice(60 + index, gain=0.02, n_samples=2 * SECOND)
+            loud[at : at + 2 * SECOND] += speech
+            quiet[at : at + 2 * SECOND] += answer
+            # tx-b's lav carries tx-a as well as its own wearer, which is what makes every one
+            # of tx-b's candidates dominated *and* correlated — both numeric conditions for
+            # suppression, on every candidate it has.
+            quiet[at : at + 2 * SECOND] += synth.bleed_of(
+                speech, delay_samples=BLEED_LAG, attenuation_db=18.0
+            )[: 2 * SECOND]
+            candidates.append(candidate("tx-a", at, at + 2 * SECOND))
+            candidates.append(candidate("tx-b", at, at + 2 * SECOND))
+
+        room = Room({"tx-a": loud, "tx-b": quiet})
+        found = attribute(candidates, read=room.read, config=settings())
+        by_track = {candidates[item.index].track_id: item.decision for item in found.attributions}
+
+        assert found.reference_candidate_counts["tx-b"] == 0, (
+            "this fixture is supposed to leave tx-b with no attributed candidates at all — "
+            "if it has one, the winners population is non-empty and the fallback under test "
+            "never runs"
+        )
+        assert found.speech_references["tx-b"] is not None, (
+            "tx-b won nothing, so the reference must come from the fallback — otherwise the "
+            "veto cannot fire and a real speaker is deleted"
+        )
+        assert by_track["tx-b"] == "retained"
 
 
 class TestTheMeasurements:

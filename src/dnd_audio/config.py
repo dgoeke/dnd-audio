@@ -363,10 +363,17 @@ class BleedConfig(_Strict):
     #: the few places holding a contiguous array and an unbounded value in a session file
     #: would be an INV-07 violation an operator could configure.
     correlation_window_ms: int = Field(default=2000, gt=0, le=30_000)
-    #: High-confidence candidates needed before a track has a speech reference at all.
-    #: Below it the veto cannot be evaluated and the graph says so, rather than treating a
-    #: reference of zero as a measurement (OQ-017).
+    #: Candidates needed before a track has a speech reference at all, when the reference is
+    #: estimated from an **unclassified mixture** — the bootstrap pass, and the fallback for a
+    #: track that won nothing. Below it the veto cannot be evaluated and the graph says so,
+    #: rather than treating a reference of zero as a measurement (OQ-017).
     min_reference_candidates: int = Field(default=3, ge=1, le=100)
+    #: The same floor for the population that has already *won* attribution (ADR-0029). One,
+    #: because a winner is direct evidence that this is the wearer speaking, where three of a
+    #: mixture are not — the two populations are not equally good and a single number would be
+    #: set for the wrong one. Two floors rather than one knob selecting the same candidates
+    #: twice, which ADR-0014's amendment rightly warns against (OQ-017).
+    min_attributed_reference_candidates: int = Field(default=1, ge=1, le=100)
 
 
 class ScoringConfig(_Strict):

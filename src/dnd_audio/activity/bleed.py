@@ -20,6 +20,19 @@ deleted. A lav hearing its wearer at the wearer's normal speaking level is not h
 someone across the table, however loud and however correlated that other track is. That is
 what the spec's word *track-relative* is for.
 
+**The gate runs twice, because the third condition is circular** (ADR-0029). "Its own track's
+speech reference" means the level that track's *wearer* speaks at — and before attribution has
+run, the only population available is every region the detector fired on, most of which is
+other people once more than two are at the table. Estimating from that anchors the veto at
+bleed, which protects bleed from suppression: the inverse of the protection it exists to
+provide, and worse the larger the roster. So :func:`attribute` gates once with the veto
+disabled to find out who was speaking, measures the speakers, and gates again for real.
+
+The fallback in :func:`attributed_speech_references` runs the *other* way, and it is not a
+detail: a person who only ever speaks during overlap wins nothing in the first pass, and a
+winners-only rule would leave them reference-less and delete them — the same failure, arrived
+at from the opposite side.
+
 **A candidate kept only by the veto is marked `ambiguous`**, because that is the one case
 where the numeric evidence pointed at bleed and the pipeline overrode it. Marking every
 merely-overlapping candidate ambiguous would make the flag noise; this way it means
@@ -59,25 +72,27 @@ __all__ = [
     "EvidenceRecord",
     "PairMeasurement",
     "attribute",
+    "attributed_speech_references",
     "compare_pairs",
     "measure_levels",
     "speech_references",
 ]
 
-#: Which percentile of a track's candidate levels becomes its speech reference (**OQ-017**).
+#: Which percentile of a track's levels becomes its speech reference (**OQ-017**).
 #:
-#: Not the median, which ADR-0014 originally specified: a track whose wearer spoke twice and
-#: heard four other people has more bleed candidates than speech ones, and the median of that
-#: is a bleed level — which would set the veto at bleed and disable the protection exactly
-#: where it is needed. `nearest` interpolation makes the result one of the measured integers
-#: rather than an average of two (INV-02).
+#: Not the median, which ADR-0014 originally specified: a percentile at or below the middle of
+#: a mixed population is a bleed level, which would set the veto at bleed and disable the
+#: protection exactly where it is needed. `nearest` interpolation makes the result one of the
+#: measured integers rather than an average of two (INV-02).
 #:
-#: This is a guess about a real room, and it is registered as one. Two effects fight here and
-#: only a real session says which wins: including bleed candidates drags the reference *down*
-#: (the veto fires more often — conservative, the direction the spec asks for), while taking
-#: the upper quartile pushes it *up* (a few unusually loud utterances weaken the veto for that
-#: wearer's quieter speech). The graph records every candidate's level and its track's
-#: reference, so answering this is reading one real session rather than running an experiment.
+#: **The percentile is now the smaller half of the estimator.** ADR-0014's amendment recorded
+#: two effects fighting here — including bleed candidates drags the reference down, taking the
+#: upper quartile pushes it up — and registered which wins as a question for a real session.
+#: The 2026-08-03 jam capture answered it: bleed wins, decisively and *worse with roster size*.
+#: At six speakers roughly 83% of any track's candidates are bleed, so no fixed percentile
+#: below that is safe and one above it is estimated from one or two values. What changed in
+#: response is the **population**, not this number — see :func:`attributed_speech_references`
+#: and ADR-0029. The percentile itself remains a guess about a real room.
 REFERENCE_PERCENTILE = 75
 
 #: Returns ``[start, start + n)`` derivative samples of one track, in the session's own
@@ -170,6 +185,11 @@ class AttributionResult:
     #: Per track, the level its wearer speaks at. ``None`` where there was too little
     #: speech to establish one, which disables that track's veto rather than defaulting it.
     speech_references: dict[str, int | None]
+    #: Per track, how many candidates that reference was actually measured from. Recorded
+    #: because after ADR-0029 the population is a *subset* of the track's candidates, so the
+    #: estimate can no longer be reconstructed from the artifact by re-running a percentile
+    #: over the candidate list. Zero for a track with no reference.
+    reference_candidate_counts: dict[str, int]
 
 
 def attribute(
@@ -177,13 +197,23 @@ def attribute(
 ) -> AttributionResult:
     """Measure, score, and gate every candidate in one session.
 
-    Four passes, in this order and not another: levels are needed before references,
-    references and pair measurements before scores, and scores before any suppression can be
-    decided — because the rule compares scores rather than raw levels, which is what stops
-    the four-term score from being a decoration beside a loudness comparison.
+    **Two gating passes, because the single pass was circular** (ADR-0029). The veto asks
+    whether a candidate sits near its own track's speech reference, and the reference is
+    supposed to be the level that track's *wearer* speaks at — but until attribution has run,
+    the only population available is every candidate the detector fired on, most of which is
+    other people's voices once the roster is larger than two. Estimating from that anchors the
+    veto at bleed, which protects bleed from suppression: the inverse of the protection it
+    exists to provide, and worse the more people are at the table.
+
+    So: gate once with the veto disabled to find out who was speaking, measure the speakers,
+    then gate again with the veto against a reference that means what it says. The bootstrap
+    reference exists only to make the *scoring* comparable; the bootstrap pass's suppressions
+    are discarded.
+
+    Levels and pair measurements are computed once and reused, so the second pass costs
+    scoring arithmetic and no additional audio reads (INV-07).
     """
     levels = measure_levels(candidates, read=read, config=config)
-    references = speech_references(candidates, levels, config=config)
     pairs = compare_pairs(candidates, read=read, config=config)
 
     by_candidate: dict[int, list[PairMeasurement]] = {index: [] for index in range(len(candidates))}
@@ -191,6 +221,40 @@ def attribute(
         by_candidate[pair.left].append(pair)
         by_candidate[pair.right].append(pair)
 
+    bootstrap = speech_references(candidates, levels, config=config)
+    provisional = _decide(
+        candidates, levels, bootstrap, by_candidate, config=config, apply_veto=False
+    )
+
+    attributed = {item.index for item in provisional if item.decision == "retained"}
+    references, counts = attributed_speech_references(
+        candidates, levels, attributed, bootstrap=bootstrap, config=config
+    )
+
+    return AttributionResult(
+        attributions=_decide(
+            candidates, levels, references, by_candidate, config=config, apply_veto=True
+        ),
+        speech_references=references,
+        reference_candidate_counts=counts,
+    )
+
+
+def _decide(
+    candidates: Sequence[CandidateInput],
+    levels: Sequence[int],
+    references: dict[str, int | None],
+    by_candidate: dict[int, list[PairMeasurement]],
+    *,
+    config: ActivityConfig,
+    apply_veto: bool,
+) -> tuple[Attribution, ...]:
+    """Score every candidate against ``references`` and gate it.
+
+    Scores come before any suppression can be decided, because the rule compares *scores*
+    rather than raw levels — which is what stops the four-term score from being a decoration
+    beside a loudness comparison (ADR-0014).
+    """
     relative = [
         _relative_level(levels[index], references.get(candidate.track_id))
         for index, candidate in enumerate(candidates)
@@ -205,20 +269,17 @@ def attribute(
         )
         for index, candidate in enumerate(candidates)
     ]
-
-    return AttributionResult(
-        attributions=tuple(
-            _gate(
-                index,
-                levels[index],
-                relative[index],
-                scores,
-                by_candidate[index],
-                config=config,
-            )
-            for index in range(len(candidates))
-        ),
-        speech_references=references,
+    return tuple(
+        _gate(
+            index,
+            levels[index],
+            relative[index],
+            scores,
+            by_candidate[index],
+            config=config,
+            apply_veto=apply_veto,
+        )
+        for index in range(len(candidates))
     )
 
 
@@ -255,15 +316,18 @@ def measure_levels(
 def speech_references(
     candidates: Sequence[CandidateInput], levels: Sequence[int], *, config: ActivityConfig
 ) -> dict[str, int | None]:
-    """What each wearer sounds like when they are the one talking.
+    """The bootstrap reference: :data:`REFERENCE_PERCENTILE` of *every* candidate's level.
 
-    :data:`REFERENCE_PERCENTILE` of that track's own candidate levels — see its note for why
-    that rather than the median, and for the open question it rests on (**OQ-017**).
+    **This is not the reference the veto runs against** — see
+    :func:`attributed_speech_references`. Its population is an unclassified mixture of the
+    wearer's own speech and everyone else's, so at any real roster size it lands on bleed
+    (ADR-0029). Its two jobs are to make the *scoring* comparable during the first pass, whose
+    suppressions are discarded, and to serve as the fallback for a track that won nothing.
 
     ``None`` for a track with fewer than `min_reference_candidates` candidates: a reference
-    estimated from one or two regions is as likely to be measuring bleed as speech, and a
-    veto built on it would fire in the wrong direction. Recording the absence keeps that
-    visible in the graph instead of turning into a reference of zero.
+    estimated from one or two regions of a mixture is as likely to be measuring bleed as
+    speech, and a veto built on it would fire in the wrong direction. Recording the absence
+    keeps that visible in the graph instead of turning into a reference of zero.
     """
     grouped: dict[str, list[int]] = {}
     for candidate, level in zip(candidates, levels, strict=True):
@@ -274,10 +338,76 @@ def speech_references(
         if len(found) < config.bleed.min_reference_candidates:
             references[track_id] = None
             continue
-        references[track_id] = int(
-            np.percentile(np.asarray(found, dtype=np.int64), REFERENCE_PERCENTILE, method="nearest")
-        )
+        references[track_id] = _percentile(found)
     return references
+
+
+def attributed_speech_references(
+    candidates: Sequence[CandidateInput],
+    levels: Sequence[int],
+    attributed: set[int],
+    *,
+    bootstrap: dict[str, int | None],
+    config: ActivityConfig,
+) -> tuple[dict[str, int | None], dict[str, int]]:
+    """What each wearer sounds like, measured from the candidates that **won** attribution.
+
+    :data:`REFERENCE_PERCENTILE` of the winners' levels — the population that a first pass
+    without the veto concluded is this wearer speaking, rather than everything the detector
+    fired on (ADR-0029). Returns the references and, per track, **how many attributed
+    candidates are behind each one** — zero when the fallback supplied it, and zero when there
+    is none. The population is now a subset of a track's candidates, so the estimate is not
+    reconstructible from the artifact without this.
+
+    **The fallback is the interesting part, and it runs the other way to the fix.** A quieter
+    person who speaks *only* during overlap has no uncontested candidates at all, so a
+    winners-only rule would give them no reference, disable their veto, and delete them —
+    precisely the failure ADR-0014 exists to prevent, reintroduced by the fix for a different
+    one. Such a track falls back to the bootstrap reference, which is contaminated in the
+    direction that *keeps* them. Below `min_reference_candidates` there is nothing to fall
+    back to either, and a track with one or two candidates none of which won is a track that
+    only ever *heard* someone — which is what the gate exists to suppress.
+
+    The two floors are deliberately different numbers. One winner is direct evidence; three
+    candidates of a mixture are not (**OQ-017**).
+    """
+    grouped: dict[str, list[int]] = {}
+    won: dict[str, list[int]] = {}
+    for index, (candidate, level) in enumerate(zip(candidates, levels, strict=True)):
+        grouped.setdefault(candidate.track_id, []).append(level)
+        if index in attributed:
+            won.setdefault(candidate.track_id, []).append(level)
+
+    references: dict[str, int | None] = {}
+    counts: dict[str, int] = {}
+    for track_id in sorted(grouped):
+        found = won.get(track_id, [])
+        if len(found) >= config.bleed.min_attributed_reference_candidates:
+            references[track_id] = _percentile(found)
+            counts[track_id] = len(found)
+            continue
+        references[track_id] = bootstrap.get(track_id)
+        # Zero, not `len(grouped[track_id])`: this count means "attributed candidates behind
+        # this reference", and the fallback's answer to that is none. Reporting the mixture's
+        # size here would make a fallback reference indistinguishable from one measured from
+        # that many winners, which is exactly the distinction an operator needs — a reference
+        # of -41 dBFS from three winners and one inherited from an unclassified mixture are
+        # the same integer with very different standing. `speech_reference_mbfs` being
+        # non-null separates "fell back" from "has no reference at all".
+        counts[track_id] = 0
+    return references, counts
+
+
+def _percentile(levels: list[int]) -> int:
+    """:data:`REFERENCE_PERCENTILE` of a track's levels, as one of the measured integers.
+
+    ``nearest`` rather than the default interpolation, so the result is a value that was
+    actually measured rather than an average of two — and does not move with a NumPy upgrade
+    (INV-02).
+    """
+    return int(
+        np.percentile(np.asarray(levels, dtype=np.int64), REFERENCE_PERCENTILE, method="nearest")
+    )
 
 
 def compare_pairs(
@@ -334,12 +464,21 @@ def _gate(
     pairs: Sequence[PairMeasurement],
     *,
     config: ActivityConfig,
+    apply_veto: bool = True,
 ) -> Attribution:
-    """Apply ADR-0014's rule to one candidate against every competitor it overlaps."""
+    """Apply ADR-0014's rule to one candidate against every competitor it overlaps.
+
+    ``apply_veto`` is false for the bootstrap pass only (ADR-0029), which needs to know who
+    would win on margin and correlation alone. Its verdicts never leave :func:`attribute`.
+    """
     settings = config.bleed
     minimum_margin = round(settings.min_score_margin * PERMILLE)
     minimum_correlation = round(settings.min_correlation * PERMILLE)
-    vetoed = relative_level is not None and relative_level >= -round(settings.veto_db * 100)
+    vetoed = (
+        apply_veto
+        and relative_level is not None
+        and relative_level >= -round(settings.veto_db * 100)
+    )
 
     evidence: list[EvidenceRecord] = []
     for pair in sorted(pairs, key=lambda item: item.other(index)):

@@ -93,6 +93,17 @@ FROZEN_FIELDS: Final[frozenset[str]] = frozenset(
         "probability_relative_path",
         "probability_frames",
         "speech_reference_mbfs",
+        # M8's diagnostic 8. Four counts, deliberately admitted one at a time rather than by
+        # relaxing this list: each is an integer tally of decisions the activity stage already
+        # made, so none can carry anything text-derived (INV-09), and together they make the
+        # speech reference auditable from the artifact. That mattered enough to be worth four
+        # entries — ADR-0029's defect was found by measuring audio by hand, and since that fix
+        # the reference's population is a subset of the candidates and cannot be recomputed
+        # from the document at all.
+        "candidate_count",
+        "reference_candidate_count",
+        "retained_candidate_count",
+        "suppressed_candidate_count",
         # ActivityCandidate
         "candidate_id",
         "start_sample",

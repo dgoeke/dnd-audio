@@ -4,9 +4,17 @@ Two habits from earlier milestones' closeouts are followed deliberately.
 
 **The expected samples are derived independently.** During a stretch where nobody is speaking
 every share is `1/N` — a number this test computes from the track count, not from the
-renderer — so the mix there is the plain mean of the six tracks, and the test reads those six
-tracks itself. A test that re-derived the sum by calling the renderer's own helper could only
-prove the sum it re-derived.
+renderer — so the mix there is the mean of the six tracks at their own level corrections, and
+the test reads those six tracks itself. A test that re-derived the sum by calling the
+renderer's own helper could only prove the sum it re-derived.
+
+*The correction used to be absent from that sentence, and the test passed anyway: before
+ADR-0029 the canonical fixture's tracks each had one or two candidates, below
+`min_reference_candidates`, so every reference was `None` and every correction was unity. Now
+that a single attributed candidate establishes a reference, four of the six are corrected and
+the mean is weighted. The share is still `1/N`; it was never the whole coefficient. M5's
+closeout names this exact trap — assert over the applied gain, which is the share times the
+correction, because the share sums to one by construction and proves nothing on its own.*
 
 **Length and container are checked against the timeline, not against the file's own header.**
 A short float32 WAV reads as silence at the end rather than as an error, which is precisely
@@ -96,12 +104,15 @@ class TestTheRenderedMix:
     ) -> None:
         """Where nobody is speaking, every share is `1/N` and the mix is the tracks' mean.
 
-        `1/N` is computed here from the track count, and the six tracks are read here through
-        `TrackReader` — neither number comes from the mixer. The window chosen is inside the
-        fixture's leading silence, before any candidate opens.
+        `1/N` is computed here from the track count, the six tracks are read here through
+        `TrackReader`, and each track's correction comes from `level_corrections` — none of
+        the three comes from the mixer. The window chosen is inside the fixture's leading
+        silence, before any candidate opens.
         """
         session_dir, timeline = reconstructed
         envelope, track_ids = _stream(canonical_activity_graph, timeline)
+        corrections = level_corrections(canonical_activity_graph, settings=EnvelopeConfig())
+        gains = {item.track_id: item.gain for item in corrections.corrections}
         summary = render_mix(
             tmp_path / "mix.wav",
             session_dir=session_dir,
@@ -116,10 +127,15 @@ class TestTheRenderedMix:
         for track_id in track_ids:
             track = next(t for t in timeline.tracks if t.track_id == track_id)
             with TrackReader(session_dir, track, timeline.duration_samples) as reader:
-                expected += reader.read(start, length)
+                expected += reader.read(start, length) * gains[track_id]
         expected /= len(track_ids)
 
         assert mixed[start : start + length] == pytest.approx(expected, abs=1e-6)
+        assert any(gain != pytest.approx(1.0) for gain in gains.values()), (
+            "this fixture is supposed to exercise a non-unity correction — if every gain is "
+            "one, the assertion above has stopped distinguishing the share from the applied "
+            "coefficient and would pass for any correction whatever"
+        )
 
     def test_the_speaker_dominates_the_bleed_where_the_graph_says_so(
         self,
@@ -131,9 +147,16 @@ class TestTheRenderedMix:
 
         tx-a speaks at 249600 and four other lavs hear her. The mix during that stretch must
         be far closer to tx-a's own audio than to the sum of six.
+
+        Compared against tx-a's audio **at her own level correction**, which is what the mixer
+        actually multiplies a sample by. Comparing against the uncorrected track would fold a
+        deliberate 1.26 dB lift into the "residual" and measure the correction rather than the
+        dominance.
         """
         session_dir, timeline = reconstructed
         envelope, track_ids = _stream(canonical_activity_graph, timeline)
+        corrections = level_corrections(canonical_activity_graph, settings=EnvelopeConfig())
+        gain = next(item.gain for item in corrections.corrections if item.track_id == "tx-a")
         summary = render_mix(
             tmp_path / "mix.wav",
             session_dir=session_dir,
@@ -146,7 +169,7 @@ class TestTheRenderedMix:
         start, length = 260_000, 20_000
         alice = next(t for t in timeline.tracks if t.track_id == "tx-a")
         with TrackReader(session_dir, alice, timeline.duration_samples) as reader:
-            own = reader.read(start, length)
+            own = reader.read(start, length) * gain
 
         window = mixed[start : start + length]
         residual = window - own

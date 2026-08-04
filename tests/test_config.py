@@ -798,6 +798,7 @@ class TestActivityConfigAndStageScopes:
             "veto_db": 12.0,
             "correlation_window_ms": 2000,
             "min_reference_candidates": 3,
+            "min_attributed_reference_candidates": 1,
         }
         stated_scoring = {
             "level_weight": 0.35,
