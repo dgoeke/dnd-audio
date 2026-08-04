@@ -14,6 +14,12 @@ multi-hour clock stability, which is H2.
 
 ## Recording recipe (for the owner)
 
+The printable, executable version of this checklist is
+[`docs/H1-two-person-recording-runbook.md`](../../H1-two-person-recording-runbook.md). It
+covers all six transmitters and all three receivers with one operator and one other person,
+including the private event log, timed spoken script, immediate jam check, power cycle, transfer
+guard, and post-capture scoring controls.
+
 - [ ] Durable labels on receivers `rx-a`–`rx-c` and transmitters `tx-a`–`tx-f`.
 - [ ] **Timecode frame rate the same on all three receivers.** 30 fps is fine. An earlier
       version of this recipe asked for 60 fps to halve the quantum from 1600 samples to 800;
