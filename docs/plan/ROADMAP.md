@@ -18,9 +18,14 @@ M0 Foundation
                                                                           │
                               M6a ROCm env ── M6b Qwen adapter ────────────┴─ MVP
                                                             │                 │
-                                                            │                 └─ M7 Archival
-                                                            └─ H2 Drift soak      (sketch)
+                                                            │                 └─ M8 Readiness
+                                                            └─ H2 Drift soak      └─ M7 Archival
+                                                                                     (sketch)
 ```
+
+M8 sits between the MVP and the first real session: M7 explicitly waits until a real
+session has been processed and validated, and M8 is what makes that recording safe to
+attempt. Its number is later than M7's; its position is earlier.
 
 M5 depends only on M3, never on M4 or M6 — the mix must survive a transcription
 failure. M6a can start any time after M0; it is sequenced late only because
@@ -138,6 +143,28 @@ the transcript.
 **Gate:** A short real transcription + alignment smoke test passes on the target
 host; changing `max_new_tokens` invalidates the cache; the default (non-`host_smoke`)
 suite still passes without any of it installed.
+
+### M8 — Real-session readiness
+
+Structural fixes and diagnostics that make the first real session safe to record and
+worth analyzing. Numbered after M7 but **ordered before it**: M7 waits on a processed
+real session, and this is what makes recording one worthwhile.
+
+Seven defects, all structural rather than threshold-shaped, so none waits on tuning data:
+the bleed veto's speech reference is computed from bleed and gets worse with roster size;
+`ingest` refuses 24-bit `orig` files with a reason that is false for 24-bit; the timing
+model still encodes the midnight-relative semantic OQ-004 disproved; nothing prevents
+`origination_time` being used as a cross-receiver anchor when it was measured 48.7 s wrong;
+`sync_qa` warns below the hardware quantum and discards correct low-correlation
+measurements; the mix's clamp warning names mounting when the cause is bleed; and M4's
+deferred three-way collapse decision now has the real output it was waiting for. Plus two
+diagnostics — per-track speech reference in the activity graph, and a count of words
+silently dropped at the ownership boundary.
+
+**Gate:** each defect has a test that would fail if it regressed; a 24-bit source converts
+bit-exactly; a 11.31 ms cross-receiver offset raises no disagreement and a 120 ms one does;
+dropped words are counted and named; a synthetic fixture calibrated from the measured
+`samples2` acoustics (17.4 dB rejection) is checked in, with no session audio committed.
 
 ### M7 — Archival and local disk reclamation (sketch)
 

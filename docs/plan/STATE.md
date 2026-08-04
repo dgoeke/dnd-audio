@@ -7,7 +7,10 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 
 ## Right now
 
-- **Current milestone:** H1 — real DJI hardware fixture (not started)
+- **Current milestone:** M8 — real-session readiness (not started). H1 is still the
+  oldest outstanding item, but M8 is what makes recording it worth doing: the
+  2026-08-03 `samples2` run found seven structural defects, one of which can cost a
+  whole session and one of which corrupts both deliverables at once.
 - **Branch:** `main`
 - **Last closed milestone:** M6b — Qwen adapter
 - **Gate status at HEAD:** passes, zero skips (8 checks, 2294 tests)
@@ -119,6 +122,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | M5  | Automix                    | closed      | `d282688` |
 | M6a | ROCm environment           | closed      | `f5c6632` |
 | M6b | Qwen adapter               | closed      | `07cebdb` |
+| M8  | Real-session readiness     | not started | —         |
 | H1  | Hardware fixture (2 min)   | not started | —         |
 | H2  | Drift soak / first session | not started | —         |
 | M7  | Archival (sketch)          | sketch      | —         |
