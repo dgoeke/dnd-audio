@@ -7,13 +7,15 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 
 ## Right now
 
-- **Current milestone:** H1 — hardware fixture (**not started**; the M8 branch is complete and
-  ready to merge).
-- **Branch:** `main`
+- **Current milestone:** M9 — transcript assembly quality (**in progress**).
+- **Branch:** `milestone/M9-transcript-assembly-quality`
 - **Last closed milestone:** M8 — real-session readiness
-- **Gate status at HEAD:** passes, zero skips (8 checks, 2 360 tests); the same default suite
-  passes from `.venv-rocm`.
-- **Blocked on:** **real recordings, and nothing else.** Every remaining open question that
+- **Gate status at milestone start (`9421d03`):** passes, zero skips (8 checks, 2 360 tests).
+  The five socket-guard tests require an execution environment that permits socket creation;
+  the identical gate passed there after the restricted sandbox failed those five at socket
+  construction. M8's close also proved the same default suite from `.venv-rocm`.
+- **Blocked on:** nothing for M9. The next hardware milestones remain blocked on real
+  recordings. Every remaining open question that
   blocks anything needs audio rather than code. The MVP's code path is complete: `inspect`,
   `ingest`, `activity`, `mix`, `transcribe` and `process` all run end to end, and
   `transcribe` now produces a real transcript from real speech with no `--fake-models`.
@@ -97,6 +99,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | M6a | ROCm environment           | closed      | `f5c6632` |
 | M6b | Qwen adapter               | closed      | `07cebdb` |
 | M8  | Real-session readiness     | closed      | `8ad15e3` |
+| M9  | Transcript assembly quality | in progress | —         |
 | H1  | Hardware fixture (2 min)   | not started | —         |
 | H2  | Drift soak / first session | not started | —         |
 | M7  | Archival (sketch)          | sketch      | —         |
@@ -261,7 +264,9 @@ writer that cannot lose a stage, and a test suite that is provably offline.
 
 ## Next smallest step
 
-**H1 — the real DJI hardware fixture.** The MVP's code path is complete; every remaining
+**M9 — transcript assembly quality.** Complete the transcript-only ownership, conservative
+contained-fragment collapse, and presentation-joining work established by the four-file local
+evaluation. Then return to **H1 — the real DJI hardware fixture.** Every remaining
 question that blocks anything needs audio. Read `docs/plan/milestones/H1-hardware-fixture.md`
 — its recording recipe is written for the owner, and the items that cannot be recovered
 afterwards (**the receiver displays read against wall clock**, for OQ-012 and OQ-015) are

@@ -18,8 +18,8 @@ M0 Foundation
                                                                           │
                               M6a ROCm env ── M6b Qwen adapter ────────────┴─ MVP
                                                             │                 │
-                                                            │                 └─ M8 Readiness
-                                                            └─ H2 Drift soak      └─ M7 Archival
+                                                            │                 └─ M8 Readiness ── M9 Transcript assembly
+                                                            └─ H2 Drift soak                              └─ M7 Archival
                                                                                      (sketch)
 ```
 
@@ -165,6 +165,20 @@ silently dropped at the ownership boundary.
 bit-exactly; a 11.31 ms cross-receiver offset raises no disagreement and a 120 ms one does;
 dropped words are counted and named; a synthetic fixture calibrated from the measured
 jam-capture acoustics (17.4 dB rejection) is checked in, with no session audio committed.
+
+### M9 — Transcript assembly quality
+
+Transcript-only recovery and presentation changes established by the four-file local
+evaluation: 20 ms of bounded leading ownership grace after ASR, conservative collapse of a
+proper contained fragment under compelling source dominance, and public joining of adjacent
+same-track records without joining the authoritative records themselves. M9 depends on M8's
+assembly-semantic/cache split and leaves activity and mix unchanged.
+
+**Gate:** every ownership boundary and every unsafe collapse contrast has a deterministic
+CPU/offline regression test; assembly-only changes reuse the ASR cache; records preserve both
+activity and effective transcript ownership; JSON and Markdown expose the same coalesced turns
+with full lineage; the ambiguous exact short `Okay` pair survives; the default gate and the
+default suite from `.venv-rocm` both pass with zero skips.
 
 ### M7 — Archival and local disk reclamation (sketch)
 
