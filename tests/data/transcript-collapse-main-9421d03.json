@@ -1,0 +1,104 @@
+{
+  "exact_short_match": {
+    "decisions": [],
+    "verdicts": [
+      {
+        "decision": "retained",
+        "duplicate_of_segment_id": null,
+        "overlap": true,
+        "rejected_alternatives": []
+      },
+      {
+        "decision": "retained",
+        "duplicate_of_segment_id": null,
+        "overlap": true,
+        "rejected_alternatives": []
+      }
+    ]
+  },
+  "ordinary_correlated_duplicate": {
+    "decisions": [
+      {
+        "code": "duplicate_collapsed",
+        "detail": "tx-b at sample 48000 was collapsed into seg_000000: the two overlap by 1000/1000 of the shorter segment, their normalized text matches at 1000/1000, and the activity graph's weakest correlation between their candidates is 900/1000 with a source score margin of 50/1000.",
+        "subject": "seg_000001"
+      }
+    ],
+    "verdicts": [
+      {
+        "decision": "retained",
+        "duplicate_of_segment_id": null,
+        "overlap": false,
+        "rejected_alternatives": [
+          {
+            "correlation_permille": 900,
+            "overlap_permille": 1000,
+            "score_margin_permille": 50,
+            "segment_id": "seg_000001",
+            "speaker_id": "b",
+            "text": "We should go back to Zephyrine before the gate closes",
+            "text_similarity_permille": 1000,
+            "track_id": "tx-b"
+          }
+        ]
+      },
+      {
+        "decision": "duplicate",
+        "duplicate_of_segment_id": "seg_000000",
+        "overlap": false,
+        "rejected_alternatives": []
+      }
+    ]
+  },
+  "unrelated_overlap": {
+    "decisions": [],
+    "verdicts": [
+      {
+        "decision": "retained",
+        "duplicate_of_segment_id": null,
+        "overlap": true,
+        "rejected_alternatives": []
+      },
+      {
+        "decision": "retained",
+        "duplicate_of_segment_id": null,
+        "overlap": true,
+        "rejected_alternatives": []
+      }
+    ]
+  },
+  "weak_correlation_compelling_dominance": {
+    "decisions": [
+      {
+        "code": "duplicate_collapsed",
+        "detail": "tx-b at sample 48000 was collapsed into seg_000000: the two overlap by 1000/1000 of the shorter segment, their normalized text matches at 1000/1000, and the activity graph's weakest correlation between their candidates is 100/1000 with a source score margin of 500/1000.",
+        "subject": "seg_000001"
+      }
+    ],
+    "verdicts": [
+      {
+        "decision": "retained",
+        "duplicate_of_segment_id": null,
+        "overlap": false,
+        "rejected_alternatives": [
+          {
+            "correlation_permille": 100,
+            "overlap_permille": 1000,
+            "score_margin_permille": 500,
+            "segment_id": "seg_000001",
+            "speaker_id": "b",
+            "text": "We should go back to Zephyrine before the gate closes",
+            "text_similarity_permille": 1000,
+            "track_id": "tx-b"
+          }
+        ]
+      },
+      {
+        "decision": "duplicate",
+        "duplicate_of_segment_id": "seg_000000",
+        "overlap": false,
+        "rejected_alternatives": []
+      }
+    ]
+  }
+}

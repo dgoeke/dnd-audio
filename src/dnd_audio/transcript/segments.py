@@ -32,7 +32,7 @@ from dnd_audio.artifacts.records import TranscriptNote, WordRecord
 from dnd_audio.artifacts.transcript import AlignmentStatus
 from dnd_audio.interfaces import TranscribedWord
 from dnd_audio.timeline.resample import to_source_sample
-from dnd_audio.transcript.asr import RequestOutcome, without_boundary_repeat
+from dnd_audio.transcript.asr import RequestContribution, RequestOutcome, without_boundary_repeat
 from dnd_audio.transcript.normalize import normalize_text
 
 __all__ = ["DroppedWords", "OwnershipPiece", "SegmentDraft", "draft_segments"]
@@ -62,9 +62,19 @@ class OwnershipPiece:
 
 
 @dataclass(frozen=True, slots=True)
+class _AssemblyOccurrence:
+    contribution: RequestContribution
+    ownership: tuple[OwnershipPiece, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class _AssemblyOutcome:
     outcome: RequestOutcome
-    ownership: tuple[OwnershipPiece, ...]
+    occurrences: tuple[_AssemblyOccurrence, ...]
+
+    @property
+    def ownership(self) -> tuple[OwnershipPiece, ...]:
+        return tuple(piece for occurrence in self.occurrences for piece in occurrence.ownership)
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,26 +179,43 @@ def _effective_ownership(
     entries = sorted(
         (
             (
-                outcome.plan.track_id,
+                contribution.plan.track_id,
                 piece.start_sample,
                 piece.end_sample,
-                outcome.plan.request_id,
+                contribution.plan.request_id,
                 piece.candidate_id,
                 outcome_index,
+                contribution_index,
                 piece_index,
-                outcome,
+                contribution,
                 piece,
             )
             for outcome_index, outcome in enumerate(outcomes)
-            for piece_index, piece in enumerate(outcome.plan.ownership)
+            for contribution_index, contribution in enumerate(outcome.contributing_submissions)
+            for piece_index, piece in enumerate(contribution.plan.ownership)
         ),
-        key=lambda item: item[:7],
+        key=lambda item: item[:8],
     )
-    by_outcome: list[list[OwnershipPiece | None]] = [
-        [None] * len(outcome.plan.ownership) for outcome in outcomes
+    by_outcome: list[list[list[OwnershipPiece | None]]] = [
+        [
+            [None] * len(contribution.plan.ownership)
+            for contribution in outcome.contributing_submissions
+        ]
+        for outcome in outcomes
     ]
     previous_end: dict[str, int] = {}
-    for track_id, _, _, _, _, outcome_index, piece_index, outcome, piece in entries:
+    for (
+        track_id,
+        _,
+        _,
+        _,
+        _,
+        outcome_index,
+        contribution_index,
+        piece_index,
+        contribution,
+        piece,
+    ) in entries:
         predecessor = previous_end.get(track_id, 0)
         if piece.start_sample < predecessor:
             message = (
@@ -197,19 +224,19 @@ def _effective_ownership(
             )
             raise ValueError(message)
         effective_start = max(
-            outcome.plan.padded_start_sample,
+            contribution.plan.padded_start_sample,
             predecessor,
             piece.start_sample - leading_grace_samples,
         )
-        by_outcome[outcome_index][piece_index] = OwnershipPiece(
+        by_outcome[outcome_index][contribution_index][piece_index] = OwnershipPiece(
             candidate_id=piece.candidate_id,
-            request_id=outcome.plan.request_id,
+            request_id=contribution.plan.request_id,
             activity_start_derivative_sample=piece.start_sample,
             activity_end_derivative_sample=piece.end_sample,
             effective_start_derivative_sample=effective_start,
             effective_end_derivative_sample=piece.end_sample,
-            submitted_start_derivative_sample=outcome.plan.padded_start_sample,
-            submitted_end_derivative_sample=outcome.plan.padded_end_sample,
+            submitted_start_derivative_sample=contribution.plan.padded_start_sample,
+            submitted_end_derivative_sample=contribution.plan.padded_end_sample,
             activity_start_sample=piece.session_start_sample,
             activity_end_sample=piece.session_end_sample,
             effective_start_sample=(
@@ -224,37 +251,51 @@ def _effective_ownership(
     return tuple(
         _AssemblyOutcome(
             outcome=outcome,
-            ownership=tuple(piece for piece in by_outcome[index] if piece is not None),
+            occurrences=tuple(
+                _AssemblyOccurrence(
+                    contribution=contribution,
+                    ownership=tuple(
+                        piece
+                        for piece in by_outcome[index][contribution_index]
+                        if piece is not None
+                    ),
+                )
+                for contribution_index, contribution in enumerate(outcome.contributing_submissions)
+            ),
         )
         for index, outcome in enumerate(outcomes)
     )
 
 
 def _dropped_words(outcomes: tuple[_AssemblyOutcome, ...]) -> tuple[DroppedWords, ...]:
-    """Per outcome, the words it returned that none of *its own* intervals owns.
+    """Per submitted occurrence, words returned outside that occurrence's own intervals.
 
-    **Per outcome, not per candidate group**, and that is the whole design. `_owned_words`
-    runs once per group and sees only that group's intervals, so a word legitimately owned by
-    group B would look dropped while group A was being assembled — a diagnostic that reported
-    false positives on every merged request would be worse than none.
+    **Per occurrence, not per candidate group or stitched parent**, and that is the whole
+    design. `_owned_words` runs once per group, while a resolved retry has child submissions
+    with different ownership and padding. Looking through the parent would let one child's word
+    be claimed by another child's candidate; looking per group would report false positives on
+    every merged request (ADR-0033, M9 code review).
     """
     observations: dict[str, list[tuple[OwnershipPiece, Literal["before", "after"], int, bool]]] = {}
     for assembled in outcomes:
-        outcome = assembled.outcome
-        intervals = assembled.ownership
-        if not outcome.words or not intervals:
+        if not assembled.outcome.words:
             continue
-        track_id = outcome.plan.track_id
-        for index, word in enumerate(outcome.words):
-            if any(
-                piece.effective_start_derivative_sample
-                <= word.start_sample
-                < piece.effective_end_derivative_sample
-                for piece in intervals
-            ):
+        for occurrence in assembled.occurrences:
+            intervals = occurrence.ownership
+            words = occurrence.contribution.words
+            if not words or not intervals:
                 continue
-            piece, side, distance = _nearest_edge(word, intervals)
-            observations.setdefault(track_id, []).append((piece, side, distance, index == 0))
+            track_id = occurrence.contribution.plan.track_id
+            for index, word in enumerate(words):
+                if any(
+                    piece.effective_start_derivative_sample
+                    <= word.start_sample
+                    < piece.effective_end_derivative_sample
+                    for piece in intervals
+                ):
+                    continue
+                piece, side, distance = _nearest_edge(word, intervals)
+                observations.setdefault(track_id, []).append((piece, side, distance, index == 0))
     return tuple(
         DroppedWords(
             track_id=track_id,
@@ -440,14 +481,15 @@ def _owned_words(
                 piece,
                 tuple(
                     word
-                    for word in outcome.outcome.words
+                    for word in occurrence.contribution.words
                     if piece.effective_start_derivative_sample
                     <= word.start_sample
                     < piece.effective_end_derivative_sample
                 ),
             )
             for outcome in outcomes
-            for piece in outcome.ownership
+            for occurrence in outcome.occurrences
+            for piece in occurrence.ownership
             if piece.candidate_id in wanted
         ),
         key=lambda item: (

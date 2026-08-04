@@ -258,9 +258,10 @@ def _weakest_correlation(
     `A2` correlates strongly with `B` while `A1` was never compared to anything on B's track.
     Taking the minimum over the pairs that happen to exist silently treated `A1`'s unmeasured
     speech as covered by `A2`'s evidence, and collapsing the merged record then deleted `A1`'s
-    words outright. Every candidate on both sides must have been measured against the other
-    side, or there is no evidence about this pair of *segments* (M4's verify phase, found by
-    independent review).
+    words outright. Every Cartesian candidate pairing across the two segments must have been
+    measured; merely seeing every candidate in one diagonal pairing is not evidence for the
+    unmeasured cross-pairs (M9 code review). Otherwise there is no evidence about this pair of
+    *segments* (M4's verify phase, found by independent review).
     """
     measured = {
         (left, right): evidence[left, right].correlation_permille
@@ -270,9 +271,8 @@ def _weakest_correlation(
     }
     if not measured:
         return None
-    if {left for left, _ in measured} != set(first.candidate_ids):
-        return None
-    if {right for _, right in measured} != set(second.candidate_ids):
+    required = {(left, right) for left in first.candidate_ids for right in second.candidate_ids}
+    if set(measured) != required:
         return None
     return min(measured.values())
 

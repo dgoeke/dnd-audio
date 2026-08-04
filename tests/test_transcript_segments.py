@@ -14,7 +14,7 @@ from typing import Any
 
 from dnd_audio.artifacts.transcript import AlignmentStatus
 from dnd_audio.interfaces import TranscribedWord
-from dnd_audio.transcript.asr import RequestOutcome
+from dnd_audio.transcript.asr import RequestContribution, RequestOutcome
 from dnd_audio.transcript.requests import Ownership, RequestPlan
 from dnd_audio.transcript.segments import draft_segments
 
@@ -63,6 +63,7 @@ def an_outcome(
         "words": words,
         "alignment_status": alignment_status or ("aligned" if words else "not_attempted"),
         "request_ids": (plan.request_id,),
+        "contributing_submissions": (RequestContribution(plan=plan, words=words),),
         "truncation_submissions": 0,
         "truncated": False,
     }
@@ -244,19 +245,91 @@ class TestLeadingOwnershipGrace:
         assert sum(item.count for item in dropped_words) == 1
         assert drafts[0].ownership_pieces[1].effective_start_derivative_sample == RATE * 2
 
-    def test_a_stitched_retry_keeps_parent_ownership_and_child_request_lineage(self) -> None:
-        plan = a_plan("req-1", (an_ownership("cand-a", RATE, RATE * 2),))
+    def test_a_stitched_retry_records_each_child_submission_and_ownership_slice(self) -> None:
+        first = an_ownership("cand-a", RATE, RATE * 2)
+        second = an_ownership("cand-b", RATE * 2, RATE * 3)
+        plan = a_plan("req-1", (first, second))
+        left = replace(
+            a_plan("req-1.0", (first,)),
+            padded_start_sample=RATE - 100,
+            padded_end_sample=RATE * 2 + 100,
+        )
+        right = replace(
+            a_plan("req-1.1", (second,)),
+            padded_start_sample=RATE * 2 - 100,
+            padded_end_sample=RATE * 3 + 100,
+        )
+        left_word = a_word(RATE + 10, "first")
+        right_word = a_word(RATE * 2 + 10, "second")
         outcome = an_outcome(
             plan,
-            "Testing",
-            (a_word(RATE - 320, "Testing"),),
+            "first second",
+            (left_word, right_word),
             request_ids=("req-1", "req-1.0", "req-1.1"),
+            contributing_submissions=(
+                RequestContribution(plan=left, words=(left_word,)),
+                RequestContribution(plan=right, words=(right_word,)),
+            ),
             truncation_submissions=2,
         )
-        (drafted,) = with_grace(320, outcome)[0]
-        assert drafted.request_ids == ("req-1", "req-1.0", "req-1.1")
-        assert drafted.ownership_pieces[0].request_id == "req-1"
+        drafted = with_grace(320, outcome)[0]
+        assert [item.request_ids for item in drafted] == [
+            ("req-1", "req-1.0", "req-1.1"),
+            ("req-1", "req-1.0", "req-1.1"),
+        ]
+        assert [item.ownership_pieces[0].request_id for item in drafted] == [
+            "req-1.0",
+            "req-1.1",
+        ]
+        assert [item.ownership_pieces[0].submitted_start_derivative_sample for item in drafted] == [
+            RATE - 100,
+            RATE * 2 - 100,
+        ]
         assert outcome.plan.ownership[0].start_sample == RATE
+
+    def test_a_word_from_one_retry_child_cannot_be_claimed_by_another_child(self) -> None:
+        first = an_ownership("cand-a", RATE, RATE + RATE // 2)
+        second = an_ownership("cand-b", RATE * 2, RATE * 3)
+        plan = replace(
+            a_plan("req-1", (first, second)),
+            padded_start_sample=RATE - 100,
+            padded_end_sample=RATE * 3 + 100,
+        )
+        left = RequestPlan(
+            request_id="req-1.0",
+            track_id="tx-a",
+            core_start_sample=RATE,
+            core_end_sample=RATE * 2,
+            padded_start_sample=RATE - 100,
+            padded_end_sample=RATE * 2 + 100,
+            ownership=(first,),
+        )
+        right = RequestPlan(
+            request_id="req-1.1",
+            track_id="tx-a",
+            core_start_sample=RATE * 2,
+            core_end_sample=RATE * 3,
+            padded_start_sample=RATE * 2 - 100,
+            padded_end_sample=RATE * 3 + 100,
+            ownership=(second,),
+        )
+        misplaced = a_word(RATE * 2 - 320, "opening")
+        outcome = an_outcome(
+            plan,
+            "opening",
+            (misplaced,),
+            request_ids=("req-1", "req-1.0", "req-1.1"),
+            contributing_submissions=(
+                RequestContribution(plan=left, words=(misplaced,)),
+                RequestContribution(plan=right, words=()),
+            ),
+            truncation_submissions=2,
+        )
+
+        drafts, _, dropped_words = with_grace(320, outcome)
+
+        assert drafts == []
+        assert sum(item.count for item in dropped_words) == 1
 
 
 class TestAMergedRequestComesBackApart:

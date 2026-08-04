@@ -203,6 +203,12 @@ class TestTruncation:
             f"{plan.request_id}.0",
             f"{plan.request_id}.1",
         )
+        assert [item.plan.request_id for item in only.contributing_submissions] == [
+            f"{plan.request_id}.0",
+            f"{plan.request_id}.1",
+        ]
+        assert only.contributing_submissions[0].plan.padded_end_sample < plan.padded_end_sample
+        assert only.contributing_submissions[1].plan.padded_start_sample > plan.padded_start_sample
 
     def test_every_child_request_obeys_the_cap(self, tmp_path: Path) -> None:
         plan = a_plan()
@@ -258,6 +264,7 @@ class TestTruncation:
         assert only.text == "cut off mid"
         assert only.truncated is True
         assert "resolved" not in only.text
+        assert [item.plan.request_id for item in only.contributing_submissions] == [plan.request_id]
         assert [note.code for note in outcome.warnings] == ["asr_truncation_unresolved"]
 
     def test_the_budget_counts_submissions_globally_not_depth(self, tmp_path: Path) -> None:
@@ -350,6 +357,11 @@ class TestTruncation:
         }
         (only,) = run([plan], responses, tmp_path).outcomes
         assert [word.text for word in only.words] == ["back", "to", "Zephyrine", "now"]
+        assert [
+            word.text
+            for contribution in only.contributing_submissions
+            for word in contribution.words
+        ] == ["back", "to", "Zephyrine", "now"]
 
     def test_a_different_word_at_the_boundary_is_kept(self, tmp_path: Path) -> None:
         plan = a_plan()

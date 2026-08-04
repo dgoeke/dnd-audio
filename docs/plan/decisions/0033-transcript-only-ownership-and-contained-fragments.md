@@ -40,6 +40,14 @@ belong to two effective pieces. Adjacent pieces therefore receive no grace at th
 boundary; a real gap can donate only its unowned leading portion to the later piece. Long
 candidate divisions and truncation/retry results obey the same partition.
 
+A resolved truncation contributes its final leaf submissions, each with its own sliced
+ownership, padded bounds and returned words. The discarded truncated parent remains in the
+attempted request-id lineage but is not an ownership occurrence. Assembly compares a returned
+word only with the pieces belonging to the submission that returned it; one retry child's
+padding can never donate a word to another child's candidate. This distinction was added after
+M9 code review found that parent-shaped lineage both hid the retry seam and could misattribute
+speech when grace exceeded child padding.
+
 Records retain piece-specific original and effective intervals plus their request and submitted
 padded bounds. Aggregate activity bounds remain for compatibility, but are not the validator's
 evidence for a new aligned record. Every aligned word start must resolve to exactly one effective
@@ -69,7 +77,8 @@ though the final survivor made it directly.
 The second pass collapses a weaker segment only when all of these hold:
 
 1. the segments substantially overlap under the existing overlap ratio;
-2. graph correlation evidence exists for every contributing candidate pairing;
+2. graph correlation evidence exists for the full Cartesian product of contributing candidate
+   pairings — merely mentioning every candidate in diagonal pairs is insufficient;
 3. the winner leads by `duplicate.contained_min_score_margin`, default **300/1000** (OQ-018);
 4. the winner's normalized words properly contain the loser's as one contiguous sequence;
 5. the winner is the acoustically preferred survivor.

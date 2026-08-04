@@ -50,8 +50,9 @@ multi-speaker evidence can distinguish repetition from bleed.
 - [ ] The existing three-condition similarity collapse produces the same complete first-pass
       survivor verdicts and decision representation as before. Only its remaining survivors
       enter a separately auditable `contained_fragment` pass, which requires substantial
-      overlap, graph evidence, at least 300/1000 source-score dominance, and proper contiguous
-      normalized-word containment by the acoustically preferred survivor. If the second pass
+      overlap, graph evidence for the full Cartesian product of contributing candidate pairs,
+      at least 300/1000 source-score dominance, and proper contiguous normalized-word
+      containment by the acoustically preferred survivor. If the second pass
       removes a first-pass survivor, records preserve the original edge in an acyclic audit
       chain that terminates at the retained contained-fragment winner.
 - [ ] Negative collapse tests retain genuine overlap, unrelated text, pairs with absent graph
@@ -117,12 +118,15 @@ multi-speaker evidence can distinguish repetition from bleed.
    samples. Preserve candidate/piece-specific activity, effective, request, and padded bounds;
    determine predecessors globally per track so two outcomes cannot claim the same half-open
    sample. Apply the transform after `transcribe_plans`, before draft construction and
-   dropped-word diagnostics, without overwriting `RequestOutcome.plan.ownership`.
+   dropped-word diagnostics, without overwriting `RequestOutcome.plan.ownership`. A resolved
+   retry carries its retained leaf submissions separately so one child's words can be compared
+   only with that child's sliced ownership and padded bounds.
 3. Freeze representative legacy collapse verdicts and decision serialization. Run the complete
    existing similarity algorithm as the unchanged first global pass; only then run a second
    pass over its survivors for proper word-sequence containment, preferred-survivor direction,
-   overlap, evidence, and the separately configured 300/1000 dominance floor. Persist the rule
-   name only for the new `contained_fragment` decision path, and preserve any completed
+   overlap, full Cartesian candidate-pair evidence, and the separately configured 300/1000
+   dominance floor. Persist the rule name only for the new `contained_fragment` decision path,
+   and preserve any completed
    first-pass edge as a terminating audit chain if its survivor loses in the second pass.
 4. Build one presentation-turn iterator over retained records. Join only adjacent compatible
    records with shared request lineage and the separate exact-sample presentation-gap bound,

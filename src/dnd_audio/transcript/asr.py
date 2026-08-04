@@ -32,7 +32,7 @@ point out.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Final
 
 import numpy as np
@@ -57,6 +57,7 @@ __all__ = [
     "SPLIT_FRAME_SAMPLES",
     "AsrOutcome",
     "AudioReader",
+    "RequestContribution",
     "RequestOutcome",
     "split_point",
     "transcribe_plans",
@@ -80,6 +81,19 @@ AudioReader = Callable[[str, int, int], npt.NDArray[np.float32]]
 
 
 @dataclass(frozen=True, slots=True)
+class RequestContribution:
+    """One submitted request whose answer contributes to the final outcome.
+
+    A normal outcome has one. A resolved truncation has the leaf submissions, not the
+    truncated parent response that was discarded. Keeping the plan beside its returned words
+    preserves the actual padded bounds and sliced ownership at every retry seam (ADR-0033).
+    """
+
+    plan: RequestPlan
+    words: tuple[TranscribedWord, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class RequestOutcome:
     """What one planned request finally produced, retries included."""
 
@@ -89,13 +103,49 @@ class RequestOutcome:
     #: ``aligned``, which is the seam's own rule.
     words: tuple[TranscribedWord, ...]
     alignment_status: AlignmentStatus
-    #: Every request id that contributed, the original first, in submission order.
+    #: Every request id attempted while resolving this result, the original first, in
+    #: submission order. The contributor records below distinguish answers actually retained.
     request_ids: tuple[str, ...]
+    #: The actual submitted leaf requests whose answers make up ``text``/``words``. This is
+    #: piece-specific because a retry child's padding and ownership differ from its parent.
+    contributing_submissions: tuple[RequestContribution, ...]
     #: Attempts beyond the original. Zero in the ordinary case, and recorded so "bounded" is
     #: checkable rather than asserted.
     truncation_submissions: int
     #: Still truncated after everything the budget allowed. The text is the original's.
     truncated: bool
+
+    def __post_init__(self) -> None:
+        if not self.contributing_submissions:
+            raise ValueError(
+                f"request outcome {self.plan.request_id} has no contributing submission"
+            )
+        known = set(self.request_ids)
+        for contribution in self.contributing_submissions:
+            if contribution.plan.request_id not in known:
+                message = (
+                    f"request outcome {self.plan.request_id} keeps contribution "
+                    f"{contribution.plan.request_id} outside its request lineage"
+                )
+                raise ValueError(message)
+            if contribution.plan.track_id != self.plan.track_id:
+                message = (
+                    f"request outcome {self.plan.request_id} mixes contribution track "
+                    f"{contribution.plan.track_id} with {self.plan.track_id}"
+                )
+                raise ValueError(message)
+        if self.alignment_status == "aligned":
+            contributed_words = tuple(
+                word
+                for contribution in self.contributing_submissions
+                for word in contribution.words
+            )
+            if contributed_words != self.words:
+                message = (
+                    f"request outcome {self.plan.request_id}'s aligned words disagree with its "
+                    "submission-specific occurrences"
+                )
+                raise ValueError(message)
 
 
 @dataclass(frozen=True, slots=True)
@@ -312,6 +362,7 @@ def _outcome(
         words=result.words,
         alignment_status=result.alignment_status,
         request_ids=request_ids,
+        contributing_submissions=(RequestContribution(plan=plan, words=result.words),),
         truncation_submissions=spent,
         truncated=truncated,
     )
@@ -345,19 +396,45 @@ def _stitch(
             words=(),
             alignment_status=status,
             request_ids=request_ids,
+            contributing_submissions=(
+                *left.contributing_submissions,
+                *right.contributing_submissions,
+            ),
             truncation_submissions=spent,
             truncated=False,
         )
 
+    right_words = without_boundary_repeat(left.words, right.words)
+    right_contributions = right.contributing_submissions
+    if len(right_words) != len(right.words):
+        right_contributions = _without_first_contributed_word(right_contributions)
     return RequestOutcome(
         plan=plan,
         text=text,
-        words=(*left.words, *without_boundary_repeat(left.words, right.words)),
+        words=(*left.words, *right_words),
         alignment_status="aligned",
         request_ids=request_ids,
+        contributing_submissions=(*left.contributing_submissions, *right_contributions),
         truncation_submissions=spent,
         truncated=False,
     )
+
+
+def _without_first_contributed_word(
+    contributions: tuple[RequestContribution, ...],
+) -> tuple[RequestContribution, ...]:
+    """Mirror a boundary-repeat removal in the leaf occurrence that supplied the word."""
+    found: list[RequestContribution] = []
+    removed = False
+    for contribution in contributions:
+        if not removed and contribution.words:
+            found.append(replace(contribution, words=contribution.words[1:]))
+            removed = True
+        else:
+            found.append(contribution)
+    if not removed:  # pragma: no cover - caller observed a removed word in the aggregate
+        raise AssertionError("a stitched boundary word had no contributing submission")
+    return tuple(found)
 
 
 def without_boundary_repeat(

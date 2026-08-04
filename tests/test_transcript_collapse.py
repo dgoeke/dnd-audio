@@ -8,7 +8,9 @@ once, and the pair the activity graph never found any acoustic relationship betw
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 from dnd_audio.artifacts.activity import (
@@ -174,6 +176,56 @@ def run(
     )
 
 
+def legacy_document(result: Any) -> dict[str, Any]:
+    """The complete pre-M9 public shape, excluding M9's distinct optional rule marker."""
+    return {
+        "verdicts": [
+            {
+                "decision": verdict.decision,
+                "duplicate_of_segment_id": verdict.duplicate_of_segment_id,
+                "overlap": verdict.overlap,
+                "rejected_alternatives": [
+                    item.model_dump(mode="json") for item in verdict.rejected_alternatives
+                ],
+            }
+            for verdict in result.verdicts
+        ],
+        "decisions": [item.model_dump(mode="json") for item in result.decisions],
+    }
+
+
+class TestLegacyFirstPassCompatibility:
+    """Golden output executed from main@9421d03 before M9, not derived from this branch."""
+
+    def test_complete_verdicts_and_decisions_match_the_pre_m9_implementation(
+        self, repo_root: Path
+    ) -> None:
+        expected = json.loads(
+            (repo_root / "tests/data/transcript-collapse-main-9421d03.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        inputs = {
+            "ordinary_correlated_duplicate": two_tracks(),
+            "unrelated_overlap": two_tracks(second_text="Absolutely not, we are going north"),
+            "weak_correlation_compelling_dominance": two_tracks(
+                correlation=100, first_score=900, second_score=400
+            ),
+            "exact_short_match": two_tracks(first_text="Yes.", second_text="Yes."),
+        }
+
+        actual = {
+            name: legacy_document(run(drafts, graph)) for name, (drafts, graph) in inputs.items()
+        }
+
+        assert actual == expected
+        assert all(
+            verdict.collapse_rule is None
+            for drafts, graph in inputs.values()
+            for verdict in run(drafts, graph).verdicts
+        )
+
+
 class TestAllThreeConditionsAreRequired:
     def test_overlap_similar_text_and_correlation_collapse(self) -> None:
         drafts, graph = two_tracks()
@@ -296,6 +348,73 @@ class TestContainedFragmentsAreASeparateConservativeRule:
             "retained",
             "retained",
         ]
+
+    def test_each_candidate_pair_needs_graph_evidence_not_merely_each_candidate(self) -> None:
+        """Diagonal A1↔B1/A2↔B2 evidence cannot vouch for A1↔B2 or A2↔B1."""
+        a1, a2 = candidate_id("tx-a", RATE), candidate_id("tx-a", RATE * 2)
+        b1, b2 = candidate_id("tx-b", RATE), candidate_id("tx-b", RATE * 2)
+        candidates = [
+            a_candidate("tx-a", RATE, RATE * 2, score=900, evidence=[an_evidence(b1, "tx-b", 900)]),
+            a_candidate(
+                "tx-a", RATE * 2, RATE * 3, score=900, evidence=[an_evidence(b2, "tx-b", 900)]
+            ),
+            a_candidate("tx-b", RATE, RATE * 2, score=500, evidence=[an_evidence(a1, "tx-a", 900)]),
+            a_candidate(
+                "tx-b", RATE * 2, RATE * 3, score=500, evidence=[an_evidence(a2, "tx-a", 900)]
+            ),
+        ]
+        drafts = [
+            replace(a_draft("tx-a", RATE, RATE * 3, self.CONTAINER), candidate_ids=(a1, a2)),
+            replace(a_draft("tx-b", RATE, RATE * 3, self.FRAGMENT), candidate_ids=(b1, b2)),
+        ]
+
+        result = run(drafts, a_graph(candidates, ["tx-a", "tx-b"]))
+
+        assert [item.decision for item in result.verdicts] == ["retained", "retained"]
+        assert result.decisions == ()
+
+    def test_complete_cartesian_candidate_evidence_allows_containment(self) -> None:
+        a1, a2 = candidate_id("tx-a", RATE), candidate_id("tx-a", RATE * 2)
+        b1, b2 = candidate_id("tx-b", RATE), candidate_id("tx-b", RATE * 2)
+        candidates = [
+            a_candidate(
+                "tx-a",
+                RATE,
+                RATE * 2,
+                score=900,
+                evidence=[an_evidence(other, "tx-b", 900) for other in (b1, b2)],
+            ),
+            a_candidate(
+                "tx-a",
+                RATE * 2,
+                RATE * 3,
+                score=900,
+                evidence=[an_evidence(other, "tx-b", 900) for other in (b1, b2)],
+            ),
+            a_candidate(
+                "tx-b",
+                RATE,
+                RATE * 2,
+                score=500,
+                evidence=[an_evidence(other, "tx-a", 900) for other in (a1, a2)],
+            ),
+            a_candidate(
+                "tx-b",
+                RATE * 2,
+                RATE * 3,
+                score=500,
+                evidence=[an_evidence(other, "tx-a", 900) for other in (a1, a2)],
+            ),
+        ]
+        drafts = [
+            replace(a_draft("tx-a", RATE, RATE * 3, self.CONTAINER), candidate_ids=(a1, a2)),
+            replace(a_draft("tx-b", RATE, RATE * 3, self.FRAGMENT), candidate_ids=(b1, b2)),
+        ]
+
+        result = run(drafts, a_graph(candidates, ["tx-a", "tx-b"]))
+
+        assert [item.decision for item in result.verdicts] == ["retained", "duplicate"]
+        assert result.decisions[0].code == "contained_fragment_collapsed"
 
     def test_weak_dominance_keeps_the_fragment(self) -> None:
         drafts, graph = two_tracks(

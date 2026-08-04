@@ -649,6 +649,9 @@ word placed just before an activity edge. Bound it by audio actually submitted, 
 against preceding half-open ownership on the same track, and preserve both the activity and
 effective per-piece intervals in normalized records. It changes assembly semantics, never
 activity, request audio, or ASR cache identity (ADR-0033).
+For a resolved truncation retry, "actually submitted" means the particular retained leaf
+submission that returned that word: preserve each leaf's sliced ownership and padded bounds,
+and never let a word from one retry child be owned through another child's interval.
 
 Force English by default, but keep language configurable. If `glossary.txt` exists,
 pass its text through Qwen's context parameter. Save the unmodified public
