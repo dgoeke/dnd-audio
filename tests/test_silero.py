@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import textwrap
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -552,11 +553,45 @@ class TestIdentity:
 class TestLoading:
     """Refusal, proved without a model — which is the point (INV-05)."""
 
-    def test_an_absent_model_raises_before_anything_is_imported(self, tmp_path: Path) -> None:
+    def test_an_absent_model_raises_naming_the_command_that_fixes_it(self, tmp_path: Path) -> None:
         with pytest.raises(SileroError, match="models fetch") as raised:
             load_silero_session(tmp_path / "silero_vad.onnx")
         assert raised.value.code == MODEL_UNAVAILABLE
-        assert "onnxruntime" not in sys.modules
+
+    def test_the_refusal_does_not_import_onnxruntime(self, tmp_path: Path) -> None:
+        """In a **child process**, because `sys.modules` is not this test's to speak for.
+
+        The claim is a property of the code: `load_silero_session` must check for the file
+        before it imports a runtime, so the default suite stays free of one (INV-05). Asserted
+        in-process it was a property of the *worker* — true only while nothing else scheduled
+        onto the same xdist worker had already imported `onnxruntime`.
+
+        It passed for a year and then failed the day this milestone added eleven tests, which
+        changed the distribution and nothing else. That is the same honest boundary
+        `conftest.py` records for the socket block and `tests/test_runtime.py` for Torch: a
+        fixture cannot see into a subprocess, and a subprocess is the only place a claim about
+        an empty `sys.modules` can be made truthfully.
+        """
+        source = textwrap.dedent(f"""
+            import sys
+            from pathlib import Path
+            from dnd_audio.activity.silero import load_silero_session
+            from dnd_audio.errors import DndAudioError
+
+            try:
+                load_silero_session(Path({str(tmp_path / "silero_vad.onnx")!r}))
+            except DndAudioError:
+                pass
+            else:  # pragma: no cover - the file does not exist
+                raise SystemExit("an absent model did not raise")
+
+            if "onnxruntime" in sys.modules:
+                raise SystemExit("onnxruntime was imported before the file was checked")
+        """)
+        result = subprocess.run(
+            [sys.executable, "-c", source], capture_output=True, text=True, check=False
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
 
     def test_a_wrong_hash_raises_before_the_file_is_executed(self, tmp_path: Path) -> None:
         """The bytes are checked, then the graph is loaded. Never the other way round.
