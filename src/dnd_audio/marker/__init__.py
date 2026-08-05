@@ -14,10 +14,10 @@ and the templates the detector correlates against all come from
 oscillator, a detector-side formula — is the failure this design exists to prevent, because
 two approximately equivalent generators disagree in exactly the conditions nobody tests.
 
-**There is no ``v1`` yet, and that is deliberate.** :data:`~dnd_audio.marker.spec.MARKER_SPECS`
-holds named candidates until a physical phone/DJI bench selects one; `marker build` with no
-`--marker` refuses and names the bench. ADR-0042 is the record that adds the frozen entry,
-and M10 cannot close while it reads `proposed` (ADR-0041).
+**There is one frozen ``v1``.** The physical phone/DJI bench selected the longer,
+narrower-band ``cand-b`` recipe; :data:`~dnd_audio.marker.spec.MARKER_SPECS` retains all three
+candidate names as evidence and adds a separate ``v1`` entry with those exact waveform
+parameters. ADR-0042 records the measurements, margins, and frozen WAV SHA-256.
 
 Three semantic versions, because three different things can move the result and merging them
 would let one change hide behind another's number:
@@ -52,7 +52,7 @@ MARKER_SEMANTICS_VERSION: Final = 1
 
 #: Matched filtering, per-chirp templates, sequence acceptance, and the thresholds that
 #: decide it. Bump when a detection that used to be accepted stops being one, or vice versa.
-DETECTOR_SEMANTICS_VERSION: Final = 1
+DETECTOR_SEMANTICS_VERSION: Final = 2
 
 #: Occurrence grouping, one-to-one cross-track association, role assignment against the
 #: event log, geometry classification, and anchor → `(source, sample)` mapping.

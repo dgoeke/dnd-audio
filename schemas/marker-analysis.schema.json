@@ -220,6 +220,11 @@
       "additionalProperties": false,
       "description": "One accepted marker sequence on one track, with where it maps to in a source file.",
       "properties": {
+        "ambiguous": {
+          "default": false,
+          "title": "Ambiguous",
+          "type": "boolean"
+        },
         "anchor_ms": {
           "minimum": 0,
           "title": "Anchor Ms",
@@ -513,8 +518,8 @@
       "type": "array"
     },
     "schema_version": {
-      "const": 1,
-      "default": 1,
+      "const": 2,
+      "default": 2,
       "title": "Schema Version",
       "type": "integer"
     },

@@ -176,6 +176,11 @@ def _source_coordinate(track: TimelineTrack, sample: int) -> tuple[str | None, i
     return None, None
 
 
+def _usable(item: MarkerOccurrence) -> bool:
+    """Whether an occurrence can supply a trusted integer-sample arrival."""
+    return not (item.clipped or item.weak or item.ambiguous)
+
+
 def _choose_reference(configured: str | None, detections: dict[str, list[MarkerOccurrence]]) -> str:
     """Which track anchors every group.
 
@@ -186,7 +191,10 @@ def _choose_reference(configured: str | None, detections: dict[str, list[MarkerO
     """
     if configured is not None:
         return configured
-    ranked = sorted(detections, key=lambda track: (-len(detections[track]), track))
+    ranked = sorted(
+        detections,
+        key=lambda track: (-sum(_usable(item) for item in detections[track]), track),
+    )
     return ranked[0]
 
 
@@ -298,7 +306,7 @@ def _associate(
             found = next(
                 (item for item in occurrences if item.anchor_sample == reference_anchor), None
             )
-            if found is not None:
+            if found is not None and _usable(found):
                 members.append(
                     GroupMember(
                         track_id=track_id,
@@ -325,7 +333,9 @@ def _associate(
 
         index, item = nearby[0]
         used[track_id].add(index)
-        if item.clipped:
+        if item.ambiguous:
+            outcome = DetectionOutcome.AMBIGUOUS
+        elif item.clipped:
             outcome = DetectionOutcome.CLIPPED
         elif item.weak:
             outcome = DetectionOutcome.WEAK
@@ -347,7 +357,12 @@ def _associate(
     return members
 
 
-def _compare_arrival(groups: list[OccurrenceGroup]) -> list[ArrivalComparison]:
+def _compare_arrival(
+    groups: list[OccurrenceGroup],
+    *,
+    settings: DetectorThresholds,
+    accumulator: _Accumulator,
+) -> list[ArrivalComparison]:
     """Start-to-end change per track, and what ADR-0040 allows it to mean.
 
     A change is `clock_drift_evidence` **only** when both groups carry the same non-null
@@ -398,6 +413,14 @@ def _compare_arrival(groups: list[OccurrenceGroup]) -> list[ArrivalComparison]:
                 f"{change} samples is therefore evidence about the recorders' clocks. No "
                 f"correction was applied: drift correction is post-MVP (INV-12)."
             )
+            if abs(change) >= settings.material_arrival_change_samples:
+                accumulator.warn(
+                    "marker_material_clock_drift",
+                    f"{member.track_id} changed by {change} samples under asserted fixed "
+                    f"geometry {start.geometry_id!r}, meeting the material "
+                    f"{settings.material_arrival_change_samples}-sample threshold. This is "
+                    f"recorder-drift evidence only; no correction was applied.",
+                )
         else:
             outcome = ArrivalOutcome.DIFFERENTIAL_ARRIVAL
             detail = (
@@ -630,12 +653,13 @@ def _analyze(
         for item in items
     ]
 
-    reference_hits = detections.get(reference, [])
+    reference_hits = [item for item in detections.get(reference, []) if _usable(item)]
     if not reference_hits and detections:
         accumulator.warn(
             "marker_not_found",
-            "no complete marker sequence was accepted on any track inside the searched "
-            "windows. That is a measurement about the room, not a failure of the command.",
+            "no unambiguous usable marker sequence was accepted on any track inside the "
+            "searched windows. That is a measurement about the room, not a failure of the "
+            "command.",
         )
 
     raw_groups = [(item.anchor_sample, [item]) for item in reference_hits]
@@ -691,7 +715,7 @@ def _analyze(
         groups=groups,
         unmatched=unmatched,
         timecode=_compare_timecode(groups, artifacts.start_evidence(), config),
-        arrival=_compare_arrival(groups),
+        arrival=_compare_arrival(groups, settings=settings, accumulator=accumulator),
         notes=accumulator.notes,
     )
 
@@ -709,6 +733,7 @@ def _describe_occurrence(track: TimelineTrack, item: MarkerOccurrence) -> Detect
         source_sample=sample,
         clipped=item.clipped,
         weak=item.weak,
+        ambiguous=item.ambiguous,
     )
 
 

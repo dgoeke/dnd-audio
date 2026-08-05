@@ -1,11 +1,11 @@
 """What a marker *is*: a frozen registry of named waveform specifications.
 
-Every number here is a decision, and none of them is frozen yet. ADR-0041 records why the
-registry holds **candidates** rather than a `v1`: the exact band, chirp duration, direction,
-gaps and level are properties of what a phone speaker radiates, what a lav capsule accepts,
-and what a room does in between — none of which a synthetic fixture can answer. A physical
-bench selects one, and ADR-0042 adds the `v1` entry with its exact integer PCM frozen by
-SHA-256. Until then :func:`resolve` refuses to guess.
+Every number here is a decision. ADR-0041 records why the registry held **candidates** rather
+than a `v1` until the physical bench: the exact band, chirp duration, direction, gaps and level
+are properties of what a phone speaker radiates, what a lav capsule accepts, and what a room
+does in between. That bench selected `cand-b`; ADR-0042 freezes the separate `v1` entry and
+its exact integer PCM by SHA-256. The candidate names remain as the history the decision rests
+on.
 
 The three candidates are chosen to span the questions the bench exists to answer rather than
 to be three flavours of one guess. See each one's ``rationale``.
@@ -85,7 +85,7 @@ class ChirpSpec:
         if self.start_hz == self.end_hz:
             message = (
                 f"a chirp sweeps; {self.start_hz} Hz to itself is a tone, whose correlation "
-                f"peak is ambiguous by whole cycles (OQ-025)"
+                f"peak is ambiguous by whole cycles (ADR-0042)"
             )
             raise ValueError(message)
         nyquist = MARKER_SAMPLE_RATE // 2
@@ -130,7 +130,7 @@ class MarkerSpec:
     #: Peak sample value in output units. An integer rather than a decibel figure, so the
     #: level is exact and needs no rounding: 16384 is 2**14, exactly 6.02 dB below a 16-bit
     #: full scale of 32767. Conservative on purpose — the nearest lav must not clip, and
-    #: OQ-025 records that headroom is worth more here than loudness.
+    #: ADR-0042 records that headroom is worth more here than loudness.
     peak_amplitude: int
     #: Why this candidate exists, in the operator's terms. Reaches the manifest, so a WAV on
     #: a phone can be traced back to the question it was built to answer.
@@ -257,8 +257,9 @@ def _candidate(
     )
 
 
-#: The candidates the bench chooses between. **No `v1` key** — see the module docstring and
-#: ADR-0042. Ordered as they are played at the bench.
+#: The three candidates, ordered as played at the bench, followed by the frozen public v1.
+#: Keeping `v1` as a separate spec rather than an alias matters: its name reaches filenames,
+#: manifests and analysis identity even though its waveform bytes equal `cand-b` (ADR-0042).
 MARKER_SPECS: Final[dict[str, MarkerSpec]] = {
     spec.name: spec
     for spec in (
@@ -299,6 +300,18 @@ MARKER_SPECS: Final[dict[str, MarkerSpec]] = {
                 "least audible interruption of the three if it works."
             ),
         ),
+        _candidate(
+            "v1",
+            band=(800, 6000),
+            chirp_ms=250,
+            directions="uuu",
+            gaps_ms=(200, 320),
+            rationale=(
+                "The frozen production marker selected by the physical phone/DJI bench. "
+                "It copies cand-b's longer, narrower-band recipe, which had the strongest "
+                "worst-seat score and sample-stable repeated arrival (ADR-0042)."
+            ),
+        ),
     )
 }
 
@@ -307,10 +320,9 @@ def resolve(name: str | None) -> MarkerSpec:
     """The spec for ``name``, or the frozen `v1` when no name is given.
 
     Raises:
-        UnknownMarkerError: when ``name`` is absent and no `v1` exists — which is the state
-            until the bench selects one, and the reason this refuses rather than defaulting
-            to a candidate. An operator who accidentally recorded Session Zero against an
-            unvalidated waveform would have no way to know (ADR-0041, ADR-0042).
+        UnknownMarkerError: when ``name`` is absent and no `v1` exists. That was the enforced
+            Phase-A state before the bench; a completed M10 build always carries `v1`
+            (ADR-0041, ADR-0042).
     """
     if name is None:
         if "v1" not in MARKER_SPECS:

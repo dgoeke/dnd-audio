@@ -562,6 +562,13 @@ synchronization QA. It should report disagreement with timecode, not override va
 timecode automatically. Measure each track's relative lag near both ends and warn
 when the lag changes materially.
 
+Marker v1 is the bench-selected three-chirp 800 Hz → 6 kHz waveform frozen by
+ADR-0042. Its canonical WAV SHA-256 is
+`70355baad6bb72b38e0b606cddbbaa3428c11429bec74cd127aa6f8935ecdf6f`;
+`dnd-audio marker build OUTPUT_DIRECTORY` produces that WAV, its byte-identical
+standalone offline player, and the manifest. The marker remains optional: the
+human-checkable three-clap procedure is the fallback.
+
 **A changing lag is not by itself evidence of sample-clock drift** (ADR-0040). What
 is measured acoustically is the sum of two independent quantities: where the
 recordings sit on the timeline, and how far the sound travelled to each capsule.
@@ -1033,12 +1040,12 @@ Recommended real fixture recording:
 - Each wearer states their transmitter label and speaks alone for several seconds.
 - Include one two-person overlap.
 - Turn one transmitter off, wait several seconds, turn it back on, and record again.
-- Make a distinctive three-clap pattern near the start and end. Once the generated
-  synchronization marker has passed its phone/hardware bench, it may be played from
-  one fixed central position instead — same role, detected automatically rather than
-  picked by hand. It supplements the LTC jam and never replaces it: timecode places a
-  transmitter that was switched off and back on, and a sound at the top of the session
-  cannot.
+- Make a distinctive three-clap pattern near the start and end, or play marker v1 from one
+  fixed central position — same role, detected automatically rather than picked by hand.
+  Use the exact artifacts from `dnd-audio marker build`, the same phone orientation and
+  media-volume step at both ends, and `dnd-audio marker analyze` after ingest. It supplements
+  the LTC jam and never replaces it: timecode places a transmitter that was switched off and
+  back on, and a sound at the top of the session cannot.
 - Export both `orig` and `edit` files if dual-file mode is enabled.
 
 Document the discovered DJI file naming and metadata in a fixture note, and store

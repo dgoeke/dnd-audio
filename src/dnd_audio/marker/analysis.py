@@ -41,7 +41,7 @@ __all__ = [
     "TimecodeComparison",
 ]
 
-MARKER_ANALYSIS_SCHEMA_VERSION: Final = 1
+MARKER_ANALYSIS_SCHEMA_VERSION: Final = 2
 
 Sha256Hex = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
@@ -142,8 +142,8 @@ class DetectedOccurrence(_Artifact):
     anchor_ms: int = Field(ge=0)
     score_permille: int = Field(ge=0, le=1000)
     runner_up_permille: int = Field(ge=0, le=1000)
-    #: Measured minus canonical, per inter-chirp gap. The quantity OQ-029 asks about, and
-    #: the one that distinguishes a clock problem from a scheduling one at the bench.
+    #: Measured minus canonical, per inter-chirp gap. The quantity ADR-0042 freezes from the
+    #: physical bench, and the one that distinguishes clock scale from scheduling jitter.
     gap_errors_samples: list[int] = Field(default_factory=list)
     #: Where the anchor falls in a real recording, when it falls in one. ``None`` when the
     #: anchor lands in silence — before the transmitter started, inside a gap, or after it
@@ -152,6 +152,9 @@ class DetectedOccurrence(_Artifact):
     source_sample: int | None = Field(default=None, ge=0)
     clipped: bool = False
     weak: bool = False
+    #: The strongest unclaimed local alternative sits too close to the accepted score for
+    #: this arrival to be used as a lag (ADR-0041, ADR-0042).
+    ambiguous: bool = False
 
     @model_validator(mode="after")
     def _source_coordinates_come_as_a_pair(self) -> Self:
@@ -258,7 +261,7 @@ class ArrivalComparison(_Artifact):
 class SyncMarkerAnalysis(_Artifact):
     """The deterministic record of one `marker analyze` run."""
 
-    schema_version: Literal[1] = MARKER_ANALYSIS_SCHEMA_VERSION
+    schema_version: Literal[2] = MARKER_ANALYSIS_SCHEMA_VERSION
     session_id: str = Field(min_length=1)
     identity: AnalysisIdentity
     #: Every accepted occurrence on every track, not only the chosen start/end pair. The

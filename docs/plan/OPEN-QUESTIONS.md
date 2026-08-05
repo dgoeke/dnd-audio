@@ -1019,12 +1019,11 @@ consistent rate across all three kits; this capture violated that and nothing do
 degraded. Keep the rates consistent as hygiene, but no known behaviour depends on it.
 
 ## OQ-025 — Should the capture include a deliberate acoustic sync signal?
-**Assumption:** Yes for a robust automatic verifier; no as a replacement for jammed timecode.
+**Answer:** Yes for a robust automatic verifier; no as a replacement for jammed timecode.
 Jammed timecode places every file, including a restarted transmitter with no shared acoustic
 event. A generated marker can make jam failure and long-baseline drift cheaper and more
-precise to detect. **M10 now owns both generator and matched-filter detector.** Until its
-intended-phone/DJI bench passes, H1/H2 keep using the existing human-checkable three-clap
-pattern.
+precise to detect. **M10 owns the bench-validated generator and matched-filter detector.**
+H1/H2 may now use marker v1; the human-checkable three-clap pattern remains the fallback.
 **Why it matters:** The LTC jam is accurate — 17–30 ms cross-receiver, better than one frame
 (**OQ-023**) — but it is a tedious manual ritual at the start of every session: cable up
 A → B, SYNC, disconnect, A → C, SYNC, disconnect, and confirm three displays. An acoustic
@@ -1035,8 +1034,7 @@ and would need no cables. The question is whether it could **replace** the jam, 
 the 33 ms the jam already delivers; and whether a single anchor is sufficient given measured
 drift.
 **Needs:** M10's generator/detector and phone/DJI bench; no session required ·
-**Blocks:** M10 close only — the jam and claps work today · **Status:** **partially answered;
-M10 chartered**
+**Blocks:** none · **Status:** **answered** (M10 phone/DJI bench, 2026-08-05)
 
 **What the error budget says.** Cross-track error is 33.3 ms of fixed quantization
 (**OQ-024**) plus ~15–45 ms of drift over a long session (**OQ-006**) — call it 80 ms worst
@@ -1110,7 +1108,7 @@ candidate's band survives the phone → room → lav → DJI path at the farthes
 clipping the nearest. **ADR-0042** is the record that freezes them, and it is deliberately
 unfilled until the bench has run.
 
-The causal half of this entry is now settled as a decision rather than an assumption:
+The causal half of this entry is settled as a decision rather than an assumption:
 **ADR-0040** separates timecode placement, acoustic verification, differential acoustic
 arrival, and fixed-endpoint recorder drift, and amends the spec, which had claimed
 unconditionally in two places that a changing lag *is* evidence of sample-clock drift.
@@ -1126,6 +1124,16 @@ substantially for reach at the farthest seat without reopening the question
 phone-played marker is reliably **found** across a table is the opposite failure direction and
 remains entirely the bench's. Its practical effect is that the bench protocol no longer asks the
 operator to record speech and media, which is what makes a one-person bench feasible.
+
+**Answer completed 2026-08-05.** The intended phone at approximately 90% volume played all
+three candidates through six DJI transmitters. At the 100-permille diagnostic floor, every
+planned playback was found on all six tracks with no extra sequence, clipping, or weak-signal
+classification. Cand-b had the strongest worst-track fixed score (404 permille) and 0–1 sample
+opening repeatability, so ADR-0042 freezes it as v1 with a 300-permille production floor. The
+default v1 pass found exactly 24 track-occurrences (four plays × six tracks), all decisive.
+This answers the practical question: use the marker to automate jam QA and differential-
+arrival measurement, retain timecode for placement and restarted files, and retain claps as a
+fallback. Sanitized evidence: `docs/fixtures/2026-08-05-marker-phone-dji-bench.md`.
 
 ## OQ-029 — Does a phone browser's playback of embedded 48 kHz PCM preserve the marker's internal timing?
 **Assumption:** Yes, to well inside the inter-chirp gap tolerance. M10's page hands the
@@ -1148,8 +1156,8 @@ the canonical ones — the analyzer records detected chirp order and gaps per oc
 this is reading one analysis rather than running a separate experiment. The discriminator
 between the two mechanisms is whether the gap error is a constant *ratio* (resampling) or
 scattered (scheduling).
-**Needs:** M10's phone/DJI bench · **Blocks:** freezing marker v1 (**ADR-0042**); nothing else
-· **Status:** open — **but the synthetic half is measured, and it moved the question**
+**Needs:** M10's phone/DJI bench · **Blocks:** none · **Status:** **answered** (M10 phone/DJI
+bench, 2026-08-05)
 
 **Raised by M10's second plan review** (`reviews/M10-plan-20260805-0606.md`), which noted that
 the working plan promised an open-question citation for the gap tolerance and for nothing else,
@@ -1183,6 +1191,17 @@ Three things follow, and the third is the useful one:
   the chirp's duration and bandwidth — a property of the spec, not of the detector** — and that
   is now what the bench has to weigh, against the opposite pressure that a longer chirp is what
   reaches the farthest lav.
+
+**Physical answer, 2026-08-05.** Browser/phone playback preserved the sequence timing by an
+enormous margin. Across all 24 fixed-position cand-b track-occurrences, the largest absolute
+gap error was 29 samples (0.60 ms) against the 1440-sample tolerance. Most opening errors were
+0 or 1 sample; the closing play supplied the 29-sample maximum. This is neither the 8.8%
+duration error the original question feared nor evidence of nonuniform buffer scheduling.
+Cand-b's longer chirps survived the phone → room → lav → DJI path better than the shorter
+candidates: its worst fixed score was 404 permille and every planned play was found on every
+track. ADR-0042 therefore retains the structural 1440-sample gap bound, with 1411 samples of
+observed margin, rather than fitting it down to this one phone. See
+`docs/fixtures/2026-08-05-marker-phone-dji-bench.md`.
 
 What the bench still owes: whether the intended phone's media pipeline perturbs gaps
 *non-uniformly* (scheduling rather than clocking), which no synthetic stretch models and which

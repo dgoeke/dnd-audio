@@ -6,8 +6,8 @@ fails hardest if a phone's media pipeline resamples or reschedules playback, bec
 whole-template correlation degrades with *total* elapsed error while the marker is over a
 second long. Correlating each chirp separately and checking the gaps afterwards degrades with
 the error over one chirp instead, and turns a timing perturbation into a measurable gap
-residual rather than a lost detection. **OQ-029** is the open question this hedges against, and
-the bench is what sets the tolerance.
+residual rather than a lost detection. **ADR-0042** records the physical phone-bench result and
+freezes the tolerance.
 
 **The gaps are the code.** With identical chirps — which two of the three candidates have — a
 per-chirp peak cannot tell the first sweep from the third; every position scores alike. The
@@ -103,34 +103,47 @@ def to_permille(value: float) -> int:
     return math.floor(scaled + 0.5) if scaled >= 0 else -math.floor(-scaled + 0.5)
 
 
+def _is_locally_ambiguous(score: int, runner_up: int, minimum_separation: int) -> bool:
+    """Whether an unclaimed local alternative is too close, entirely in permille."""
+    return runner_up > 0 and score - runner_up < minimum_separation
+
+
 @dataclass(frozen=True, slots=True)
 class DetectorThresholds:
     """Every number that decides whether a sound is the marker.
 
-    **All provisional.** Each is chosen against synthetic audio and cites **OQ-025** or
-    **OQ-029** until the phone/DJI bench measures it; ADR-0042 freezes them with the evidence.
-    The failure directions are not symmetric and are worth stating: too strict and the marker
+    Frozen for marker v1 by **ADR-0042**, against both the physical phone/DJI positive bench
+    and the 13.7-minute real-speech negative sweep. The failure directions are not symmetric
+    and are worth stating: too strict and the marker
     is undetectable on the one device it will ever be played from, which is visible
     immediately; too loose and three unrelated transients become an occurrence, which is
     invisible until it moves a start/end pair.
     """
 
     #: A single chirp must reach this to be a candidate peak. Low enough to survive a lav's
-    #: band limiting and a room's reverberation, which both cost correlation (OQ-025).
+    #: band limiting and a room's reverberation, which both cost correlation (ADR-0042).
     #:
-    #: **One side of this is now measured, and there is far more room than 550 suggests.**
+    #: **Both sides are measured.**
     #: Across 13.7 minutes of real DJI recordings — two voices overlapping on purpose, plus
     #: hand claps, the broadband transient most likely to be mistaken for a chirp — no
     #: sequence was accepted by any candidate with this forced as low as **100 permille**,
     #: and the strongest single chirp anywhere reached only 186. What rejects speech is
     #: mostly the three-chirp *gap structure*, not this number
     #: (`docs/fixtures/2026-08-05-marker-false-positive-sweep.md`). So the bench may lower
-    #: this substantially if the farthest lav needs it. Where it must sit to *catch* a real
-    #: playback is the other side, and only the bench can say.
-    min_chirp_score_permille: int = 550
+    #: this substantially if the farthest lav needs it. The bench-selected v1's weakest fixed-
+    #: position sequence was 404 permille; 300 retains 104 permille of positive margin while
+    #: staying three times above the lowest threshold proved clean on real speech (ADR-0042).
+    min_chirp_score_permille: int = 300
     #: The assembled sequence's score — the **weakest** of its chirps, so a sequence is only
     #: as good as its worst link rather than as good as its best.
-    min_sequence_score_permille: int = 600
+    min_sequence_score_permille: int = 300
+    #: A clean occurrence's weakest selected chirp must beat the strongest unclaimed local
+    #: same-chirp alternative by this much. Fifty permille is deliberately independent of
+    #: the absolute 300-permille acceptance floor: it asks whether the arrival is decisive,
+    #: not whether it is loud. The phone/DJI bench left no local alternatives at all, while
+    #: 50 keeps a useful guard against a room echo almost as persuasive as the direct path
+    #: (ADR-0042).
+    min_runner_up_separation_permille: int = 50
     #: How far each measured inter-chirp gap may sit from the canonical one — 30 ms, generous
     #: against scheduling jitter between one chirp and the next.
     #:
@@ -141,23 +154,37 @@ class DetectorThresholds:
     #: because stretching a chirp detunes it against its own template, and the loss scales
     #: with time-bandwidth product. So the real constant governing clock tolerance is the
     #: chirp's duration and bandwidth, which is a property of the spec rather than of the
-    #: detector (**OQ-029**).
+    #: detector. V1 measured at most 29 samples, leaving 1411 samples of margin without fitting
+    #: a cross-device tolerance to one phone (ADR-0042).
     gap_tolerance_samples: int = 1440
-    #: Suppression radius around an accepted peak, in samples. Wider than the longest
-    #: reverberation tail worth calling the same arrival, narrower than the shortest gap so
-    #: two chirps of one sequence can never suppress each other (OQ-025).
+    #: Suppression radius around a per-chirp peak, in samples. Fifty milliseconds collapses
+    #: one correlation lobe/reflection family; each chirp has its own peak list, so this cannot
+    #: suppress another chirp in the sequence (ADR-0042).
     nms_radius_samples: int = 2400
+    #: Complete sequences closer than 150 ms are one acoustic event. This is deliberately
+    #: separate from per-chirp NMS: the synthetic room response produces a coherent echo at
+    #: 106 ms, while a local competing chirp beyond 50 ms must remain visible to the runner-
+    #: up diagnostic. A 1.47-second v1 cannot legitimately be replayed 150 ms apart.
+    sequence_nms_radius_samples: int = 7200
     #: How far another track's occurrence may sit from the reference's and still be the same
     #: acoustic event. Generous against 0.5-3 m of propagation spread (1.5-9 ms) plus the
-    #: 33.3 ms timecode quantum M8 measured — 100 ms covers both with room (OQ-025).
+    #: 33.3 ms timecode quantum M8 measured — 100 ms covers both with room. V1 measured a
+    #: 1878-sample maximum against this 4800-sample bound (ADR-0042).
     association_lag_samples: int = 4800
     #: Above this fraction of samples at or near full scale inside a detection, the arrival is
-    #: reported as clipped: the peak position is still usable, its score is not (OQ-025).
+    #: reported as clipped: the peak position is still usable, its score is not. No track
+    #: crossed this at approximately 90% phone volume (ADR-0042).
     clipping_ratio_permille: int = 10
     #: Below this RMS the window carries no usable signal, which is a different outcome from
     #: a weak match and gets its own diagnostic — the distinction M8 had to add to `sync_qa`.
+    #: No bench track crossed it (ADR-0042).
     weak_signal_rms_permille: int = 1
-    #: Accepted occurrences retained per track before the run fails. Ten is far above any
+    #: A fixed-geometry start/end lag change at or above one millisecond is material enough
+    #: to warn. V1's approximately 11.8-minute fixed-position repeat changed by at most 17
+    #: samples; 48 samples leaves 31 samples of measured repeat margin and is still far below
+    #: DJI's 1600-sample timecode quantum (ADR-0042).
+    material_arrival_change_samples: int = 48
+    #: Accepted occurrences retained per track before the run fails. Thirty-two is far above any
     #: plausible bench take (three plays at each end, plus two moved-phone diagnostics) and
     #: far below anything that threatens memory.
     max_occurrences_per_track: int = 32
@@ -172,6 +199,7 @@ class DetectorThresholds:
             raise ValueError(message)
         for name, value in (
             ("min_chirp_score_permille", self.min_chirp_score_permille),
+            ("min_runner_up_separation_permille", self.min_runner_up_separation_permille),
             ("min_sequence_score_permille", self.min_sequence_score_permille),
         ):
             if not 0 < value <= PERMILLE:
@@ -180,8 +208,10 @@ class DetectorThresholds:
         for name, value in (
             ("gap_tolerance_samples", self.gap_tolerance_samples),
             ("nms_radius_samples", self.nms_radius_samples),
+            ("sequence_nms_radius_samples", self.sequence_nms_radius_samples),
             ("association_lag_samples", self.association_lag_samples),
             ("max_occurrences_per_track", self.max_occurrences_per_track),
+            ("material_arrival_change_samples", self.material_arrival_change_samples),
         ):
             if value <= 0:
                 message = f"{name}={value} must be positive"
@@ -199,9 +229,12 @@ class DetectorThresholds:
             "clipping_ratio_permille": self.clipping_ratio_permille,
             "gap_tolerance_samples": self.gap_tolerance_samples,
             "max_occurrences_per_track": self.max_occurrences_per_track,
+            "material_arrival_change_samples": self.material_arrival_change_samples,
             "min_chirp_score_permille": self.min_chirp_score_permille,
+            "min_runner_up_separation_permille": self.min_runner_up_separation_permille,
             "min_sequence_score_permille": self.min_sequence_score_permille,
             "nms_radius_samples": self.nms_radius_samples,
+            "sequence_nms_radius_samples": self.sequence_nms_radius_samples,
             "weak_signal_rms_permille": self.weak_signal_rms_permille,
         }
 
@@ -229,13 +262,15 @@ class MarkerOccurrence:
     score_permille: int
     hits: tuple[ChirpHit, ...]
     #: Measured minus canonical, per gap. Zero on clean synthetic audio; the quantity
-    #: OQ-029 asks about, and the reason the detector reports it rather than only using it.
+    #: ADR-0042 measures, and the reason the detector reports it rather than only using it.
     gap_errors_samples: tuple[int, ...]
     clipped: bool = False
     weak: bool = False
-    #: The best score anywhere outside this occurrence's suppression radius, so ambiguity is
-    #: a recorded number rather than a judgement made and forgotten.
+    #: The best unclaimed same-chirp peak local to this occurrence. Peaks belonging to every
+    #: accepted occurrence are excluded first, so repeated valid plays cannot masquerade as
+    #: ambiguity (ADR-0041).
     runner_up_permille: int = 0
+    ambiguous: bool = False
     diagnostics: dict[str, int] = field(default_factory=dict)
 
 
@@ -458,7 +493,7 @@ def detect_occurrences(
         deduplicated.append(sorted(best.items(), key=lambda item: (-item[1], item[0])))
 
     assembled = _assemble(spec, deduplicated, settings)
-    kept = _suppress_sequences(assembled, radius=settings.nms_radius_samples)
+    kept = _suppress_sequences(assembled, radius=settings.sequence_nms_radius_samples)
 
     if len(kept) > settings.max_occurrences_per_track:
         message = (
@@ -472,7 +507,7 @@ def detect_occurrences(
         raise OccurrenceCeilingError(message)
 
     return [
-        _describe(reader, spec, settings, anchor, score, hits, errors, deduplicated)
+        _describe(reader, spec, settings, anchor, score, hits, errors, deduplicated, kept)
         for anchor, score, hits, errors in kept
     ]
 
@@ -486,6 +521,7 @@ def _describe(
     hits: tuple[ChirpHit, ...],
     errors: tuple[int, ...],
     per_chirp: list[list[tuple[int, int]]],
+    accepted: list[tuple[int, int, tuple[ChirpHit, ...], tuple[int, ...]]],
     *,
     full_scale_permille: int = 990,
 ) -> MarkerOccurrence:
@@ -507,9 +543,16 @@ def _describe(
     clipped_ratio = to_permille(clipped_samples / max(window.size, 1))
 
     runner_up = 0
-    for peaks in per_chirp:
+    for hit, peaks in zip(hits, per_chirp, strict=True):
         for sample, other in peaks:
-            if abs(sample - anchor) > settings.nms_radius_samples:
+            if abs(sample - hit.start_sample) > settings.sequence_nms_radius_samples:
+                continue
+            claimed = any(
+                abs(sample - occurrence_hits[hit.chirp_index].start_sample)
+                <= settings.nms_radius_samples
+                for _, _, occurrence_hits, _ in accepted
+            )
+            if not claimed:
                 runner_up = max(runner_up, other)
 
     return MarkerOccurrence(
@@ -520,6 +563,9 @@ def _describe(
         clipped=clipped_ratio >= settings.clipping_ratio_permille,
         weak=to_permille(rms) < settings.weak_signal_rms_permille,
         runner_up_permille=runner_up,
+        ambiguous=_is_locally_ambiguous(
+            score, runner_up, settings.min_runner_up_separation_permille
+        ),
         diagnostics={
             "peak_permille": to_permille(peak),
             "rms_permille": to_permille(rms),

@@ -797,9 +797,9 @@ def marker_build(
     embedded in the page is the same bytes as the `.wav` beside it rather than a second
     encoding of the same samples.
 
-    Until the phone/DJI bench selects a waveform there is no `v1`, and this refuses rather
-    than defaulting to a candidate — an operator who recorded Session Zero against an
-    unvalidated marker would have no way to find out (ADR-0042).
+    With no hidden candidate name, this builds the phone/DJI-bench-selected frozen `v1`.
+    Candidate selection remains a hidden M10 evidence path rather than a public choice
+    (ADR-0042).
     """
     from dnd_audio.marker.builder import build_marker
     from dnd_audio.marker.spec import resolve

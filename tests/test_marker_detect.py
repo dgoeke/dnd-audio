@@ -29,6 +29,7 @@ from dnd_audio.marker import MARKER_SAMPLE_RATE
 from dnd_audio.marker.detect import (
     DetectorThresholds,
     OccurrenceCeilingError,
+    _is_locally_ambiguous,
     detect_occurrences,
     to_permille,
 )
@@ -318,8 +319,10 @@ class TestRepeatsAndAmbiguity:
         assert len(found(track.astype(np.float32), spec)) == count
 
     @ALL_SPECS
-    def test_the_runner_up_is_recorded_rather_than_judged(self, spec: MarkerSpec) -> None:
-        """Ambiguity is a number in the artifact, not a decision made and forgotten."""
+    def test_repeated_valid_plays_are_excluded_from_the_local_runner_up(
+        self, spec: MarkerSpec
+    ) -> None:
+        """ADR-0041: other accepted occurrences are not local ambiguity."""
         marker = marker_samples(spec).astype(np.float64) / 32768.0
         stride = marker.size + 5 * MARKER_SAMPLE_RATE
         track = np.zeros(PLACEMENT + 2 * stride, dtype=np.float64)
@@ -329,7 +332,8 @@ class TestRepeatsAndAmbiguity:
         reader = ArrayReader(track.astype(np.float32))
         occurrences = detect_occurrences(reader, spec, interval=(0, reader.samples.size))
         assert len(occurrences) == 2
-        assert all(item.runner_up_permille > 0 for item in occurrences)
+        assert all(item.runner_up_permille == 0 for item in occurrences)
+        assert all(not item.ambiguous for item in occurrences)
 
 
 class TestTimingPerturbation:
@@ -451,6 +455,16 @@ class TestScoresAreIntegers:
         with pytest.raises(ValueError, match="could never reject"):
             DetectorThresholds(min_chirp_score_permille=800, min_sequence_score_permille=700)
 
+    @pytest.mark.parametrize(
+        ("runner_up", "ambiguous"),
+        [(0, False), (550, False), (551, True)],
+    )
+    def test_runner_up_separation_uses_the_integer_boundary(
+        self, runner_up: int, ambiguous: bool
+    ) -> None:
+        """Exactly 50 permille is decisive; one permille closer is inconclusive."""
+        assert _is_locally_ambiguous(600, runner_up, 50) is ambiguous
+
     def test_the_thresholds_identity_names_every_field(self) -> None:
         """The `derivative_identity_document` property: assert *which* components are there.
 
@@ -463,9 +477,12 @@ class TestScoresAreIntegers:
             "clipping_ratio_permille",
             "gap_tolerance_samples",
             "max_occurrences_per_track",
+            "material_arrival_change_samples",
             "min_chirp_score_permille",
+            "min_runner_up_separation_permille",
             "min_sequence_score_permille",
             "nms_radius_samples",
+            "sequence_nms_radius_samples",
             "weak_signal_rms_permille",
         }
 

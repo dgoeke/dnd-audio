@@ -72,6 +72,18 @@ If the actual receiver/channel map differs, use the real map everywhere. Do not 
 file to make it resemble this example; the containing `raw/<track-id>/` directory supplies
 identity and the original filename is evidence.
 
+For the M10 alternative, prepare the artifacts before the room is occupied:
+
+```bash
+dnd-audio marker build ./marker-v1
+```
+
+Copy the standalone HTML to the bench-tested phone and verify the displayed WAV SHA-256 is
+`70355baad6bb72b38e0b606cddbbaa3428c11429bec74cd127aa6f8935ecdf6f`.
+The M10 bench used approximately 90% media volume. Record the actual phone, orientation and
+volume step in the private log and keep them unchanged between start and end. If that setup is
+unavailable or the page does not play cleanly, use the three-clap pattern.
+
 ## Stop conditions
 
 Do not begin the main take if any of these are true:
@@ -80,7 +92,7 @@ Do not begin the main take if any of these are true:
   unknown.
 - The three receiver displays do not agree after the jam.
 - The ten-second jam-check files do not confirm the shared acoustic landmark—the default clap,
-  or M10 marker only after its bench gate—at the timecode-predicted position across all three
+  or M10 marker v1—at the timecode-predicted position across all three
   receiver groups.
 - Any transmitter fails to show its recording indicator.
 - A take was copied under `raw/` and someone proposes renaming, normalizing, trimming, or
@@ -164,9 +176,9 @@ This take proves that the visible jam reached files before the main fixture is r
 2. Start internal recording on `tx-a` through `tx-f`, approximately two seconds apart, and log
    each wall-clock start time. Confirm every recording indicator.
 3. After all six are recording, Person One says, “H1 jam check,” waits one second, and makes
-   **one sharp hand clap** at the middle of the table. Do not clap beside a lav. If and only if
-   M10 has closed its intended-phone/DJI bench, play its canonical marker once from the fixed
-   central phone position instead and analyze it with `dnd-audio marker analyze`.
+   **one sharp hand clap** at the middle of the table. Do not clap beside a lav. Alternatively,
+   play M10 marker v1 once from the fixed central phone position and analyze it after ingest
+   with `dnd-audio marker analyze SESSION`.
 4. Wait at least five seconds, then stop all six transmitters without powering them off.
 5. Copy the check take from every transmitter to a temporary verification session, preserving
    filenames exactly. At minimum the check must include one transmitter from each receiver;
@@ -230,10 +242,9 @@ human voice, pause target, and whether the delivery was clean, late, or repeated
    **“H1 main fixture. Two human voices, six transmitters, three receivers. Main take one.”**
 2. [One second of silence.]
 3. Make a distinctive **three-clap pattern**: clap, short pause, clap, longer pause, clap.
-   If M10 has closed its intended-phone/DJI bench, use its standalone offline HTML player to
-   play the canonical marker from the center of the table instead. Use the bench-tested phone,
-   orientation, and media-volume step. Do not substitute an ad-hoc tone, and do not skip the
-   LTC jam.
+   Alternatively, use the standalone offline HTML player to play marker v1 from the center of
+   the table. Use the bench-tested phone, orientation, and media-volume step. Do not substitute
+   an ad-hoc tone, and do not skip the LTC jam.
 4. [Two seconds of silence.]
 
 ### B. Six solo/direct-source rounds
@@ -311,9 +322,10 @@ two-speaker ground truth; do not repair it in the log.
 1. Confirm the post-power-cycle `tx-f` line has been recorded.
 2. Person One says: **“H1 end landmark.”**
 3. Make the same distinctive three-clap pattern used at the start, or replay the exact same
-   bench-validated M10 marker from the same central position, phone orientation, and media-
-   volume step if it was used there. A moved phone invalidates even differential comparison;
-   because lavs move during H1, do not label the remaining change pure recorder drift.
+   bench-validated M10 marker v1 from the same central position, phone orientation, and media-
+   volume step if it was used there. Record any phone movement: the measured change remains
+   differential acoustic arrival, but moved phone or lav geometry forbids calling it recorder
+   drift.
 4. Leave five seconds of room tone.
 5. Stop all transmitters one at a time, logging order and wall-clock time.
 6. Before powering down receivers, film and log all three displays in the “after main take”
@@ -536,7 +548,7 @@ weights, or tokens. A tiny audio excerpt still requires explicit owner approval.
 - [ ] Two different human voices said exact `Okay` simultaneously.
 - [ ] The same two voices spoke different sentences simultaneously.
 - [ ] `tx-f` was fully power-cycled and recorded before and after.
-- [ ] Matching start/end landmarks exist: distinctive three-clap patterns, or the closed M10
+- [ ] Matching start/end landmarks exist: distinctive three-clap patterns, or M10 marker v1
       marker from the same phone position/orientation/volume. Any drift claim also records
       whether every compared lav remained fixed.
 - [ ] Complete filenames, surprising displays, repeats, mistakes, and deviations were logged.

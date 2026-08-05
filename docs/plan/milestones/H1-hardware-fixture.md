@@ -76,9 +76,9 @@ It needs one short continuous take and no capture-time paperwork or intermediate
       320--350 ms. Log the words and pause targets. This tests M9's presentation-only join
       without treating a shared ASR batch as a conversational boundary (**OQ-018**, ADR-0034).
 - [ ] Turn one transmitter off, wait several seconds, turn it back on, record again.
-- [ ] A distinctive three-clap pattern near the start and near the end. If **M10's** canonical
-      marker, standalone phone player, and matched-filter detector have closed their intended-
-      phone/DJI bench first, the same prepared marker may replace each clap pattern. Play it
+- [ ] A distinctive three-clap pattern near the start and near the end, or **M10 marker v1**
+      from the standalone phone player built by `dnd-audio marker build`. The prepared marker
+      may replace each clap pattern now that its intended-phone/DJI bench has passed. Play it
       from one fixed central table position with the same phone orientation and volume, and
       keep the LTC jam; a generated sound verifies the jam but does not place a restarted file
       that missed the marker. Other playback positions are separate diagnostics, never the

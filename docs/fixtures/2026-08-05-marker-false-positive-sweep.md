@@ -89,9 +89,10 @@ from speech. It says nothing about whether a marker played from a phone speaker 
 lav across a table — the opposite failure direction, and the one the bench exists for. A
 detector that accepted nothing at all would score perfectly here.
 
-Nor does it set the thresholds. It bounds one side, and generously: any threshold at or above
-**100 permille** keeps this result on the hard corpus. Where it must sit to *catch* a real
-playback is the bench's to say, and ADR-0042 freezes the pair together.
+Nor did it set the thresholds by itself. It bounds one side, and generously: any threshold at
+or above **100 permille** keeps this result on the hard corpus. The later positive bench found
+every v1 playback at a 300-permille production floor, with a weakest fixed score of 404;
+ADR-0042 freezes the two sides together.
 
 ## Notes for the bench
 
@@ -107,4 +108,5 @@ qualifies as a chirp, and still no sequence assembles. Any future change that re
 tolerance or drops the required chirp count is spending the margin this measurement found, and
 should re-run it.
 
-Referenced from **OQ-025** and from `DetectorThresholds` in `src/dnd_audio/marker/detect.py`.
+Referenced from answered **OQ-025**, ADR-0042, and `DetectorThresholds` in
+`src/dnd_audio/marker/detect.py`.

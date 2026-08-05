@@ -46,9 +46,9 @@ CORPORA: Final = ("samples", "minimal-test-samples")
 
 #: How close a single chirp may come to its acceptance threshold on real speech before this
 #: stops being reassuring. Measured 2026-08-05: the worst case across 13.7 minutes was 186
-#: permille against a 550 threshold, so this leaves the measurement room to drift by more
-#: than twice its observed value and still fail before the threshold does.
-HEADROOM_CEILING_PERMILLE: Final = 400
+#: permille against the frozen 300 threshold. A 250 ceiling preserves at least 50 permille of
+#: single-chirp headroom while sequence structure supplies the stronger negative proof.
+HEADROOM_CEILING_PERMILLE: Final = 250
 
 
 def _recordings() -> list[Path]:

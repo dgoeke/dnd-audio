@@ -73,7 +73,8 @@ class MarkerManifest(_Artifact):
     """The complete description of one `marker build`."""
 
     schema_version: Literal[1] = MARKER_MANIFEST_SCHEMA_VERSION
-    #: Which waveform. A candidate name until the bench selects one (ADR-0042).
+    #: Which waveform. Public builds use bench-selected v1; candidate names remain for the
+    #: reproducible M10 evidence (ADR-0042).
     marker_name: str = Field(min_length=1)
     #: Bumping this changes the bytes, so it belongs beside the digests rather than in a
     #: separate provenance section nobody reads.

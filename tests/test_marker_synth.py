@@ -43,6 +43,7 @@ from dnd_audio.marker.sine import (
 )
 from dnd_audio.marker.spec import MARKER_SPECS, ChirpSpec, MarkerSpec, UnknownMarkerError, resolve
 from dnd_audio.marker.synth import chirp_phase_numerator, marker_samples, marker_templates
+from dnd_audio.marker.wav import marker_wav_bytes
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -361,16 +362,25 @@ class TestTheWaveformIsExact:
 
 
 class TestTheRegistry:
-    """Candidate before v1, enforced by an absent key rather than by convention."""
+    """The bench-selected v1 is data, while all three candidate names remain as history."""
 
-    def test_there_is_no_v1_until_the_bench_selects_one(self) -> None:
-        """ADR-0042. If this fails, either the bench ran or someone froze a guess."""
-        assert "v1" not in MARKER_SPECS
+    def test_v1_copies_the_bench_winner_but_keeps_its_public_name(self) -> None:
+        winner = MARKER_SPECS["cand-b"]
+        frozen = MARKER_SPECS["v1"]
+        assert frozen.name == "v1"
+        assert frozen.chirps == winner.chirps
+        assert frozen.gaps_samples == winner.gaps_samples
+        assert frozen.lead_silence_samples == winner.lead_silence_samples
+        assert frozen.trail_silence_samples == winner.trail_silence_samples
+        assert frozen.peak_amplitude == winner.peak_amplitude
 
-    def test_building_without_a_name_refuses_and_names_the_bench(self) -> None:
-        with pytest.raises(UnknownMarkerError, match="bench") as caught:
-            resolve(None)
-        assert caught.value.code == "marker_not_selected"
+    def test_building_without_a_name_resolves_v1(self) -> None:
+        assert resolve(None) is MARKER_SPECS["v1"]
+
+    def test_v1_wav_bytes_are_frozen_by_adr_0042(self) -> None:
+        assert sha256_bytes(marker_wav_bytes(resolve(None))) == (
+            "70355baad6bb72b38e0b606cddbbaa3428c11429bec74cd127aa6f8935ecdf6f"
+        )
 
     def test_an_unknown_name_lists_what_this_build_carries(self) -> None:
         with pytest.raises(UnknownMarkerError, match="cand-a"):

@@ -1,5 +1,10 @@
 # M10 marker bench protocol
 
+**Bench completed 2026-08-05.** Cand-b won and is frozen as marker v1 by ADR-0042. The
+sanitized result is in `fixtures/2026-08-05-marker-phone-dji-bench.md`. The procedure below is
+retained as the reproducible capture record; production operators use
+`dnd-audio marker build OUTPUT_DIRECTORY` without the hidden candidate option.
+
 This is the executable capture protocol for the phone/DJI bench that
 [M10 — Acoustic synchronization marker](plan/milestones/M10-acoustic-sync-marker.md) is built
 around. It is the charter's `## Bench protocol` section made step-by-step.
@@ -59,9 +64,9 @@ That is everything. Steps 5–8 below are mine, not yours.
 
 ## What this bench decides
 
-Three candidate waveforms exist in the code. **None of them is `v1`, and `marker build` with no
-`--marker` refuses to build anything** — deliberately, so nobody can record a real session
-against a waveform the hardware has never heard. This bench is what turns one of them into `v1`.
+Three candidate waveforms remain in the code as history. Before this bench, **none was `v1` and
+`marker build` with no `--marker` refused** so nobody could record against an untested guess.
+This bench selected cand-b and added a separate public `v1` entry with the same waveform bytes.
 
 It answers four questions that no synthetic test can, and one is by far the most important:
 
@@ -387,7 +392,7 @@ Read `work/sync-marker-analysis.json` and check:
 | `occurrences` | one entry per track per play — six tracks × six plays for `cand-a` | if a track is absent everywhere, its recording, its placement, or the volume step is wrong |
 | `occurrences[].clipped` | `false`, especially on the nearest transmitter | lower the media volume one step and redo Blocks 1 and 3 |
 | `occurrences[].weak` | `false`, especially on the farthest | raise it one step and redo Blocks 1 and 3 |
-| `occurrences[].score_permille` | above 600 on every track | a low value at the farthest seat is **not** necessarily a candidate failing — see the false-positive headroom above — but it is worth knowing while the room is still set up |
+| `occurrences[].score_permille` | record the value on every track; frozen v1 later uses 300 | a low value at the farthest seat is **not** necessarily a candidate failing — see the false-positive headroom above — but it is worth knowing while the room is still set up |
 | `notes` and the report's `warnings` | read them | they name what the analysis could not conclude and why |
 
 The volume-step retakes are the only ones worth redoing on the spot. Everything else can be

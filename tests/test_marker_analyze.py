@@ -26,10 +26,22 @@ from dnd_audio.cli import app
 from dnd_audio.errors import ExitCode
 from dnd_audio.fixtures import FixtureTruth, build_session, canonical_session
 from dnd_audio.marker import ANALYSIS_RELATIVE_PATH, MARKER_REPORT_RELATIVE_PATH
-from dnd_audio.marker.analysis import ArrivalOutcome, DetectionOutcome, SyncMarkerAnalysis
+from dnd_audio.marker.analysis import (
+    ArrivalOutcome,
+    DetectionOutcome,
+    GroupMember,
+    OccurrenceGroup,
+    SyncMarkerAnalysis,
+)
+from dnd_audio.marker.detect import DetectorThresholds
 from dnd_audio.marker.eventlog import EventLogError, load_event_log
 from dnd_audio.marker.inputs import read_session_artifacts
-from dnd_audio.marker.runner import marker_analyze_outputs, run_marker_analyze
+from dnd_audio.marker.runner import (
+    _Accumulator,
+    _compare_arrival,
+    marker_analyze_outputs,
+    run_marker_analyze,
+)
 from dnd_audio.marker.spec import MARKER_SPECS
 from dnd_audio.marker.synth import marker_samples
 from dnd_audio.timeline.pcm import open_pcm
@@ -473,6 +485,36 @@ class TestTheEventLog:
         analysis = analysis_of(two_marker_session)
         for comparison in analysis.arrival:
             assert comparison.outcome is not ArrivalOutcome.CLOCK_DRIFT_EVIDENCE
+
+    @pytest.mark.parametrize(("change", "warns"), [(47, False), (48, True), (-48, True)])
+    def test_only_a_material_fixed_geometry_change_warns(self, change: int, warns: bool) -> None:
+        """ADR-0042's one-millisecond boundary, including its negative direction."""
+        groups = [
+            OccurrenceGroup(
+                group_index=index,
+                reference_anchor_sample=100_000 + index * 200_000,
+                role=role,
+                role_source="event_log",
+                geometry_id="fixed-table",
+                members=[
+                    GroupMember(
+                        track_id="tx-a",
+                        outcome=DetectionOutcome.DETECTED,
+                        anchor_sample=100_000 + index * 200_000,
+                        relative_lag_samples=lag,
+                        score_permille=600,
+                    )
+                ],
+            )
+            for index, (role, lag) in enumerate((("start", 100), ("end", 100 + change)))
+        ]
+        accumulator = _Accumulator()
+        comparisons = _compare_arrival(
+            groups, settings=DetectorThresholds(), accumulator=accumulator
+        )
+        assert comparisons[0].change_samples == change
+        assert comparisons[0].outcome is ArrivalOutcome.CLOCK_DRIFT_EVIDENCE
+        assert bool(accumulator.warnings) is warns
 
     def test_an_event_log_naming_another_marker_labels_nothing(
         self, two_marker_session: Path, tmp_path: Path

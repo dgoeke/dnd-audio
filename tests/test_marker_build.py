@@ -206,11 +206,14 @@ class TestPublicationOrder:
 class TestTheCommand:
     """Through the CLI, because the wiring is what carries the guards."""
 
-    def test_building_without_a_marker_refuses_and_names_the_bench(self, tmp_path: Path) -> None:
+    def test_building_without_a_marker_produces_frozen_v1(self, tmp_path: Path) -> None:
         result = runner.invoke(app, ["marker", "build", str(tmp_path)])
-        assert result.exit_code == ExitCode.FATAL
-        assert "marker_not_selected" in result.output
-        assert list(tmp_path.iterdir()) == []
+        assert result.exit_code == 0, result.output
+        manifest = json.loads((tmp_path / MARKER_MANIFEST_FILENAME).read_text(encoding="utf-8"))
+        assert manifest["marker_name"] == "v1"
+        assert manifest["wav"]["sha256"] == (
+            "70355baad6bb72b38e0b606cddbbaa3428c11429bec74cd127aa6f8935ecdf6f"
+        )
 
     def test_building_a_candidate_succeeds_and_reports_the_digest(self, tmp_path: Path) -> None:
         result = runner.invoke(app, ["marker", "build", str(tmp_path), "--marker", "cand-a"])

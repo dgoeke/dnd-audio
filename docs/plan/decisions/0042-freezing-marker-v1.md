@@ -1,17 +1,14 @@
 # ADR-0042 — Freezing marker v1
 
-**Status:** proposed — **deliberately unfilled until the phone/DJI bench has run.**
-**Date:** 2026-08-05 (opened)
+**Status:** accepted
+**Date:** 2026-08-05
 **Milestone:** M10
 
 ## Context
 
-ADR-0041 decides that `MARKER_SPECS` holds named candidates and that **there is no `v1` key**
-until physical evidence selects one. This ADR is the record that adds it, and it is opened
-empty on purpose: an ADR that recorded a choice nobody has evidence for would be worse than an
-obligation nobody can miss.
-
-**M10 cannot close while this ADR reads `proposed`.** That is its function.
+ADR-0041 decided that `MARKER_SPECS` would hold named candidates and have **no `v1` key** until
+physical evidence selected one. That intended-phone/six-DJI bench has now run; its sanitized
+measurements are in `docs/fixtures/2026-08-05-marker-phone-dji-bench.md`.
 
 The charter is explicit about why theory is not enough. Exact frequencies, chirp durations,
 directions, gaps, sample format and peak level are all properties of what a phone speaker
@@ -21,27 +18,50 @@ is a *candidate*, described there as "not frozen by this planning document".
 
 ## Decision
 
-**Pending the bench.** When it has run, this ADR records, and nothing else may:
+**Cand-b becomes the separate public `v1` entry.** It won on the two properties that matter
+most at opposite ends of the table: the strongest worst-track fixed-position score (404
+permille, versus cand-c's 323 and cand-a's 252) and the most repeatable arrival (0–1 sample
+over three opening plays, versus 26 and 240). All four fixed-position cand-b plays were found
+on all six tracks at approximately 90% phone volume, with no clipping, weak signal, ambiguity,
+or extra occurrence. The real-DJI negative sweep accepted no sequence at a 100-permille floor.
 
-- **Which candidate wins**, from the objective evidence the charter's bench protocol lists:
-  correlation peak sharpness and ambiguity on every DJI track; tolerance to phone/browser
-  resampling, lav band limiting, reverberation, gain change and moderate clipping; audibility
-  at the farthest lav without clipping the nearest; reliable distinction from normal table
-  audio; and stable detection across repeated plays on the intended phone.
-- **The complete integer PCM sample sequence, by SHA-256**, together with the human-readable
-  recipe that regenerates it — both, because a hash alone cannot be reasoned about and a
-  recipe alone cannot be verified.
-- **The frozen anchor**, as an exact sample relative to the WAV's first sample.
-- **The detector thresholds and tolerances**, in the integer permille domain ADR-0041 fixes:
-  normalized peak score, runner-up separation, inter-chirp gap tolerance, required chirp
-  count, the non-maximum-suppression radius, the bounded cross-track association lag, the
-  clipping and weak-signal thresholds, and the "material" differential-arrival change
-  threshold above which ADR-0040 permits a warning.
-- **The measured tolerance** for repeated same-position lag, which is what makes a later
-  change interpretable at all.
+The human-readable v1 recipe is mono 48 kHz signed 16-bit PCM; three 250 ms linear rising
+chirps from 800 Hz to 6 kHz; 25 ms raised-cosine fades; asymmetric 200 ms then 320 ms gaps;
+100 ms leading and trailing silence; and 0.5 full-scale peak amplitude. The frozen anchor is
+sample **4800**, the first sample of the first chirp. The canonical WAV is 141,164 bytes and
+has SHA-256:
 
-Every one of those constants currently cites **OQ-025** or **OQ-029** as provisional. When
-this ADR is accepted they cite it instead, and the two open questions record what was measured.
+```text
+70355baad6bb72b38e0b606cddbbaa3428c11429bec74cd127aa6f8935ecdf6f
+```
+
+The detector constants are frozen as follows. These are engineering bounds with stated
+margin, not copies of one bench's extrema:
+
+| constant | v1 value | evidence and margin |
+| --- | ---: | --- |
+| chirp score floor | 300‰ | 104 below the weakest fixed v1 sequence; 3× the floor proved sequence-clean on real speech |
+| sequence score floor | 300‰ | Same weakest-link domain; keeping the floors equal avoids an acceptance region the sequence test cannot use |
+| runner-up separation | 50‰ | The final bench had no unclaimed local alternative; 50 rejects an echo nearly as persuasive as the selected path without tying the value to a nonexistent bench runner-up |
+| chirp peak NMS radius | 2400 samples (50 ms) | Suppresses one correlation lobe/reflection family while preserving a distinct local competitor for ambiguity reporting |
+| sequence NMS radius | 7200 samples (150 ms) | The synthetic room response produced a coherent 106 ms echo; v1 lasts 1.47 s and cannot legitimately be replayed this close |
+| gap tolerance | 1440 samples (30 ms) | Largest v1 error was 29 samples, leaving 1411; synthetic stretching shows chirp correlation fails before this bound |
+| association lag | 4800 samples (100 ms) | Largest bench lag was 1878, leaving 2922; still covers table propagation plus one 33.3 ms metadata quantum |
+| clipping ratio | 10‰ at ≥0.99 full scale | No bench occurrence crossed it at approximately 90% phone volume; it classifies score trust, not acceptance |
+| weak RMS | 1‰ full scale | No bench occurrence crossed it; below this is effectively no usable signal |
+| material fixed-geometry change | 48 samples (1 ms) | Bench repeat maximum 17, leaving 31; 1 ms is below the 1600-sample timecode quantum yet above measured acoustic repeat noise |
+| occurrence ceiling | 32 per track | Eight were planned at most and six occurred; 32 is operational headroom while remaining a hard memory bound |
+
+Three chirps remain required by the waveform and sequence assembler. The fixed-position
+closing lag changed by 13–17 samples relative to the opening median over about 11.8 minutes.
+That is the measured same-position tolerance for this bench, not a four-hour drift estimate.
+
+The bench also found a detector-shape defect before schemas froze: `runner_up_permille` had
+compared later chirps and other valid plays against the first-chirp anchor. It therefore made
+legitimate repeats look like ambiguity. Detector semantics v2 compares only unclaimed,
+same-chirp alternatives local to the occurrence, after every accepted occurrence is excluded;
+analysis schema v2 records the resulting `ambiguous` fact. Sequence-level NMS is separate so
+a coherent room echo remains one event without erasing a distinct chirp-level competitor.
 
 A future marker change takes a **new** semantic version and a new versioned filename. It does
 not silently replace v1, and v1's frozen hash stays in this document as history.
@@ -60,9 +80,8 @@ across sessions, which is the entire point of measuring drift between two of the
 
 ## Consequences
 
-Until this is accepted, `marker build OUTPUT_DIRECTORY` exits nonzero naming the bench, and
-the only way to produce a marker is the hidden `--marker` option the bench protocol documents.
-That is the intended state, and it is what makes the obligation impossible to forget.
+`marker build OUTPUT_DIRECTORY` now resolves v1. The hidden `--marker` option remains only for
+reproducing the three bench candidates; it is not a public candidate-management interface.
 
 Once accepted, the golden test that pins v1's SHA-256 also pins everything underneath it —
 the sine table, the integer phase arithmetic, and the RIFF layout in `marker/wav.py`. Any
