@@ -200,12 +200,16 @@ Partial success never exits zero.
 _Owner: M0 (report skeleton), every milestone thereafter._
 
 **INV-14 — The mix and the transcript share one time origin.**
-The MP3's first sample is session sample zero, and its rendered span is the
-timeline's session span. A `start_s` in `transcript.json` therefore addresses the
-same instant in `session.mp3`, with no lead-in, trim, head silence, or offset
-between them. This held by construction from M5 onward; it is stated because an
-external consumer now depends on it — ADR-0044's wiki player seeks the MP3 from
-transcript timestamps, so any drift here silently mislabels every published turn
-by a constant while both artifacts remain internally valid. Encoder delay is
-outside this rule and bounded by the format at roughly 12–26 ms.
+The mix's first sample is session sample zero and its span is the timeline's
+session span, so a `start_s` in `transcript.json` addresses the same instant in
+`session.mp3`. No lead-in, trim, head silence, or offset may appear on one side
+and not the other. Two differences are permitted and bounded: the public
+serialization boundary quantizes to whole milliseconds (INV-04), and MP3 encoder
+delay is a property of the format at roughly 12–26 ms. Nothing else.
+
+This held by construction from M5 onward and is stated because an external
+consumer now depends on it — ADR-0044's wiki player seeks the MP3 from transcript
+timestamps, so an offset introduced on either side would silently mislabel every
+published turn by a constant while both artifacts stayed internally valid and
+every existing test kept passing.
 _Owner: M5 (rendering), asserted for M7b's consumer._
