@@ -1257,3 +1257,66 @@ M9 therefore defaults `transcript.leading_ownership_grace_ms` to 20, bounded by 
 padding and the preceding same-track interval (ADR-0033). That is a conservative remedy for
 the measured failure, not an answer about all speakers or rooms. This entry remains **open**
 for H1/H2, and it still blocks changing `activity.vad.pad_ms` without multi-wearer evidence.
+
+## OQ-028 — Does DigitalOcean Spaces paginate object listings, and by which API?
+**Assumption:** Legacy `ListObjects` marker pagination works and is complete;
+`ListObjectsV2` continuation tokens do not. So `dnd-audio archive list` and the manifest
+discovery behind `verify`/`restore` follow `NextMarker`/`IsTruncated` to exhaustion and never
+call the V2 form at all.
+**Why it matters:** A truncated listing treated as complete is the failure mode this whole
+milestone exists to prevent, one level up from a corrupt byte: `list` would report a session
+absent, and a manifest-divergence check reading a partial key set could conclude an upload is
+missing objects it actually has.
+**Why it was an open question:** the provider's own documentation contradicts itself. The
+[S3 compatibility page](https://docs.digitalocean.com/products/spaces/reference/s3-compatibility/)
+says "Both `ListObjects` (legacy) and `ListObjectsV2` are supported", while the
+[limits page](https://docs.digitalocean.com/products/spaces/details/limits/) carries a
+**Known Issues** entry stating verbatim that "The Spaces API does not currently support
+`list-objects-v2` pagination". Both read 2026-08-04.
+**Needs:** the owner's Cold Storage bucket · **Blocks:** nothing · **Status:** **answered —
+listing works, and the far more interesting finding was ours rather than the provider's**
+(M7a host smoke, 2026-08-04)
+
+**Answer — Cold Storage lists fine.** Against the real bucket, `ListObjects` with a prefix
+returns every key. Archive v1 keeps the legacy marker form regardless, because the documented
+V2 pagination issue is unresolved and a fallback path that only runs when a provider bug is
+present is a path nobody exercises — it would first be exercised during a recovery. Nothing
+observed contradicts the compatibility page for the legacy form.
+
+**What the smoke actually found, which was a defect in this project.** Every listing initially
+failed with `NoSuchKey` while `HeadObject` on a key uploaded seconds earlier succeeded. The
+first conclusion drawn — that Cold Storage does not support listing — was **wrong**, and the
+owner pushed back on it correctly: DigitalOcean returns `NotImplemented` for an unsupported
+operation, so `NoSuchKey` pointed at a malformed request instead.
+
+The cause was the configured endpoint. DigitalOcean's control panel displays a bucket's
+address as `<bucket>.<region>.digitaloceanspaces.com`, so that is the natural value to paste
+into `endpoint_url` — and the bucket is *also* passed as a request parameter. boto3 then
+addressed the request path-style against that host, and **the bucket name became part of every
+object key**: everything landed at `<bucket>/sessions/archive-v1/…`.
+
+**Nothing downstream could notice.** `PutObject` and `HeadObject` were wrong in exactly the
+same way, so upload succeeded, the full remote readback succeeded, `verify` succeeded and
+`restore` succeeded — every guarantee this milestone makes held, against keys nobody intended.
+A listing was the only operation that disagreed, because it is the only one that asks the
+bucket what is in it rather than naming a key.
+
+`ArchiveRuntimeConfig` now refuses a virtual-hosted endpoint at load, naming the regional URL
+to use. It is refused rather than corrected: guessing what the operator meant would put a
+second thing in charge of deciding where session audio is stored. The check distinguishes
+`<bucket>.<region>.<domain>` from a regional endpoint whose bucket happens to share a name
+with the region — a bucket called `sfo3` must not make `sfo3.digitaloceanspaces.com`
+unusable, which the validator's own test caught it doing.
+
+**Confirmed working end to end** at correct keys afterwards: upload → verify → delete the
+session directory → remote-only restore, plus `list` discovering the session id, plus a forced
+multipart round trip whose ETag is confirmed *not* to be the content digest (ADR-0038).
+
+**The listing evidence was re-established against the final code before close**, and the
+re-run found that the test carrying it was itself unsound: the two pagination tests shared
+bucket state across xdist workers, so the one that lists could run before the one that
+uploads and had been passing on the previous run's leftover objects. Fixed by giving both
+their own seeding fixture, and proved by emptying the prefix first. The provider answer above
+is unchanged — legacy `ListObjects` marker pagination returns every key across several pages
+with `MaxKeys=1`, and the adapter's own `list_keys` agrees — but it is now demonstrated by a
+test that could have failed.

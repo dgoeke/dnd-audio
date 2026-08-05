@@ -5,7 +5,9 @@ Shared by every agent that works on this repository. Claude Code reads it via
 
 A fully local audio-ingestion and transcription pipeline for long tabletop-RPG
 sessions. Six DJI Mic 3 transmitter recordings in; diarized transcript, automix
-MP3, and an ingest report out. No audio ever leaves this machine.
+MP3, and an ingest report out. No audio is ever processed anywhere but this machine,
+and the only thing that may leave it is an explicitly invoked `archive` backup of the
+raw sources to owner-controlled private storage (M7a).
 
 `dnd-audio-ingestion-agent-spec.md` is the authoritative product spec. It does not
 change casually. If implementation proves part of it wrong, record an ADR under
@@ -65,8 +67,13 @@ which is gitignored because a reviewer transcript quotes every file it read,
 
 - **Never modify anything under a session's `raw/`.** Not renamed, not normalized,
   not rewritten. Hash-verified before and after every run.
-- **Never send audio off the machine.** Model downloads during an explicit fetch
-  step are the only permitted network traffic, and never in the default test suite.
+- **Never send audio anywhere that processes it.** No cloud ASR, no URL upload to a
+  service, no telemetry carrying audio. Two permitted kinds of network traffic, both
+  explicitly invoked and neither on a processing path: model downloads during a fetch
+  step, and `dnd-audio archive` uploading byte-exact compressed copies of a session's
+  immutable sources to an owner-controlled private bucket as off-site backup (M7a,
+  INV-06). Never any network traffic in the default test suite. If you are adding a
+  third, you are almost certainly wrong.
 - **Never commit** session audio, model weights, tokens, generated working audio,
   or output artifacts.
 - **No placeholder implementations.** A milestone is not complete because a

@@ -32,6 +32,11 @@ import typer
 
 from dnd_audio import __version__
 from dnd_audio.activity.runner import ActivityResult, run_activity
+
+# The enum only; `dnd_audio.archive.report` imports no provider code, so registering the
+# subcommands does not pull an S3 SDK into a process that will only ever run `mix`. The
+# archive modules that do are imported inside `_run_archive` (INV-06, ADR-0035).
+from dnd_audio.archive.report import ArchiveOperation
 from dnd_audio.determinism import canonical_json
 from dnd_audio.doctor import CheckStatus, overall_status, run_checks
 from dnd_audio.errors import DndAudioError, ExitCode
@@ -88,17 +93,26 @@ app = typer.Typer(
     name="dnd-audio",
     help=(
         "Local audio ingestion and transcription for long tabletop-RPG sessions. "
-        "Nothing here sends audio anywhere."
+        "Nothing here sends audio to anything that processes it; `archive` is the one "
+        "command group that sends anything at all, to your own private storage."
     ),
     no_args_is_help=True,
     add_completion=False,
 )
 
 models_app = typer.Typer(
-    help="Model management. `fetch` is the only command permitted to touch the network.",
+    help="Model management. `fetch` is one of the two commands permitted to touch the "
+    "network; `archive` is the other.",
     no_args_is_help=True,
 )
 app.add_typer(models_app, name="models")
+
+archive_app = typer.Typer(
+    help="Verified off-site backup of a session's raw sources. The only command group "
+    "that sends session audio anywhere, and it never publishes or deletes (INV-06).",
+    no_args_is_help=True,
+)
+app.add_typer(archive_app, name="archive")
 
 
 @app.command()
@@ -330,7 +344,8 @@ def models_fetch(
 ) -> None:
     """Install the pinned models and record what they resolved to.
 
-    The only command permitted to touch the network (INV-06). Without `--qwen` it fetches
+    One of the two commands permitted to touch the network (INV-06); `archive` is the
+    other. Without `--qwen` it fetches
     exactly one artifact: Silero VAD, pinned by commit and sha256, verified in memory
     before it is written (ADR-0013). With it, the Qwen ASR model and forced aligner are
     installed too, each pinned to a commit with a per-file digest manifest and downloaded
@@ -467,6 +482,262 @@ def models_plan(
         typer.echo(f"    revision    {row['revision']}")
         typer.echo(f"    target      {row['target']}")
     typer.echo(f"  lock          {lock_path()}")
+
+
+@archive_app.command("upload")
+def archive_upload(session_dir: SessionDir) -> None:
+    """Compress, upload, and verify every raw source; commit the manifest last.
+
+    Requires a current `manifest.json`, so `dnd-audio inspect` runs first. Nothing under
+    the session's sources is written, renamed, or deleted (INV-01), and no output or
+    transcript is published — that is M7b and does not exist yet.
+
+    Every object is downloaded and decompressed again before the manifest goes up, which
+    roughly doubles the network cost and is the entire difference between a backup and a
+    belief (ADR-0038).
+    """
+    _run_archive(ArchiveOperation.UPLOAD, session_dir=session_dir)
+
+
+@archive_app.command("status")
+def archive_status(session_dir: SessionDir) -> None:
+    """Compare a local session against the archive. Cheap, and never authoritative.
+
+    Reports `absent`, `pending`, `committed`, `previously_verified_at_commit` or
+    `divergent`. It structurally cannot report `verified`: only a current full download
+    establishes that, and saying it from provider metadata would be the one lie this
+    design exists to prevent (ADR-0039).
+    """
+    _run_archive(ArchiveOperation.STATUS, session_dir=session_dir)
+
+
+@archive_app.command("list")
+def archive_list() -> None:
+    """Every committed session id, without needing a local session directory.
+
+    What makes the recovery drill possible when nobody remembers what the session was
+    called. Follows pagination to exhaustion; a partial listing is an error, never a
+    shorter answer.
+    """
+    _run_archive(ArchiveOperation.LIST)
+
+
+@archive_app.command("verify")
+def archive_verify(
+    session_id: Annotated[str, typer.Option("--session-id", help="The archived session to check.")],
+    track: Annotated[
+        str | None,
+        typer.Option("--track", help="Check only this track. Omit for the whole session."),
+    ] = None,
+    report: Annotated[
+        Path | None,
+        typer.Option("--report", help="Where to write the operation report."),
+    ] = None,
+) -> None:
+    """Download every selected object and prove it still restores. The real check.
+
+    Needs no local session directory — it is built for the case where there isn't one.
+    Expensive by design: Cold Storage charges for retrieval, and anything cheaper would
+    not be a verification.
+    """
+    _run_archive(ArchiveOperation.VERIFY, session_id=session_id, track=track, report_path=report)
+
+
+@archive_app.command("restore")
+def archive_restore(
+    session_id: Annotated[
+        str, typer.Option("--session-id", help="The archived session to restore.")
+    ],
+    to: Annotated[
+        Path,
+        typer.Option("--to", help="An existing empty directory to rebuild the session in."),
+    ],
+    track: Annotated[
+        str | None,
+        typer.Option("--track", help="Restore only this track. Omit for everything."),
+    ] = None,
+    report: Annotated[
+        Path | None,
+        typer.Option("--report", help="Where to write the operation report."),
+    ] = None,
+) -> None:
+    """Rebuild a session's files from the archive alone, into an empty directory.
+
+    Transactional: the whole tree is staged beside the destination and moved in at the
+    end, so a failure leaves the destination untouched and the retry is just a retry.
+
+    A track scope recovers only files attributed to that track. Nested notes and
+    unassigned audio come back from a whole-session restore, because attributing them to
+    a track would be inventing identity (INV-11).
+    """
+    _run_archive(
+        ArchiveOperation.RESTORE,
+        session_id=session_id,
+        track=track,
+        destination=to,
+        report_path=report,
+    )
+
+
+def _sessions_above(destination: Path) -> list[Path]:
+    """Every session directory the restore destination sits inside.
+
+    Walks up looking for a `session.yaml`, because the CLI has no roster of sessions and a
+    destination inside one is the case INV-01 forbids. Returns a list so the runner can
+    resolve each one's configured source roots — a session directory is not itself
+    protected, only the source roots within it are, and `restore --to SESSION/recovered`
+    is a perfectly reasonable thing to want.
+
+    Resolves first, so a symlinked component cannot hide the session it lands in.
+    """
+    found: list[Path] = []
+    current = destination.resolve()
+    for candidate in (current, *current.parents):
+        if (candidate / "session.yaml").is_file():
+            found.append(candidate)
+    return found
+
+
+def _reject_report_inside_raw(report_path: Path) -> None:
+    """Refuse to write an archive report under any session's sources (INV-01).
+
+    Driven by the **report path itself** rather than by whether the command was given a
+    session directory. The earlier version guarded this only for `upload` and `status`, so
+    `archive verify --report SESSION/raw/tx-a/DJI_01.WAV` — a remote-only operation, which
+    never has a session directory — replaced an irreplaceable recording with JSON. That is
+    the one thing this whole milestone exists to make impossible, reachable from a
+    documented flag. Found by M7a's second code review.
+
+    Every session above the resolved path is consulted, which covers both the explicit
+    `--report` and the `work -> raw/tx-a` symlink M1's verify phase found: resolving
+    `SESSION/work/archive-upload-report.json` lands inside `SESSION/raw/tx-a`, whose
+    session is still an ancestor.
+
+    Raises:
+        DndAudioError: with code ``output_inside_raw``, before the operation runs. Checked
+            first rather than last so an expensive `verify` is not paid for and then
+            refused.
+    """
+    from dnd_audio.config import load_session_config
+    from dnd_audio.errors import DiscoveryError
+    from dnd_audio.raw_guard import raw_roots, reject_outputs_inside_raw
+
+    for session_dir in _sessions_above(report_path):
+        try:
+            config = load_session_config(session_dir / "session.yaml")
+        except DndAudioError as exc:
+            # **Refused, not skipped.** The first version of this guard wrote `continue`
+            # under a comment claiming unknown roots are "not permissive", which is exactly
+            # what continuing makes them: a session whose `session.yaml` does not parse has
+            # source roots this process cannot enumerate, and the report path is *inside*
+            # that session — so writing there might land in `raw/`. The only session that
+            # reaches this branch is one containing the report, so refusing blocks nothing
+            # unrelated. Found by M7a's third code review, in the fix for the second's P0.
+            message = (
+                f"the report would be written inside a session whose session.yaml cannot "
+                f"be read, so its source directories are unknown and nothing may be "
+                f"written under them (INV-01): {exc}"
+            )
+            raise DiscoveryError(message, code="output_inside_raw") from exc
+        reject_outputs_inside_raw(
+            session_dir, config, raw_roots(config), {"archive report": report_path}
+        )
+
+
+def _run_archive(
+    operation: ArchiveOperation,
+    *,
+    session_dir: Path | None = None,
+    session_id: str | None = None,
+    track: str | None = None,
+    destination: Path | None = None,
+    report_path: Path | None = None,
+) -> None:
+    """Resolve configuration, build the client, run the operation, write the report.
+
+    One place, because five commands share every step of it and the interesting failure —
+    an unconfigured machine — must produce the same message from all of them.
+    """
+    from dnd_audio.archive.config import ArchiveConfigError, default_report_dir, load_archive_config
+    from dnd_audio.archive.report import write_report
+    from dnd_audio.archive.runner import run_list, run_restore, run_status, run_upload, run_verify
+    from dnd_audio.archive.spaces import build_storage
+
+    try:
+        settings = load_archive_config()
+    except ArchiveConfigError as exc:
+        typer.secho(f"  error  {exc.code}: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=ExitCode.FATAL) from exc
+
+    # Resolved and checked **before** the operation runs. INV-01 outranks INV-13 when the
+    # report's own location is the violation, exactly as `inspect` has done since M1: a
+    # report is regenerable and a source directory written into is not. Doing it first also
+    # means a full `verify` download is not paid for and then thrown away.
+    if report_path is None:
+        report_path = (
+            session_dir / "work" / f"archive-{operation.value}-report.json"
+            if session_dir is not None
+            else default_report_dir() / f"archive-{operation.value}-report.json"
+        )
+    try:
+        _reject_report_inside_raw(report_path)
+    except DndAudioError as exc:
+        typer.secho(
+            f"  no report written: {report_path} would land inside a session's own "
+            f"sources, and nothing under them may be written to (INV-01)",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=ExitCode.FATAL) from exc
+
+    storage = build_storage(settings)
+    listed: list[str] = []
+
+    if operation is ArchiveOperation.UPLOAD:
+        assert session_dir is not None
+        result = run_upload(session_dir, storage=storage)
+    elif operation is ArchiveOperation.STATUS:
+        assert session_dir is not None
+        result = run_status(session_dir, storage=storage)
+    elif operation is ArchiveOperation.LIST:
+        listed, result = run_list(storage=storage)
+    elif operation is ArchiveOperation.VERIFY:
+        assert session_id is not None
+        result = run_verify(session_id, storage=storage, track_id=track)
+    else:
+        assert session_id is not None
+        assert destination is not None
+        # **Protected roots must be resolved here**, not left empty. The runner refuses a
+        # destination inside a session's sources, and the CLI passing nothing made that
+        # refusal unreachable from the actual command — so `archive restore --to
+        # SESSION/raw/anywhere` would have written into protected sources (INV-01). The one
+        # test that appeared to prove otherwise passed the list by hand. Found by M7a's
+        # code review.
+        result = run_restore(
+            session_id,
+            destination,
+            storage=storage,
+            track_id=track,
+            protected_session_dirs=_sessions_above(destination),
+        )
+
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    write_report(result, report_path)
+
+    for session in listed:
+        typer.echo(f"  session   {session}")
+    typer.echo(f"  {result.operation.value:<9} {result.status.value}")
+    typer.echo(f"  archive   {result.verification.value}")
+    if result.scope.entries_in_scope:
+        typer.echo(f"  scope     {result.scope.entries_in_scope} entry/entries")
+    for note in result.notes:
+        typer.secho(f"  note      {note}", fg=typer.colors.YELLOW)
+    for error in result.errors:
+        typer.secho(f"  error     {error.code}: {error.message}", fg=typer.colors.RED, err=True)
+    typer.echo(f"  report    {report_path}")
+
+    if result.exit_code() is not ExitCode.OK:
+        raise typer.Exit(code=result.exit_code())
 
 
 @app.command()

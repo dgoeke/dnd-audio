@@ -1,0 +1,253 @@
+{
+  "$defs": {
+    "ArchiveObjectOutcome": {
+      "description": "What happened to one object.",
+      "enum": [
+        "uploaded",
+        "already_present",
+        "verified",
+        "restored",
+        "failed",
+        "skipped"
+      ],
+      "title": "ArchiveObjectOutcome",
+      "type": "string"
+    },
+    "ArchiveOperation": {
+      "description": "Which command produced this report.",
+      "enum": [
+        "upload",
+        "status",
+        "list",
+        "verify",
+        "restore"
+      ],
+      "title": "ArchiveOperation",
+      "type": "string"
+    },
+    "ArchiveReportError": {
+      "additionalProperties": false,
+      "description": "A failure a caller can branch on without parsing prose (INV-13).",
+      "properties": {
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "ArchiveReportError",
+      "type": "object"
+    },
+    "ArchiveScope": {
+      "additionalProperties": false,
+      "description": "Exactly what this operation covered, so a report cannot overstate itself.",
+      "properties": {
+        "entries_in_scope": {
+          "minimum": 0,
+          "title": "Entries In Scope",
+          "type": "integer"
+        },
+        "session_id": {
+          "minLength": 1,
+          "title": "Session Id",
+          "type": "string"
+        },
+        "track_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Track Id"
+        }
+      },
+      "required": [
+        "session_id",
+        "entries_in_scope"
+      ],
+      "title": "ArchiveScope",
+      "type": "object"
+    },
+    "ObjectResult": {
+      "additionalProperties": false,
+      "description": "One object's outcome within an operation.",
+      "properties": {
+        "compressed_size_bytes": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Compressed Size Bytes"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArchiveReportError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "outcome": {
+          "$ref": "#/$defs/ArchiveObjectOutcome"
+        },
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "size_bytes": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Size Bytes"
+        }
+      },
+      "required": [
+        "path",
+        "outcome"
+      ],
+      "title": "ObjectResult",
+      "type": "object"
+    },
+    "OperationStatus": {
+      "enum": [
+        "complete",
+        "partial",
+        "failed"
+      ],
+      "title": "OperationStatus",
+      "type": "string"
+    },
+    "VerificationState": {
+      "description": "How much is actually known about the archive's integrity right now.\n\nOrdered weakest to strongest, and never collapsed. See the module docstring: this\ndistinction is the single most important word in the milestone.",
+      "enum": [
+        "absent",
+        "pending",
+        "committed",
+        "previously_verified_at_commit",
+        "verified",
+        "divergent"
+      ],
+      "title": "VerificationState",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The structured record of one archive operation.\n\nNot byte-stable and not required to be: it carries a wall-clock time, like\n`ingest-report.json`'s telemetry and for the same reason. Nothing deterministic\ndownstream consumes it.",
+  "properties": {
+    "errors": {
+      "items": {
+        "$ref": "#/$defs/ArchiveReportError"
+      },
+      "title": "Errors",
+      "type": "array"
+    },
+    "finished_at": {
+      "format": "date-time",
+      "title": "Finished At",
+      "type": "string"
+    },
+    "manifest_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Manifest Sha256"
+    },
+    "notes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Notes",
+      "type": "array"
+    },
+    "objects": {
+      "items": {
+        "$ref": "#/$defs/ObjectResult"
+      },
+      "title": "Objects",
+      "type": "array"
+    },
+    "operation": {
+      "$ref": "#/$defs/ArchiveOperation"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "scope": {
+      "$ref": "#/$defs/ArchiveScope"
+    },
+    "started_at": {
+      "format": "date-time",
+      "title": "Started At",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/OperationStatus"
+    },
+    "verification": {
+      "$ref": "#/$defs/VerificationState"
+    }
+  },
+  "required": [
+    "operation",
+    "status",
+    "scope",
+    "verification",
+    "started_at",
+    "finished_at"
+  ],
+  "title": "ArchiveReport",
+  "type": "object"
+}

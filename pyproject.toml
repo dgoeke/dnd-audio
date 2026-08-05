@@ -10,6 +10,18 @@ license-files = ["LICENSE"]
 requires-python = ">=3.12,<3.13"
 
 dependencies = [
+    # M7a's archive commands, and nothing else in this project, use these two. Both are
+    # imported lazily — `zstandard` inside `archive/codec.py`, `boto3` inside
+    # `archive/spaces.py` — so no processing command loads either, and that is proved
+    # behaviourally rather than promised: every non-archive command runs as a subprocess
+    # under a socket-and-client trap (INV-06, ADR-0035).
+    #
+    # `zstandard` carries libzstd inside its own wheel, which is the point of choosing it
+    # over the `zstd` CLI: archive v1's byte-stability then rests on this lock like every
+    # other output-affecting dependency, rather than on whatever happens to be on PATH.
+    # 0.25.0 bundles libzstd 1.5.7, the version the four-file trial measured (ADR-0037).
+    "boto3>=1.35",
+    "zstandard>=0.23",
     # The ceiling is not this project's own need — nothing here cares which side of 2.5
     # numpy sits on. It comes from `qwen-asr` -> `librosa` -> `numba`, and it is stated
     # here rather than in the group because uv resolves one numpy for the whole lock, so
@@ -177,6 +189,11 @@ ban-relative-imports = "all"
 [tool.ruff.lint.per-file-ignores]
 # Tests assert on private helpers and use fixtures that shadow argument names.
 "tests/*" = ["ARG001", "ARG002"]
+# The recording S3 client mirrors boto3's own signatures, and boto3 spells every S3
+# parameter in PascalCase — `Bucket`, `Key`, `UploadId`, `PartNumber`. Renaming them would
+# make the stub stop matching the real call and defeat the point of having it. This is the
+# provider's vocabulary, not a naming decision of ours.
+"tests/test_archive_spaces.py" = ["ARG001", "ARG002", "N803"]
 
 # --- mypy ---------------------------------------------------------------------
 
@@ -202,6 +219,16 @@ ignore_missing_imports = true
 # object (ADR-0026).
 [[tool.mypy.overrides]]
 module = ["torch"]
+ignore_missing_imports = true
+
+# `boto3` and `botocore` ship no `py.typed`. Same containment as `onnxruntime` and
+# `torch`: they are imported lazily inside `archive/spaces.py` and nowhere else, and
+# everything the client returns is reshaped immediately into the typed shapes
+# `archive/storage.py` declares, so no untyped object escapes the adapter (ADR-0035,
+# ADR-0037). Stub packages were not added because the adapter's whole job is to be the
+# one place that touches the SDK.
+[[tool.mypy.overrides]]
+module = ["boto3", "boto3.*", "botocore", "botocore.*"]
 ignore_missing_imports = true
 
 # `qwen_asr` ships no `py.typed` and, like torch, is not installed in the environment the

@@ -49,7 +49,13 @@ transmitter, and the session configuration maps that transmitter to a person.
   transmitters powered too. Embedded transmitter-file timecode is the primary
   synchronization source.
 - The Zoom H5 is not a normal pipeline input. Do not design around it.
-- Processing is local. Audio must not be sent to a cloud API.
+- Processing is local. Audio must not be sent to a cloud API. **One narrow exception,
+  added in M7a:** an explicit `archive` command may send byte-exact compressed copies of
+  a session's immutable source files to an owner-controlled private cold-storage bucket,
+  as off-site backup against disk loss. It is opt-in, never on a processing path, never
+  a publication, and never a transfer of audio to anything that *processes* it. Every
+  other command remains network-denied, and no ASR, alignment, or detection ever leaves
+  this machine. See "Archival extension" below.
 - Do not read from or write to the campaign wiki.
 - An optional local `glossary.txt` may bias ASR spelling, but absence of a glossary
   must not block a run.
@@ -187,9 +193,16 @@ torch = { index = "amd-gfx1151" }
   attention implementation, and resolved model revisions in the report.
 
 Model downloads are allowed during an explicit setup/fetch step, but session audio
-must always be passed as local paths or arrays and must never be sent to a URL or API.
-After models are installed, production processing must support Hugging Face offline
-mode. Keep model caches outside session directories and out of version control.
+must always be passed as local paths or arrays and must never be sent to a URL or API
+**by any processing or model path**. The `archive` commands added in M7a are the sole
+exception and are not a processing path: they upload byte-exact compressed copies of
+immutable source files to a private bucket the owner controls, and pass audio to no model
+or service that reads, decodes, or derives anything from it. The storage provider is a
+third party operating that bucket — saying otherwise would be comfortable and untrue — and
+what the exception turns on is that it stores opaque compressed bytes and processes
+none of them. After models are installed, production processing must support
+Hugging Face offline mode. Keep model caches outside session directories and out of
+version control.
 
 ### Repository and command shape
 
@@ -249,8 +262,22 @@ uv run dnd-audio models fetch
 
 `doctor` performs system-dependency, writable-path, disk-space, model-availability,
 and requested-device checks without processing session audio. `models fetch` is the
-only command expected to require network access for model installation; it resolves
+only command that requires network access for model installation; it resolves
 and records immutable Hugging Face snapshot revisions for later offline use.
+
+Provide off-site backup of the raw sources as a separate command group (M7a):
+
+```bash
+uv run dnd-audio archive upload  /path/to/session
+uv run dnd-audio archive status  /path/to/session
+uv run dnd-audio archive list
+uv run dnd-audio archive verify  --session-id SESSION_ID [--track tx-a]
+uv run dnd-audio archive restore --session-id SESSION_ID [--track tx-a] --to EMPTY_DIR
+```
+
+`archive` is the second and last command group permitted network access, and the only
+one permitted to send session audio anywhere. See "Archival extension" below. No
+processing command gains network authority from it, and `process` never invokes it.
 
 Use content-addressed or content-hash-aware caching. A failed run should resume
 without retranscoding or retranscribing unchanged inputs. Cache keys must include
@@ -726,6 +753,58 @@ still permit an ingest report and merged MP3.
 
 Keep a lossless mix intermediate in `work/` for debugging/cache reuse, not as a
 required user-facing deliverable.
+
+### Archival extension
+
+Added in M7a, after the MVP path was complete and before the first irreplaceable
+recording. It protects against the one failure later software cannot repair: loss of the
+original transmitter files. It is the narrow exception to "processing is local" stated in
+the firm-scope section above, and it is not a processing feature.
+
+**What it does.** `archive upload` builds an independent, hardened inventory of every
+regular non-symlink file beneath the configured source roots — selected audio, ignored
+`edit` variants, duplicates, unassigned audio, unexpected file types and nested notes
+alike — compresses each byte-for-byte with a frozen zstd recipe, uploads it as one
+immutable object to an owner-controlled **private** cold-storage bucket, reads every
+object back in full, and proves it decompresses to the original SHA-256. Only then does it
+publish a single small manifest object, which is the commit marker. After loss of the
+local session directory an operator can discover, verify, and restore a whole session or a
+single track from the session id alone, without object keys and without the old
+`session.yaml`.
+
+**What it must not do.** It publishes nothing: no MP3, transcript, report, or wiki
+artifact. It deletes nothing, locally or remotely — the application exposes no object
+delete operation and calls none, `AbortMultipartUpload` for its own incomplete uploads
+excepted. It never modifies, renames, or normalizes anything under a source root, so
+INV-01 stands unamended. It is never invoked by `process`, and no processing command gains
+network authority from its existence. Archive configuration lives outside `session.yaml`
+entirely and must not enter any processing cache identity.
+
+**Requirements on the implementation.**
+
+- Enumeration uses `lstat`, refuses a symlink at every path component, and proves each
+  resolved file stays inside a resolved configured source root. Track identity is optional
+  and assigned only where a path belongs unambiguously to one configured track input;
+  unassigned files stay unassigned rather than being attributed (INV-11).
+- The source inventory is hashed before work and re-verified on every exit path, including
+  every failure path.
+- Compression, upload, verification and restore are bounded streams. Decompression carries
+  an output-size ceiling and aborts the moment it would exceed the declared original size,
+  rather than discovering it at the final hash. Worst-case disk is preflighted from the
+  compression bound, never from an observed compression ratio.
+- Object keys are content-addressed, canonical, and reversibly encoded over filesystem
+  bytes rather than decoded text, because a filename need not be valid UTF-8.
+- The archive format is versioned in the key prefix. A changed encoding recipe requires a
+  new version, never different bytes at an existing key.
+- Multipart upload is mandatory above the provider's single-PUT limit and respects its
+  minimum part size and maximum part count. An S3 ETag is never treated as a content
+  checksum. Retries are bounded and the client's own retry machinery is disabled so that
+  one bound governs.
+- Every operation writes a local structured report, separate from `ingest-report.json`,
+  distinguishing an upload that committed, a previous verification recorded at commit
+  time, and a verification performed *now*. Only a current full download and decompression
+  may be called verified. Partial failure never exits zero.
+- Reports, logs, and exceptions carry no endpoint credential, signed URL, or secret.
 
 ### Output schemas
 

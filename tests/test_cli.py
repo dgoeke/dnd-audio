@@ -14,6 +14,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 from typer.testing import CliRunner
@@ -58,6 +59,249 @@ class TestCommandSurface:
         result = runner.invoke(app, ["models", "--help"])
         assert result.exit_code == 0
         assert "fetch" in result.output
+
+    def test_the_archive_command_group_is_registered(self) -> None:
+        """M7a's five subcommands, and the group itself on the top-level help.
+
+        This list is the cross-check for `tests/test_archive_isolation.py`, which names
+        every *non*-archive command explicitly so a new one cannot pass its
+        network-boundary proof by construction. A command added here and forgotten there
+        is visible as a difference between the two lists.
+        """
+        assert "archive" in runner.invoke(app, ["--help"]).output
+        result = runner.invoke(app, ["archive", "--help"])
+        assert result.exit_code == 0
+        for name in ("upload", "status", "list", "verify", "restore"):
+            assert name in result.output
+
+    def test_the_archive_group_offers_no_delete_or_publish(self) -> None:
+        """The operator surface matches the authority ADR-0035 grants, and no more.
+
+        M7b owns publication and any reclamation. A subcommand appearing here before that
+        milestone has justified it would be authority arriving without a decision.
+        """
+        # Checked against the *registered command names*, not the help text. The group's
+        # own help says "never publishes or deletes", so a substring search over the output
+        # finds those words and fails for the opposite of the right reason.
+        from dnd_audio.cli import archive_app
+
+        registered = {command.name for command in archive_app.registered_commands}
+        assert registered == {"upload", "status", "list", "verify", "restore"}
+        for forbidden in ("delete", "prune", "publish", "reclaim", "remove"):
+            assert not any(forbidden in str(name) for name in registered)
+
+    def test_an_unconfigured_machine_fails_cleanly_rather_than_crashing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No bucket configured is an ordinary, actionable failure — not a traceback."""
+        for name in list(os.environ):
+            if name.startswith("DND_AUDIO_ARCHIVE_"):
+                monkeypatch.delenv(name, raising=False)
+        result = runner.invoke(app, ["archive", "list"])
+        assert result.exit_code == ExitCode.FATAL
+        assert "invalid_archive_configuration" in result.output
+        assert "DND_AUDIO_ARCHIVE_BUCKET" in result.output
+
+    def test_a_destination_outside_any_session_has_nothing_to_protect(self, tmp_path: Path) -> None:
+        from dnd_audio.cli import _sessions_above
+
+        elsewhere = tmp_path / "backups" / "recovered"
+        elsewhere.mkdir(parents=True)
+        assert _sessions_above(elsewhere) == []
+
+
+def _tiny_session(root: Path) -> Path:
+    """A session directory with one recording, enough to be a protected source root."""
+    import yaml
+
+    session = root / "session"
+    (session / "raw" / "tx-a").mkdir(parents=True)
+    yaml.safe_dump(
+        {
+            "session_id": "s",
+            "title": "t",
+            "tracks": [
+                {
+                    "track_id": "tx-a",
+                    "receiver_id": "rx-a",
+                    "receiver_channel": 1,
+                    "speaker_id": "sp",
+                    "speaker_name": "Speaker",
+                    "input": "raw/tx-a",
+                }
+            ],
+        },
+        (session / "session.yaml").open("w"),
+    )
+    (session / "raw" / "tx-a" / "DJI_01.WAV").write_bytes(b"RIFF....WAVEirreplaceable")
+    return session
+
+
+class TestTheArchiveCommandsRunAndAreGuarded:
+    """`_run_archive`'s body, driven through the actual commands.
+
+    Nothing reached this function before. `tests/test_cli.py` invoked `archive --help` and
+    an unconfigured `archive list`, which exits at `load_archive_config` several lines
+    above everything interesting, and every other archive test called `run_upload`/
+    `run_restore` directly. So the CLI's own INV-01 guard, its protected-root wiring, its
+    report path and its exit codes were carried entirely by a test that asserted on a
+    helper function in isolation — while a P0 sat in the block that test named.
+
+    These drive `runner.invoke(app, ["archive", ...])` against a deterministic fake, which
+    is the only place the wiring is the thing under test. Found by M7a's second review.
+    """
+
+    ENVIRONMENT: ClassVar[dict[str, str]] = {
+        "DND_AUDIO_ARCHIVE_ENDPOINT_URL": "https://nyc3.digitaloceanspaces.com",
+        "DND_AUDIO_ARCHIVE_REGION": "nyc3",
+        "DND_AUDIO_ARCHIVE_BUCKET": "example-cold",
+        "DND_AUDIO_ARCHIVE_ACCESS_KEY_ID": "DO00EXAMPLEACCESSKEY",
+        "DND_AUDIO_ARCHIVE_SECRET_ACCESS_KEY": "wJalrXUtnFEMI-EXAMPLEKEY",
+    }
+
+    @pytest.fixture
+    def fake_bucket(self, monkeypatch: pytest.MonkeyPatch) -> object:
+        """A fake storage in place of the provider client, with the environment set.
+
+        Patched at `dnd_audio.archive.spaces.build_storage`, which is where `_run_archive`
+        imports it from — so the substitution happens at the seam the real command uses
+        rather than beside it.
+        """
+        from dnd_audio.archive import spaces
+        from dnd_audio.archive.fakes import FakeArchiveStorage
+
+        for name, value in self.ENVIRONMENT.items():
+            monkeypatch.setenv(name, value)
+        bucket = FakeArchiveStorage()
+        monkeypatch.setattr(spaces, "build_storage", lambda _settings: bucket)
+        return bucket
+
+    def test_verify_may_not_write_its_report_into_a_source_directory(
+        self, tmp_path: Path, fake_bucket: object
+    ) -> None:
+        """The P0 M7a's second review found, and the reason this class exists.
+
+        `--report` is an ordinary documented flag, and `verify` is remote-only, so it never
+        has a session directory — which is exactly the condition the INV-01 guard was
+        written under. Pointed at a recording, it replaced 50 bytes of WAV with 637 bytes
+        of JSON: the backup tool destroying the thing it exists to protect.
+        """
+        session = _tiny_session(tmp_path)
+        recording = session / "raw" / "tx-a" / "DJI_01.WAV"
+        original = recording.read_bytes()
+
+        result = runner.invoke(
+            app,
+            ["archive", "verify", "--session-id", "any", "--report", str(recording)],
+        )
+
+        assert result.exit_code == ExitCode.FATAL
+        assert "INV-01" in result.output
+        assert recording.read_bytes() == original, "the archive overwrote a source recording"
+
+    def test_restore_may_not_write_its_report_into_a_source_directory(
+        self, tmp_path: Path, fake_bucket: object
+    ) -> None:
+        """The same hole, through the other remote-only command."""
+        session = _tiny_session(tmp_path)
+        recording = session / "raw" / "tx-a" / "DJI_01.WAV"
+        original = recording.read_bytes()
+        destination = tmp_path / "recovered"
+        destination.mkdir()
+
+        result = runner.invoke(
+            app,
+            [
+                "archive",
+                "restore",
+                "--session-id",
+                "any",
+                "--to",
+                str(destination),
+                "--report",
+                str(recording),
+            ],
+        )
+
+        assert result.exit_code == ExitCode.FATAL
+        assert recording.read_bytes() == original
+
+    def test_an_unreadable_session_yaml_does_not_open_the_guard(
+        self, tmp_path: Path, fake_bucket: object
+    ) -> None:
+        """The guard's own fallback failed open, under a comment saying it did not.
+
+        `_reject_report_inside_raw` walked every session above the report path and wrote
+        `continue` when one would not parse — so corrupting a `session.yaml` was enough to
+        make `--report SESSION/raw/tx-a/DJI_01.WAV` overwrite the recording again. The only
+        session that reaches that branch is one *containing* the report, which is precisely
+        when its roots must be known. Found by M7a's third code review.
+        """
+        session = _tiny_session(tmp_path)
+        recording = session / "raw" / "tx-a" / "DJI_01.WAV"
+        original = recording.read_bytes()
+        (session / "session.yaml").write_text("{{ not: valid: yaml", encoding="utf-8")
+
+        result = runner.invoke(
+            app,
+            ["archive", "verify", "--session-id", "any", "--report", str(recording)],
+        )
+
+        assert result.exit_code == ExitCode.FATAL
+        assert recording.read_bytes() == original
+
+    def test_restore_refuses_a_destination_inside_raw_through_the_command(
+        self, tmp_path: Path, fake_bucket: object
+    ) -> None:
+        """The first review's P0, now asserted where it actually lived.
+
+        The previous version of this test called `_sessions_above` and never invoked the
+        command, so deleting `protected_session_dirs=...` from `cli.py` left it green.
+        """
+        session = _tiny_session(tmp_path)
+        destination = session / "raw" / "restore-here"
+        destination.mkdir()
+
+        result = runner.invoke(
+            app,
+            ["archive", "restore", "--session-id", "any", "--to", str(destination)],
+        )
+
+        assert result.exit_code != 0
+        assert "archive_destination_protected" in result.output
+        assert not any(destination.iterdir()), "a refused restore wrote into a source root"
+
+    def test_status_runs_end_to_end_and_writes_its_report(
+        self, tmp_path: Path, fake_bucket: object
+    ) -> None:
+        """The positive control: without it the refusals above could be refusing everything.
+
+        A command that failed for an unrelated reason — a bad fixture, an unparsed
+        argument — would satisfy every assertion in this class. This one has to succeed.
+        """
+        session = _tiny_session(tmp_path)
+        result = runner.invoke(app, ["archive", "status", str(session)])
+
+        assert result.exit_code == ExitCode.OK, result.output
+        report = session / "work" / "archive-status-report.json"
+        assert report.is_file()
+        assert json.loads(report.read_bytes())["verification"] == "absent"
+
+    def test_a_report_path_outside_every_session_is_written_where_asked(
+        self, tmp_path: Path, fake_bucket: object
+    ) -> None:
+        """The guard refuses source directories, not `--report` as such."""
+        elsewhere = tmp_path / "reports" / "verify.json"
+        result = runner.invoke(
+            app,
+            ["archive", "verify", "--session-id", "missing", "--report", str(elsewhere)],
+        )
+
+        # The session is not in the fake bucket, so the operation fails — but it fails
+        # *having written a report*, which is what INV-13 asks of it.
+        assert result.exit_code != 0
+        assert elsewhere.is_file()
+        assert json.loads(elsewhere.read_bytes())["errors"][0]["code"] == "archive_not_committed"
 
     def test_no_command_is_a_stub_any_more(self, session_dir: Path) -> None:
         """Every command the spec names is implemented from M5 on.
