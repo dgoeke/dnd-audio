@@ -227,6 +227,9 @@ human voice, pause target, and whether the delivery was clean, late, or repeated
    **“H1 main fixture. Two human voices, six transmitters, three receivers. Main take one.”**
 2. [One second of silence.]
 3. Make a distinctive **three-clap pattern**: clap, short pause, clap, longer pause, clap.
+   If the OQ-025 generated marker and its matched-filter detector have both landed and passed
+   their bench test before H1, play that same prepared three-chirp WAV from the center of the
+   table instead. Do not substitute an ad-hoc tone, and do not skip the LTC jam.
 4. [Two seconds of silence.]
 
 ### B. Six solo/direct-source rounds
@@ -303,7 +306,8 @@ two-speaker ground truth; do not repair it in the log.
 
 1. Confirm the post-power-cycle `tx-f` line has been recorded.
 2. Person One says: **“H1 end landmark.”**
-3. Make the same distinctive three-clap pattern used at the start.
+3. Make the same distinctive three-clap pattern used at the start, or replay the exact same
+   bench-validated OQ-025 marker from the same central table position if it was used there.
 4. Leave five seconds of room tone.
 5. Stop all transmitters one at a time, logging order and wall-clock time.
 6. Before powering down receivers, film and log all three displays in the “after main take”

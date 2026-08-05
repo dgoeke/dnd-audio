@@ -34,9 +34,10 @@ _Owner: M1, extracted to `raw_guard.py` in M2 so each stage declares its own pro
 outputs. Test: full-run hash equality, plus a run that corrupts a source mid-flight to
 prove the check can fail, plus a source under a directory named `work`, plus
 `TestCleanupNeverWritesIntoRaw` over every composed command._
-_Future exception (M7): the owner may delete raw files manually after verified
+_Future exception (M7b): the owner may delete raw files manually after verified
 archival. That happens outside a pipeline run, by explicit human action. No
-pipeline stage ever deletes from `raw/`. Amend this wording when M7 is planned._
+pipeline stage ever deletes from `raw/`. M7a deliberately does not need this exception;
+amend this wording only if M7b proves a narrow reclamation workflow._
 
 **INV-02 — Deterministic artifacts are byte-stable.**
 `manifest.json`, `transcript.json`, `transcript.md`, generated JSON Schema files,
@@ -95,10 +96,11 @@ Audio is passed to models as local paths or in-memory arrays. No cloud ASR, no
 URL uploads, no telemetry containing audio. `models fetch` is the only command
 permitted to touch the network at all.
 _Owner: M0 (policy), M6b (enforcement in the adapter)._
-_Future exception (M7): archival deliberately uploads audio to owner-controlled
+_Planned exception (M7a): archival deliberately uploads audio to owner-controlled
 object storage. That is opt-in, never on a processing path, and not the cloud-ASR
-prohibition this invariant exists to prevent. Amend this wording when M7 is
-planned rather than working around it._
+prohibition this invariant exists to prevent. M7a must amend this wording before
+implementation, keep every non-archive command network-denied, and add no publication or
+deletion authority._
 
 **INV-07 — Memory stays bounded.**
 Never hold six full-session waveforms in RAM. Long audio is processed in bounded

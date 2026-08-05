@@ -348,7 +348,8 @@ state across chunk boundaries. `tests/test_memory.py` instruments reads, envelop
 **and** writes into one ordered log — and it got there by failing twice, once in each
 direction. The plan's first draft watched only the audio; the shipped code watched only the
 envelope and the writer. Either half alone is passed by an implementation that materializes
-the other half. If M7 adds a third streamed path, put it in the same log.
+the other half. M7a's compression/upload path is separate from `process`, but its own
+bounded-read test should use the same read/write event-log technique.
 
 **`run_mix` rebuilds `work/activity.json` before it mixes.** Not from the file — from the
 attribution cache, through `perform_activity`. Anything you write into that file between runs
@@ -361,7 +362,7 @@ independent reviewers still read it as sound.
 `--fake-models` run produce different graphs, so different `attribution_cache_key`s, so
 different mix identities and two 2 MB intermediates side by side. Content-addressing working
 as designed, and 2.8 GiB each at four hours. Nothing sweeps `work/cache/mix/`; if that becomes
-a problem it is M7's, and the sidecar-plus-audio layout makes an LRU sweep straightforward.
+a problem it is M7b's, and the sidecar-plus-audio layout makes an LRU sweep straightforward.
 
 **Express one quantity once.** The correction clamp was `round(db × 100)` millibels in
 `levels.py` and `10 ** (db / 20)` in `envelope.py`. Identical for whole decibels, which is why
@@ -399,8 +400,9 @@ handler; four of the six `process` tests exist to say so from both directions.
 
 **`_failed` must not stamp its exception over a stage that already diagnosed itself.**
 ADR-0024 said so and the code did it anyway, so a mix that fully succeeded was reported
-`MIX: failed` with a source-tampering message. If M7 adds a third branch, add it to the `owned`
-map in the same breath as its `_State` field.
+`MIX: failed` with a source-tampering message. M7a deliberately must not add archive as a
+third `process` branch; if some later milestone does, add it to the `owned` map in the same
+breath as its `_State` field.
 
 **The report must never claim a tolerance it did not check.** `mix_encoded` used to say
 "within every configured tolerance" on runs where the loudness comparison had been waived. The
@@ -448,8 +450,9 @@ belongs in it — `from_cache` was in there and had to come out.
   `perform_transcript`/`resolve_models` rather than reimplementing it, so M6b's real adapter
   reaches both `transcribe` and `process` by replacing one seam. The `DEFERRED: M6b` path is
   raised *before any work* in both commands.
-- **M7 — Archival.** Two things land in its lap: nothing sweeps `work/cache/mix/`, and a
-  session mixed under two different detectors keeps two intermediates. Noted in its charter.
+- **M7b — Publishing and reclamation.** Two things land in its lap: nothing sweeps
+  `work/cache/mix/`, and a session mixed under two different detectors keeps two
+  intermediates. Noted in its charter; M7a raw backup does not need cache authority.
 - **ROADMAP.md** — M5's gate line now names the ceiling-over-target rule, so the roadmap and
   the amended spec agree.
 

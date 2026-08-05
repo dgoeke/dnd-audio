@@ -103,7 +103,7 @@ half. A session with file dates falls through to the existing inference, which r
 counters themselves and involves no wall clock.
 
 Wall clock keeps its uses — archival naming, and a human reading a report. There is no blanket
-prohibition on reading the tag, because M7 is a legitimate consumer; what is asserted is that
+prohibition on reading the tag, because M7a/M7b are legitimate consumers; what is asserted is that
 **placement and synchronization are invariant under wall-clock changes**, proved by rewriting
 every source's date and time tags and getting a byte-identical `timeline.json`.
 

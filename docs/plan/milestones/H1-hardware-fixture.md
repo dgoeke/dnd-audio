@@ -76,7 +76,11 @@ It needs one short continuous take and no capture-time paperwork or intermediate
       320--350 ms. Log the words and pause targets. This tests M9's presentation-only join
       without treating a shared ASR batch as a conversational boundary (**OQ-018**, ADR-0034).
 - [ ] Turn one transmitter off, wait several seconds, turn it back on, record again.
-- [ ] A distinctive three-clap pattern near the start and near the end.
+- [ ] A distinctive three-clap pattern near the start and near the end. If the separately
+      chartered OQ-025 chirp generator **and matched-filter detector** have landed and passed
+      their bench gate first, the same prepared three-chirp marker may replace each clap
+      pattern. Play it from one fixed central table position and keep the LTC jam; a generated
+      sound verifies the jam but does not place a restarted file that missed the marker.
 - [ ] Export both `orig` and `edit` if dual-file mode is enabled.
 - [ ] Note anything surprising the receivers displayed.
 

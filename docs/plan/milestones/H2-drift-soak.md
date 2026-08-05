@@ -8,14 +8,17 @@
 
 Evidence for or against the MVP's no-drift-correction assumption, from either a
 ~4-hour soak fixture with synchronized transients near both ends or the first real
-session's start/end clap measurements.
+session's start/end synchronized-marker measurements (three claps, or the OQ-025 generated
+chirp after its generator and detector are bench-validated).
 
 ## Completion gate
 
-- [ ] A ~4-hour recording exists with a distinctive transient near the beginning and
-      near the end, across all three kits — or the first real session provides the
-      same via its start/end claps.
-- [ ] Differential clap lag measured near both ends for every track, and the change
+- [ ] A ~4-hour recording exists with a distinctive synchronized marker near the beginning and
+      near the end, across all three kits — or the first real session provides the same. Use
+      the existing three-clap pattern unless the complete OQ-025 chirp generator/detector has
+      already passed its separate bench gate; never improvise an untested marker during the
+      irreplaceable session.
+- [ ] Differential marker lag measured near both ends for every track, and the change
       between them recorded.
 - [ ] **OQ-006** marked answered with the measured numbers.
 - [ ] The warning threshold is configured from that measurement and documented,

@@ -1,8 +1,9 @@
 # M8 — Real-session readiness
 
 **Status:** not started
-**Depends on:** M6b (closed). Ordered **before** M7 despite the number — M7 waits on a
-processed real session, and this milestone is what makes that session worth recording.
+**Depends on:** M6b (closed). M8 predates the archival split: M7a now owns pre-session raw
+backup, while M7b waits on a processed real session. This milestone made that session worth
+recording.
 **Spec sections:** Bleed and attribution; Timecode strategy; Tests and acceptance criteria
 
 ## Goal
@@ -257,7 +258,8 @@ function — a weak lav's padding can contain another speaker's words.
 - **The acoustic sync signal** (**OQ-025**). Keeping the jam is the current decision.
 - **An activity-side parameter sweep.** Sweeping thresholds against a broken veto measures the
   breakage. If a sweep is wanted, it belongs after defect 1 is fixed.
-- **Archival** (M7), which waits on a processed real session.
+- **Archival** (now split): M7a owns pre-session verified raw backup; M7b waits on a
+  processed real session for publishing and reclamation.
 - Any rework of M5's mixing, M4's rendering, or M6b's adapter beyond what defects 1 and 6
   require.
 

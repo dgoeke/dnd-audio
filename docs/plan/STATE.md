@@ -7,11 +7,11 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 
 ## Right now
 
-- **Current milestone:** H1 — hardware fixture (**not started**). Before choosing whether to
-  begin the full fixture or a new software milestone, the immediate evidence step is the
-  two-person [minimal acoustic direction check](../minimal-acoustic-direction-check.md) and
-  its [event-first architecture spike](EVENT-FIRST-ARCHITECTURE-SPIKE.md). This small capture
-  does not close or replace H1.
+- **Current milestone:** H1 — hardware fixture (**not started**). The minimal acoustic
+  direction capture is complete enough to guide later event-first work but does not close or
+  replace H1. The immediate pre-session software candidate is now **M7a**, a fully chartered
+  verified private raw archive; M7b deliberately retains the post-session publication,
+  retention, cache, and deletion decisions.
 - **Branch:** `main`
 - **Last closed milestone:** M9 — transcript assembly quality
 - **Gate status at HEAD:** passes, zero skips (8 checks, 2 397 tests); the same default suite
@@ -74,6 +74,13 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
   in place and may justify only a traceable editorial/LLM view. No production default changes
   from the minimal corpus.
 
+  **Archival is now split at the authority boundary.** M7a may explicitly upload byte-exact
+  zstd archives to an owner-controlled private cold bucket, but only through an archive
+  command that fully downloads and restores every hash before committing its manifest. It has
+  no delete or publishing command. M7b waits for an accepted real session before deciding
+  public delivery, retention, cache reclamation, or the INV-01 exception local deletion would
+  require. A four-file zstd trial saved 30.4% and restored every original SHA-256 exactly.
+
   **The jam/timing result remains strong.** Two receivers started 5.28 s apart and their
   independently written references agree on that offset to 17–30 ms, inside one 30 fps frame
   (**OQ-023**). Relative sample-clock drift measured ≈1 ppm, bounded ±3 ppm over 30 s
@@ -119,7 +126,8 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | M9  | Transcript assembly quality | closed      | `d3e2cbb` |
 | H1  | Hardware fixture (2 min)   | not started | —         |
 | H2  | Drift soak / first session | not started | —         |
-| M7  | Archival (sketch)          | sketch      | —         |
+| M7a | Verified private raw archive | not started | —         |
+| M7b | Publishing and reclamation | sketch      | —         |
 
 **Closed at** is the milestone's close commit, and it is recorded by a small follow-up
 commit — a commit cannot contain its own hash (the same limit ADR-0003 names for the report).
@@ -281,12 +289,13 @@ writer that cannot lose a stage, and a test suite that is provably offline.
 
 ## Next smallest step
 
-**H1 — the real DJI hardware fixture.** M9's transcript-assembly work is complete. Every
-remaining question that blocks anything needs audio. Read
-`docs/plan/milestones/H1-hardware-fixture.md`
-— its recording recipe is written for the owner, and the items that cannot be recovered
-afterwards (**the receiver displays read against wall clock**, for OQ-012 and OQ-015) are
-called out as such. (Claude Code: `/ms-start H1`.)
+**M7a — verified private raw archive, then H1.** M9's transcript-assembly work is complete,
+and the minimal capture says the current jammed pipeline is sufficient to make Session Zero
+valuable. Implementing M7a first reduces the one risk later pipeline improvements cannot fix:
+loss of the original recordings. Its charter is
+`docs/plan/milestones/M7a-verified-raw-archive.md`. After that, read
+`docs/plan/milestones/H1-hardware-fixture.md`; its recording recipe calls out the receiver
+display observations that cannot be recovered afterwards. (Claude Code: `/ms-start M7a`.)
 
 Nothing in H1 is a code task until the recordings exist. What the pipeline will do with them
 on arrival is already built: `inspect` names the strategy, the evidence and the assumption

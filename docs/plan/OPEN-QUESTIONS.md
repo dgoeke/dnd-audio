@@ -214,9 +214,9 @@ regardless, with bounded textual payloads retained and every payload hashed in f
 **Why it matters:** If timing lives only in a private chunk, the strategy chain
 needs a DJI-specific parser rather than standard BWF handling.
 **Evidence:** RIFF chunk inventory from the fixture.
-**Also matters for:** M7 — a compressor that cannot reproduce an unknown private
+**Also matters for:** M7a — a compressor that cannot reproduce an unknown private
 chunk byte-for-byte fails the archival hash check.
-**Needs:** H1 · **Blocks:** M1, M7 · **Status:** **answered** (sample probe, 2026-08-02)
+**Needs:** H1 · **Blocks:** M1, M7a · **Status:** **answered** (sample probe, 2026-08-02)
 
 **Answer — no private chunks, and the iXML carries nothing new.** The inventory is
 `fmt `, `bext`, `iXML`, `cue`, `PAD`, `data` — all standard. The iXML is a `<BWFXML>`
@@ -227,7 +227,8 @@ document whose `<BEXT>` block restates the `bext` chunk field for field, and who
 wrong semantics — OQ-004**). The declared 30/1 timecode rate is itself useful: it is where
 the 1600-sample quantization in OQ-004 comes from. `cue` declares **zero** cue points, and
 `PAD` is alignment padding that puts `data` at offset 32768. **No DJI-specific parser is
-needed**, and M7's archival hash check has no unknown chunk to reproduce.
+needed**, and M7a's byte-stream zstd archive has no unknown chunk to interpret: it reproduces
+the entire original file regardless.
 
 **Half-answered in M1, about FFprobe rather than about DJI.** Measured against FFmpeg
 8.0: a WAV carrying both an `iXML` chunk and a four-byte-named private chunk produces
@@ -1018,9 +1019,11 @@ consistent rate across all three kits; this capture violated that and nothing do
 degraded. Keep the rates consistent as hygiene, but no known behaviour depends on it.
 
 ## OQ-025 — Should the capture include a deliberate acoustic sync signal?
-**Assumption:** No. Jammed timecode places the tracks, and `session.sync_qa` correlates
-ordinary speech well enough to verify it. H1's recipe asks for a three-clap pattern purely as
-a human-checkable landmark, not as the alignment mechanism.
+**Assumption:** Yes for a robust automatic verifier; no as a replacement for jammed timecode.
+Jammed timecode places every file, including a restarted transmitter with no shared acoustic
+event. A generated marker can make jam failure and long-baseline drift cheaper and more
+precise to detect. Until both its generator and matched-filter detector land and pass a bench
+test, H1/H2 keep using the existing human-checkable three-clap pattern.
 **Why it matters:** The LTC jam is accurate — 17–30 ms cross-receiver, better than one frame
 (**OQ-023**) — but it is a tedious manual ritual at the start of every session: cable up
 A → B, SYNC, disconnect, A → C, SYNC, disconnect, and confirm three displays. An acoustic
@@ -1030,8 +1033,8 @@ and would need no cables. The question is whether it could **replace** the jam, 
 **Evidence:** Measured alignment accuracy achievable from an acoustic signal alone, against
 the 33 ms the jam already delivers; and whether a single anchor is sufficient given measured
 drift.
-**Needs:** a bench test; no session required · **Blocks:** nothing — the jam works today ·
-**Status:** open
+**Needs:** a separately chartered generator/detector bench test; no session required ·
+**Blocks:** nothing — the jam and claps work today · **Status:** **partially answered**
 
 **What the error budget says.** Cross-track error is 33.3 ms of fixed quantization
 (**OQ-024**) plus ~15–45 ms of drift over a long session (**OQ-006**) — call it 80 ms worst
@@ -1073,12 +1076,22 @@ sitting. So an acoustic anchor has a floor of several milliseconds that the jam 
 and driving it below that would require a per-transmitter electrical injection rather than a
 sound in the room.
 
-**Recommendation as of 2026-08-03: keep the jam, and spend the effort on the verifier
-instead.** The jam is already better than the error budget requires, and the real gap is not
-accuracy — it is that a *failed* jam is invisible (**OQ-023**). A chirp would make automatic
-verification robust and cheap, and that is worth doing on its own merits even while the jam
-remains the alignment mechanism. Revisit replacing the jam only if H2 shows the ritual failing
-in practice, or if the power-cycle case turns out never to occur.
+**Evidence added 2026-08-04.** Six start/end claps in the minimal two-person capture supported
+cross-receiver affine alignment with about 1 ms maximum fitted residual after manual event
+identification. That proves a shared room sound is precise enough for verification, but the
+claps varied in shape and level and still required manual picking. It does not remove the
+acoustic-arrival geometry floor or place a restarted file that missed the sound.
+
+**Recommendation as of 2026-08-04: keep the jam and build the verifier as a small, separate
+software milestone before H2 if time permits.** Generate a deterministic 48 kHz PCM marker:
+three 500 Hz → 8 kHz linear chirps with a smooth amplitude envelope and asymmetric gaps, at a
+conservative level. Play the prepared WAV from one fixed central table position near both
+session ends. Add a matched-filter detector that reports each track's peak, confidence,
+geometry-relative lag, and start-to-end lag change. The generator alone is not useful enough:
+the detector and synthetic delayed/noisy/reverberant regression tests are what turn the sound
+into evidence. Keep claps until that complete path is bench-tested. Revisit replacing the jam
+only if H2 shows the ritual failing in practice, or if restarted/missing-anchor files are
+proven irrelevant.
 
 ## OQ-026 — Does a DJI receiver's timecode counter wrap, and with what period?
 **Assumption:** Yes, at 24 hours — `rasterize.SECONDS_PER_DAY` adds `86400 * sample_rate`

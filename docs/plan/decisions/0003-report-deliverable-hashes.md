@@ -35,7 +35,7 @@ needs to verify it can hash the file it just read.
 
 - **A sidecar file — `ingest-report.json.sha256`.** Rejected for the MVP. It solves a
   problem nobody has: the report is read locally, immediately after the run that wrote
-  it, by a person or a script that already has the bytes in hand. M7's archival work is
+  it, by a person or a script that already has the bytes in hand. M7a's archival work is
   where remote-integrity verification actually matters, and it will need to hash
   *everything* it uploads including the report, which a sidecar written at run time does
   not help with.
@@ -51,7 +51,7 @@ needs to verify it can hash the file it just read.
 
 - The report's `provenance.deliverables` list is well defined and finite, and a test can
   assert that `ingest-report.json` never appears in it.
-- Verifying a report's own integrity requires the verifier to hash the file. M7 should
+- Verifying a report's own integrity requires the verifier to hash the file. M7a should
   record the report's hash in whatever archival manifest it produces, not in the report.
 - This is the first amendment to the spec. It is a one-clause correction of a literal
   impossibility, not a scope or design change, and the spec otherwise stands unaltered.

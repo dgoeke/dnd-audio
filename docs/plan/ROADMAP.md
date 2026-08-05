@@ -18,14 +18,14 @@ M0 Foundation
                                                                           │
                               M6a ROCm env ── M6b Qwen adapter ────────────┴─ MVP
                                                             │                 │
-                                                            │                 └─ M8 Readiness ── M9 Transcript assembly
-                                                            └─ H2 Drift soak                              └─ M7 Archival
-                                                                                     (sketch)
+                                                            │                 └─ M8 Readiness ── M9 Transcript assembly ── M7a Verified raw archive
+                                                            └─ H2 Drift soak / first session ──────────────────────────────────────└─ M7b Publish/reclaim
 ```
 
-M8 sits between the MVP and the first real session: M7 explicitly waits until a real
-session has been processed and validated, and M8 is what makes that recording safe to
-attempt. Its number is later than M7's; its position is earlier.
+M8 sits between the MVP and the first real session. M7a was split out of the old M7 so the
+off-site copy exists **before** that irreplaceable recording; it needs an inspected session,
+not an accepted transcript. M7b still waits until a real session has been processed and
+validated because publishing, retention, cache sizing, and deletion policy need real evidence.
 
 M5 depends only on M3, never on M4 or M6 — the mix must survive a transcription
 failure. M6a can start any time after M0; it is sequenced late only because
@@ -147,8 +147,8 @@ suite still passes without any of it installed.
 ### M8 — Real-session readiness
 
 Structural fixes and diagnostics that make the first real session safe to record and
-worth analyzing. Numbered after M7 but **ordered before it**: M7 waits on a processed
-real session, and this is what makes recording one worthwhile.
+worth analyzing. M8 predates the M7 split: it is a prerequisite for safe capture, M7a is the
+pre-session backup milestone, and M7b still waits on a processed real session.
 
 Seven defects, all structural rather than threshold-shaped, so none waits on tuning data:
 the bleed veto's speech reference is computed from bleed and gets worse with roster size;
@@ -183,17 +183,31 @@ activity and effective transcript ownership; JSON and Markdown expose the same c
 with full lineage; the ambiguous exact short `Okay` pair survives; the default gate and the
 default suite from `.venv-rocm` both pass with zero skips.
 
-### M7 — Archival and local disk reclamation (sketch)
+### M7a — Verified private raw archive
 
-Compress `raw/` (WavPack or zstd) with self-describing sidecar metadata, upload to
-DigitalOcean cold storage, publish processed outputs to Spaces for wiki use, verify
-remote hashes, and then — manually, separately — reclaim local disk.
+Compress every raw source byte-exactly with zstd, upload it to private DigitalOcean Cold
+Storage under a human-readable content-addressed key, read the complete object back, verify
+both compressed and restored SHA-256 values, and support ergonomic whole-session/one-track
+status, verification, and restore.
 
-**Status: deliberately unplanned.** The charter exists so the work is not
-forgotten and so its tension with INV-01 and INV-06 is recorded while it is cheap
-to think about. Plan it properly when the MVP has run on a real session.
+**Status: chartered; not started.** This is the explicit opt-in archive exception to INV-06.
+It never deletes or publishes, so INV-01 remains intact.
 
-**Gate:** provisional; see the charter.
+**Gate:** full local and remote round trips reconstruct every original hash; manifest-last
+commit, retry, restore, redaction, bounded streaming, raw immutability, and offline default
+tests all fail closed under corruption.
+
+### M7b — Processed publishing and local reclamation (sketch)
+
+After a real session is accepted, publish selected versioned outputs through a suitable
+delivery bucket, choose privacy and retention policy, prune reproducible caches, and decide
+whether a separately confirmed local-raw reclamation command is safe and worthwhile.
+
+**Status: deliberately unplanned.** Raw archive format, upload, read-back integrity, and
+restore belong to M7a and must not be redesigned here.
+
+**Gate:** provisional; see the charter. Any raw deletion requires a fresh full M7a restore
+verification, dry-run-first exact targeting, and an explicit INV-01 amendment.
 
 ### H1 — Hardware fixture (parallel track)
 
@@ -207,8 +221,8 @@ are committed; assumptions the fixture disproves are fixed in M1/M2 with tests.
 
 ### H2 — Drift soak / first session
 
-A ~4-hour soak fixture with synchronized transients near both ends, or the first
-real session's start/end clap measurements, used as evidence for the
+A ~4-hour soak fixture with synchronized markers near both ends, or the first
+real session's start/end marker measurements, used as evidence for the
 no-drift-correction assumption.
 
 **Gate:** Measured differential lag and the configured warning threshold are
@@ -246,7 +260,9 @@ Recorded so the reasoning is not lost:
 5. **Report contributions are part of every milestone's gate**, not M4's job.
    Otherwise the report gets bolted on at the end and the provenance is guesswork.
 6. **M7 archival was added as a sketch**, at the owner's request, to hold the idea
-   without designing it now. Its one time-sensitive contribution is recording that
-   archival conflicts with INV-01 and INV-06 by design — both invariants now point
-   at it, so a future implementor neither violates them silently nor assumes the
-   work is forbidden.
+   without designing it prematurely.
+7. **M7 split into M7a backup and M7b publication/reclamation** once the first-session risk
+   became concrete. Verified off-site raw backup is useful before Session Zero and needs only
+   an inspected session; publication, cache sizing, retention, and deletion need a processed
+   real session and materially different authority. M7a is therefore a narrow INV-06
+   exception with no deletion, while INV-01 remains untouched until M7b can justify one.
