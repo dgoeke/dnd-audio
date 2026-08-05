@@ -344,7 +344,8 @@ def models_fetch(
 ) -> None:
     """Install the pinned models and record what they resolved to.
 
-    The only command permitted to touch the network (INV-06). Without `--qwen` it fetches
+    One of the two commands permitted to touch the network (INV-06); `archive` is the
+    other. Without `--qwen` it fetches
     exactly one artifact: Silero VAD, pinned by commit and sha256, verified in memory
     before it is written (ADR-0013). With it, the Qwen ASR model and forced aligner are
     installed too, each pinned to a commit with a per-file digest manifest and downloaded
@@ -586,6 +587,8 @@ def _sessions_above(destination: Path) -> list[Path]:
     resolve each one's configured source roots — a session directory is not itself
     protected, only the source roots within it are, and `restore --to SESSION/recovered`
     is a perfectly reasonable thing to want.
+
+    Resolves first, so a symlinked component cannot hide the session it lands in.
     """
     found: list[Path] = []
     current = destination.resolve()
@@ -593,6 +596,43 @@ def _sessions_above(destination: Path) -> list[Path]:
         if (candidate / "session.yaml").is_file():
             found.append(candidate)
     return found
+
+
+def _reject_report_inside_raw(report_path: Path) -> None:
+    """Refuse to write an archive report under any session's sources (INV-01).
+
+    Driven by the **report path itself** rather than by whether the command was given a
+    session directory. The earlier version guarded this only for `upload` and `status`, so
+    `archive verify --report SESSION/raw/tx-a/DJI_01.WAV` — a remote-only operation, which
+    never has a session directory — replaced an irreplaceable recording with JSON. That is
+    the one thing this whole milestone exists to make impossible, reachable from a
+    documented flag. Found by M7a's second code review.
+
+    Every session above the resolved path is consulted, which covers both the explicit
+    `--report` and the `work -> raw/tx-a` symlink M1's verify phase found: resolving
+    `SESSION/work/archive-upload-report.json` lands inside `SESSION/raw/tx-a`, whose
+    session is still an ancestor.
+
+    Raises:
+        DndAudioError: with code ``output_inside_raw``, before the operation runs. Checked
+            first rather than last so an expensive `verify` is not paid for and then
+            refused.
+    """
+    from dnd_audio.config import load_session_config
+    from dnd_audio.raw_guard import raw_roots, reject_outputs_inside_raw
+
+    for session_dir in _sessions_above(report_path):
+        try:
+            config = load_session_config(session_dir / "session.yaml")
+        except DndAudioError:
+            # An unreadable `session.yaml` says nothing about where the report may go, and
+            # failing here would make an unrelated broken session block every archive
+            # command run anywhere beneath it. The roots of a session we cannot parse are
+            # unknown, not permissive — but the walk continues to any session above it.
+            continue
+        reject_outputs_inside_raw(
+            session_dir, config, raw_roots(config), {"archive report": report_path}
+        )
 
 
 def _run_archive(
@@ -618,6 +658,27 @@ def _run_archive(
         settings = load_archive_config()
     except ArchiveConfigError as exc:
         typer.secho(f"  error  {exc.code}: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=ExitCode.FATAL) from exc
+
+    # Resolved and checked **before** the operation runs. INV-01 outranks INV-13 when the
+    # report's own location is the violation, exactly as `inspect` has done since M1: a
+    # report is regenerable and a source directory written into is not. Doing it first also
+    # means a full `verify` download is not paid for and then thrown away.
+    if report_path is None:
+        report_path = (
+            session_dir / "work" / f"archive-{operation.value}-report.json"
+            if session_dir is not None
+            else default_report_dir() / f"archive-{operation.value}-report.json"
+        )
+    try:
+        _reject_report_inside_raw(report_path)
+    except DndAudioError as exc:
+        typer.secho(
+            f"  no report written: {report_path} would land inside a session's own "
+            f"sources, and nothing under them may be written to (INV-01)",
+            fg=typer.colors.RED,
+            err=True,
+        )
         raise typer.Exit(code=ExitCode.FATAL) from exc
 
     storage = build_storage(settings)
@@ -650,38 +711,6 @@ def _run_archive(
             track_id=track,
             protected_session_dirs=_sessions_above(destination),
         )
-
-    if report_path is None:
-        report_path = (
-            session_dir / "work" / f"archive-{operation.value}-report.json"
-            if session_dir is not None
-            else default_report_dir() / f"archive-{operation.value}-report.json"
-        )
-
-    # INV-01 outranks INV-13 when the report's own location is the violation, exactly as
-    # `inspect` has done since M1: a report is regenerable and a source directory written
-    # into is not. Reached through `work -> raw/tx-a`, which is the symlink M1's verify
-    # phase found. The runner checks its staging path; nothing was checking this one.
-    if session_dir is not None:
-        from dnd_audio.config import load_session_config
-        from dnd_audio.raw_guard import raw_roots, reject_outputs_inside_raw
-
-        try:
-            session_config = load_session_config(session_dir / "session.yaml")
-            reject_outputs_inside_raw(
-                session_dir,
-                session_config,
-                raw_roots(session_config),
-                {"archive report": report_path},
-            )
-        except DndAudioError as exc:
-            typer.secho(
-                f"  no report written: {report_path} would land inside the session's own "
-                f"sources, and nothing under them may be written to (INV-01)",
-                fg=typer.colors.RED,
-                err=True,
-            )
-            raise typer.Exit(code=ExitCode.FATAL) from exc
 
     report_path.parent.mkdir(parents=True, exist_ok=True)
     write_report(result, report_path)

@@ -107,8 +107,35 @@ class SpacesStorage:
         if size >= SINGLE_PUT_HARD_LIMIT_BYTES or size >= self.multipart_threshold_bytes:
             self._put_multipart(key, source, size)
             return
-        with source.open("rb") as body:
-            self._call(lambda: self.client.put_object(Bucket=self.bucket, Key=key, Body=body))
+        self._call(self._body_sender(key, source))
+
+    def _body_sender(self, key: str, source: Path) -> Callable[[], Any]:
+        """Bind one PUT into a thunk that **opens the file itself**, per attempt.
+
+        The retry loop re-runs this thunk, so the handle cannot be opened outside it. It
+        was, and the consequence was not a slow upload but a corrupt one: a real request
+        transmits the body before it can be told `503 Slow Down`, so the handle is at EOF
+        when the retry re-enters. botocore then computes `Content-Length` from the current
+        position — `determine_content_length` seeks to the end and restores — and PUTs
+        **zero bytes**.
+
+        The readback catches it and no manifest is committed, so nothing is silently wrong.
+        But the empty object now sits at an immutable content-addressed key, and
+        :func:`~dnd_audio.archive.runner._publish` refuses to overwrite an existing one, so
+        every later `archive upload` fails on that entry forever — with no delete command
+        to recover, by design. One transient `503` made a session permanently unarchivable.
+
+        The retry tests could not see it: their stub raised before reading `Body`, so the
+        second attempt found the handle still at position zero. Found by M7a's second code
+        review; the same shape as the `max_attempts` finding from the first, where the test
+        certified the bug.
+        """
+
+        def send() -> Any:
+            with source.open("rb") as body:
+                return self.client.put_object(Bucket=self.bucket, Key=key, Body=body)
+
+        return send
 
     def head_object(self, key: str) -> ObjectHead | None:
         try:
@@ -201,14 +228,19 @@ class SpacesStorage:
             lambda: self.client.create_multipart_upload(Bucket=self.bucket, Key=key)
         )
         upload_id = str(created["UploadId"])
-        # Persisted **before the first part**, so a process killed mid-upload leaves a
-        # record a later run can abort. Without it the incomplete parts are invisible and
-        # bill silently until a lifecycle rule nobody has written removes them.
-        self._record_upload(key, upload_id)
 
         part_size = self._part_size(size)
         parts: list[dict[str, Any]] = []
         try:
+            # Persisted **before the first part**, so a process killed mid-upload leaves a
+            # record a later run can abort. Without it the incomplete parts are invisible
+            # and bill silently until a lifecycle rule nobody has written removes them.
+            #
+            # Inside the `try`, because it can fail: an ENOSPC writing the state file left
+            # the upload created, unrecorded and unaborted — the exact orphan the record
+            # exists to prevent. Found by M7a's second code review.
+            self._record_upload(key, upload_id)
+
             with source.open("rb") as handle:
                 number = 1
                 while chunk := handle.read(part_size):
@@ -226,7 +258,7 @@ class SpacesStorage:
             )
             # Forgotten only on success. A record that outlives a *failed* abort is what
             # lets the next run find and clean up the orphan.
-            self._forget_upload(key)
+            self._forget_upload(key, upload_id)
         except BaseException:
             # Abort rather than resume. A resumed multipart has to reproduce the same part
             # boundaries and carry forward every ETag, and getting that subtly wrong
@@ -234,7 +266,7 @@ class SpacesStorage:
             # would catch, at the cost of the whole transfer anyway. Re-uploading one
             # object is cheaper than being clever here.
             if self._abort(key, upload_id):
-                self._forget_upload(key)
+                self._forget_upload(key, upload_id)
             raise
 
     def _part_sender(
@@ -276,20 +308,27 @@ class SpacesStorage:
         return True
 
     def _abort_orphaned(self, key: str) -> None:
-        """Clean up after a previous run that was killed mid-upload."""
+        """Clean up after every previous run that was killed mid-upload at this key.
+
+        Plural, and it has to be: the record used to hold one id and the next upload
+        overwrote it, so a *failed* abort lost the first orphan's id permanently — the
+        record survived exactly as intended and then the retry destroyed it. Ids that
+        still fail to abort are kept for the run after this one. Found by M7a's second
+        code review.
+        """
         path = self._upload_record(key)
         if path is None or not path.is_file():
             return
-        try:
-            recorded = json.loads(path.read_text(encoding="utf-8"))
-            upload_id = str(recorded["upload_id"])
-        except (OSError, json.JSONDecodeError, KeyError):
+        upload_ids = self._recorded_ids(path)
+        if not upload_ids:
             path.unlink(missing_ok=True)
             return
-        if self._abort(key, upload_id):
+
+        unaborted = [upload_id for upload_id in upload_ids if not self._abort(key, upload_id)]
+        if unaborted:
+            write_json_atomic(path, {"key": key, "upload_ids": unaborted})
+        else:
             path.unlink(missing_ok=True)
-        # Otherwise the record stays, so the *next* run tries again rather than leaving a
-        # billable orphan nothing knows the id of.
 
     def _upload_record(self, key: str) -> Path | None:
         """Where one in-flight upload's id is remembered.
@@ -304,15 +343,43 @@ class SpacesStorage:
         return base / f"{sha256_bytes(key.encode('utf-8'))}.json"
 
     def _record_upload(self, key: str, upload_id: str) -> None:
+        """Add one in-flight upload id, keeping any that an abort could not clear."""
         path = self._upload_record(key)
         if path is None:
             return
-        write_json_atomic(path, {"key": key, "upload_id": upload_id})
+        write_json_atomic(path, {"key": key, "upload_ids": [*self._recorded_ids(path), upload_id]})
 
-    def _forget_upload(self, key: str) -> None:
+    def _forget_upload(self, key: str, upload_id: str) -> None:
+        """Drop one id, leaving the file only while it still names something billable."""
         path = self._upload_record(key)
-        if path is not None:
+        if path is None:
+            return
+        remaining = list(self._recorded_ids(path))
+        if upload_id in remaining:
+            # One occurrence, not every match. Ids are unique in practice, and dropping
+            # "all of them" would be a way of forgetting an upload nobody aborted.
+            remaining.remove(upload_id)
+        if remaining:
+            write_json_atomic(path, {"key": key, "upload_ids": remaining})
+        else:
             path.unlink(missing_ok=True)
+
+    @staticmethod
+    def _recorded_ids(path: Path) -> list[str]:
+        """The ids in an existing record, or none. An unreadable record is not an error.
+
+        The singular ``upload_id`` this file used to hold is still read. A record on a real
+        machine names a multipart upload that is billing right now, and refusing to
+        understand the shape written by the build that created it would strand exactly the
+        orphan the file exists to clean up.
+        """
+        try:
+            recorded = json.loads(path.read_text(encoding="utf-8"))
+            if "upload_ids" in recorded:
+                return [str(item) for item in recorded["upload_ids"]]
+            return [str(recorded["upload_id"])]
+        except (OSError, json.JSONDecodeError, KeyError, TypeError):
+            return []
 
     # --- retry -----------------------------------------------------------------------
 

@@ -256,6 +256,60 @@ class TestIdempotenceAndDivergence:
         assert report.errors[0].code == "archive_manifest_divergent"
         assert storage.objects == stored_before
 
+    def test_a_zstd_library_upgrade_is_not_a_divergent_archive(
+        self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path
+    ) -> None:
+        """Library versions are description, not identity — as `describe()` always said.
+
+        They were being compared anyway, so an ordinary `uv lock --upgrade` of `zstandard`
+        made every already-archived session report `divergent` and made `upload` fail
+        fatally, telling the operator to choose a new session id or restore. A false alarm
+        about a backup is expensive. Found by M7a's second code review.
+
+        The committed manifest is rewritten with a *different recorded library version* and
+        nothing else, which is exactly the shape a dependency bump leaves behind.
+        """
+        import json
+
+        from dnd_audio.determinism import canonical_json
+
+        run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+        session_id = session_id_of(inspected)
+        document = json.loads(storage.objects[manifest_key(session_id)])
+        assert document["codec"]["zstandard_version"], "the recipe must record its library"
+        document["codec"]["zstandard_version"] = "99.0.0"
+        document["codec"]["libzstd_version"] = "9.9.9"
+        storage.objects[manifest_key(session_id)] = canonical_json(document).encode("utf-8")
+
+        report = run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+        assert report.status is OperationStatus.COMPLETE
+        assert report.verification is VerificationState.COMMITTED
+
+        status = run_status(inspected.session_dir, storage=storage)
+        assert status.verification is not VerificationState.DIVERGENT
+
+    def test_a_changed_compression_level_is_still_divergent(
+        self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path
+    ) -> None:
+        """The other half, without which the test above is a way of comparing nothing.
+
+        Level, thread count and every frame flag decide the bytes, so they stay in the
+        identity — only the library versions left it.
+        """
+        import json
+
+        from dnd_audio.determinism import canonical_json
+
+        run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+        session_id = session_id_of(inspected)
+        document = json.loads(storage.objects[manifest_key(session_id)])
+        document["codec"]["level"] = 11
+        storage.objects[manifest_key(session_id)] = canonical_json(document).encode("utf-8")
+
+        report = run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+        assert report.status is OperationStatus.FAILED
+        assert report.verification is VerificationState.DIVERGENT
+
 
 class TestInterruptedUpload:
     def test_a_failure_leaves_no_manifest_and_says_so(
@@ -529,6 +583,84 @@ class TestStatus:
         report = run_status(inspected.session_dir, storage=storage)
         assert report.verification is VerificationState.DIVERGENT
 
+    def test_a_source_that_changes_during_the_comparison_is_caught(
+        self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path
+    ) -> None:
+        """`status` was the one operation that never re-checked INV-01.
+
+        It inventoried the sources, then made a network round trip that takes as long as it
+        takes, then reported on a directory that may have moved underneath the comparison —
+        so a session actively being written to could still be reported `committed`. The
+        source is mutated from inside the storage layer, which is where the wait is.
+        Found by M7a's second code review.
+        """
+        run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+        victim = inspected.session_dir / "raw" / "midflight.txt"
+        victim.write_text("before\n", encoding="utf-8")
+        run_inspect(inspected.session_dir)
+        run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+
+        class MutatingOnRead:
+            """Changes a source while `status` is waiting on the manifest download."""
+
+            def __init__(self, inner: FakeArchiveStorage) -> None:
+                self.inner = inner
+
+            def head_object(self, key: str):  # type: ignore[no-untyped-def]
+                return self.inner.head_object(key)
+
+            def open_object(self, key: str):  # type: ignore[no-untyped-def]
+                victim.write_text("changed mid-flight\n", encoding="utf-8")
+                return self.inner.open_object(key)
+
+            def put_object(self, key: str, source: Path) -> None:
+                self.inner.put_object(key, source)
+
+            def list_keys(self, prefix: str):  # type: ignore[no-untyped-def]
+                return self.inner.list_keys(prefix)
+
+        report = run_status(inspected.session_dir, storage=MutatingOnRead(storage))
+        assert report.status is OperationStatus.FAILED
+        assert report.errors[0].code == "archive_sources_modified"
+
+    def test_another_sessions_upload_report_does_not_vouch_for_this_one(
+        self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path
+    ) -> None:
+        """A history claim must be a record of *this* history.
+
+        The check read `operation`, `status` and `verification` and nothing else, so a
+        report left behind by an archive of a different session — or of an earlier manifest
+        for this one — vouched for bytes it had never seen. Found by M7a's second review.
+        """
+        import json
+
+        from dnd_audio.archive.report import write_report
+        from dnd_audio.archive.runner import _report_path
+
+        upload = run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+        path = _report_path(inspected.session_dir, "upload")
+        write_report(upload, path)
+        assert (
+            run_status(inspected.session_dir, storage=storage).verification
+            is VerificationState.PREVIOUSLY_VERIFIED_AT_COMMIT
+        ), "the positive control failed, so the assertions below prove nothing"
+
+        document = json.loads(path.read_bytes())
+        document["scope"]["session_id"] = "some-other-session"
+        path.write_text(json.dumps(document), encoding="utf-8")
+        assert (
+            run_status(inspected.session_dir, storage=storage).verification
+            is VerificationState.COMMITTED
+        )
+
+        document["scope"]["session_id"] = session_id_of(inspected)
+        document["manifest_sha256"] = "0" * 64
+        path.write_text(json.dumps(document), encoding="utf-8")
+        assert (
+            run_status(inspected.session_dir, storage=storage).verification
+            is VerificationState.COMMITTED
+        ), "a report about a different manifest vouched for this one"
+
 
 class TestList:
     def test_it_discovers_sessions_without_a_local_directory(
@@ -559,6 +691,37 @@ class TestList:
         assert found == []
         assert report.status is OperationStatus.COMPLETE
         assert report.verification is VerificationState.ABSENT
+
+    def test_a_manifest_filename_somewhere_else_is_not_a_session(
+        self, storage: FakeArchiveStorage
+    ) -> None:
+        """The key must be *the* manifest key, not merely end in the manifest filename.
+
+        A key one level deeper was read as a committed session whose id came from the
+        first path component — announcing a recovery is possible for a session that has no
+        manifest at all. Found by M7a's second code review.
+        """
+        storage.objects[f"sessions/archive-v1/real/objects/x/{ARCHIVE_MANIFEST_FILENAME}"] = (
+            _minimal_manifest_bytes("real")
+        )
+        found, report = run_list(storage=storage)
+        assert found == []
+        assert "not usable manifests" in " ".join(report.notes)
+
+    def test_a_truncated_manifest_is_not_a_session(self, storage: FakeArchiveStorage) -> None:
+        """A one-byte object passed the "not empty" check and was called committed."""
+        storage.objects[manifest_key("half-written")] = b"{"
+        found, report = run_list(storage=storage)
+        assert found == []
+        assert "half-written" in " ".join(report.notes)
+
+    def test_a_real_manifest_is_still_listed(
+        self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path
+    ) -> None:
+        """The positive control for the two refusals above."""
+        run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+        found, _ = run_list(storage=storage)
+        assert found == [session_id_of(inspected)]
 
 
 class TestVerify:
@@ -761,6 +924,81 @@ class TestRestoreRefusals:
         assert report.status is OperationStatus.FAILED
         assert report.errors[0].code == "archive_symlink_refused"
 
+    def test_a_refusal_names_no_absolute_path(
+        self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path, tmp_path: Path
+    ) -> None:
+        """Report errors carry no local machine identity, and a home directory is some.
+
+        Every destination refusal embedded the full path, which the completion gate forbids
+        in a report (ADR-0039). Nothing is lost by naming the final component: there is one
+        destination per invocation and the operator typed it. Found by M7a's second review.
+        """
+        session_id = session_id_of(inspected)
+        run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+
+        occupied = tmp_path / "not-empty"
+        occupied.mkdir()
+        (occupied / "something.txt").write_text("here\n", encoding="utf-8")
+        report = run_restore(session_id, occupied, storage=storage)
+
+        assert report.errors[0].code == "archive_destination_not_empty"
+        serialized = report.model_dump_json()
+        assert str(tmp_path) not in serialized, "the report carries an absolute local path"
+        assert "not-empty" in report.errors[0].message, "it must still say which one"
+
+    def test_a_session_id_too_long_to_be_a_filename_still_restores(
+        self, tmp_path: Path, storage: FakeArchiveStorage
+    ) -> None:
+        """Restore staged under a directory named from the encoded session id.
+
+        Object keys have a 1 024-byte budget, so a 300-character session id uploads
+        perfectly — and then percent-encoding it produced a staging basename past the
+        255-byte filename-component limit, so the archive could not be restored. Locks and
+        multipart records were converted to digest names after the first code review; this
+        one was missed. Found by the second.
+        """
+        from dnd_audio.archive.codec import ARCHIVE_CODEC_V1, compress_file
+        from dnd_audio.archive.manifest import ArchiveManifest, ArchiveManifestEntry
+        from dnd_audio.determinism import canonical_json, sha256_bytes
+
+        session_id = "a-very-long-session-name-" * 12
+        assert len(session_id) > 255
+
+        payload = b"one restored recording\n"
+        source = tmp_path / "one.wav"
+        source.write_bytes(payload)
+        staged = tmp_path / "one.zst"
+        fact = compress_file(source, staged)
+
+        key = f"sessions/archive-v1/x/objects/one.wav.{sha256_bytes(payload)}.zst"
+        storage.objects[key] = staged.read_bytes()
+        manifest = ArchiveManifest(
+            session_id=session_id,
+            codec=ARCHIVE_CODEC_V1.describe(),
+            entries=[
+                ArchiveManifestEntry(
+                    path=encode_component("raw/tx-a/one.wav"),
+                    path_text="raw/tx-a/one.wav",
+                    track_id="tx-a",
+                    size_bytes=len(payload),
+                    sha256=sha256_bytes(payload),
+                    compressed_size_bytes=fact.size_bytes,
+                    compressed_sha256=fact.sha256,
+                    object_key=key,
+                )
+            ],
+        )
+        storage.objects[manifest_key(session_id)] = canonical_json(
+            manifest.model_dump(mode="json")
+        ).encode("utf-8")
+
+        destination = tmp_path / "recovered"
+        destination.mkdir()
+        report = run_restore(session_id, destination, storage=storage)
+
+        assert report.status is OperationStatus.COMPLETE, report.errors
+        assert (destination / "raw" / "tx-a" / "one.wav").read_bytes() == payload
+
     def test_insufficient_space_is_refused_before_downloading(
         self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path, tmp_path: Path
     ) -> None:
@@ -801,6 +1039,33 @@ class TestRestoreIsTransactional:
         assert destination.is_dir()
         assert list(destination.iterdir()) == []
         assert not list(tmp_path.glob(".dnd-audio-restore-*"))
+
+    def test_a_rolled_back_restore_does_not_call_anything_restored(
+        self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path, tmp_path: Path
+    ) -> None:
+        """The report must not name files that exist nowhere.
+
+        Entries written into the staging tree before the failure kept the outcome
+        `restored`, and then the staging tree was deleted and the destination left empty —
+        so the report listed recovered files an operator could not find. They were
+        downloaded, verified, and deliberately discarded, which is `skipped`. Found by
+        M7a's second code review.
+        """
+        session_id = session_id_of(inspected)
+        run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+        stored = _manifest_from(storage, session_id)
+        storage.arm(StorageFault(key=stored.entries[2].object_key, operation="get", kind="corrupt"))
+
+        destination = tmp_path / "recovered"
+        destination.mkdir()
+        report = run_restore(session_id, destination, storage=storage)
+
+        assert report.status is OperationStatus.FAILED
+        assert report.objects, "entries were written before the failure, so this is not vacuous"
+        assert not any(item.outcome is ArchiveObjectOutcome.RESTORED for item in report.objects)
+        assert all(item.outcome is ArchiveObjectOutcome.SKIPPED for item in report.objects), [
+            item.outcome for item in report.objects
+        ]
 
     def test_a_failed_restore_can_simply_be_retried(
         self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path, tmp_path: Path

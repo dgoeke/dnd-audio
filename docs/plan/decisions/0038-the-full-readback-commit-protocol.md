@@ -54,9 +54,27 @@ manifest — visible to `status` as `pending`, not as a committed archive.
 may never replace a full readback. Existing object content is accepted only after full
 verification, and a conflict is fatal rather than an overwrite.
 
-**On an existing manifest:** `upload` fully GETs it and compares canonical bytes.
-Byte-equal is **idempotent success**. Any difference is a **fatal divergence**, never a
-merge and never an overwrite.
+**On an existing manifest:** `upload` fully GETs it and compares **full entry identity plus
+the byte-deciding half of the recipe** — session id, archive version, and every entry's
+path, text path, track id, size, original digest and object key. Identical is **idempotent
+success**. Any difference is a **fatal divergence**, never a merge and never an overwrite.
+
+Two exclusions, both deliberate, and this paragraph is the amendment that makes the code and
+this document agree — the original said "compares canonical bytes", which the implementation
+never did.
+
+- **The compressed size and digest are out.** Archive v1's recipe is frozen and
+  single-threaded, so identical sources under an identical recipe produce identical
+  compressed bytes; comparing them would mean re-compressing a whole session to discover
+  whether anything changed. Nothing is lost that the readback does not already cover.
+- **The recorded library versions are out.** `ArchiveCodec.describe()` records the
+  `zstandard` and libzstd versions because a *difference* in produced bytes deserves an
+  explanation attached, but a zstd frame is readable by any later libzstd and the versions
+  decide nothing. Comparing them made an ordinary dependency bump report every archived
+  session as `divergent` and fail the next `upload` fatally — a false alarm about a backup,
+  which is expensive in the only currency this milestone has. Found by M7a's second code
+  review; the first review's `track_id` finding is what put the recipe in the comparison at
+  all, and it was drawn one field too wide.
 
 **On concurrency, the promise is scoped to what the design delivers.** A local
 interprocess lock gives mutual exclusion between processes on the single supported

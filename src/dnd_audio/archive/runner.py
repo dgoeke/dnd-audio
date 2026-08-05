@@ -55,6 +55,7 @@ from dnd_audio.archive.codec import (
 )
 from dnd_audio.archive.lock import single_writer
 from dnd_audio.archive.manifest import (
+    RESTORE_INSTRUCTIONS,
     ArchiveInspectionIdentity,
     ArchiveManifest,
     ArchiveManifestEntry,
@@ -87,6 +88,13 @@ __all__ = [
     "run_upload",
     "run_verify",
 ]
+
+#: A floor on a usable manifest, derived rather than guessed: every manifest carries
+#: :data:`RESTORE_INSTRUCTIONS` verbatim, so a real one is always longer than them. Only a
+#: size check, because `list` deliberately does not download and parse — that would cost a
+#: retrieval per session, and `verify` is the operation that reads bytes. It catches the
+#: truncated and zero-byte cases, which is what "committed" must not be claimed for.
+_SMALLEST_POSSIBLE_MANIFEST_BYTES: Final = len(RESTORE_INSTRUCTIONS)
 
 #: Where a compressed object is staged, one at a time. Under `work/`, so it is inside the
 #: session's own generated area and outside every source root — and so it is on the same
@@ -416,6 +424,34 @@ def _read_back(
         raise ArchiveError(message, code="archive_object_conflict")
 
 
+#: The recipe fields that decide the compressed bytes. Everything else `describe()` records
+#: — the `zstandard` and libzstd versions — explains *why* bytes might differ, and comparing
+#: it would turn a dependency bump into a divergent archive (ADR-0037).
+_RECIPE_IDENTITY_FIELDS: Final = (
+    "format",
+    "level",
+    "threads",
+    "write_checksum",
+    "write_content_size",
+    "write_dict_id",
+)
+
+
+def _recipe_identity(codec: dict[str, str | int | bool]) -> dict[str, str | int | bool]:
+    """The byte-deciding half of a recorded recipe.
+
+    A field this project has never written is kept rather than dropped: an unknown key in a
+    committed manifest means the document was written by something that knew more than this
+    build does, and quietly ignoring it would compare two recipes as equal on the strength
+    of not understanding one of them.
+    """
+    return {
+        name: value
+        for name, value in codec.items()
+        if name in _RECIPE_IDENTITY_FIELDS or not name.endswith("_version")
+    }
+
+
 def _identity(manifest: ArchiveManifest) -> tuple[object, ...]:
     """Everything about a manifest that is not derived from the compression itself.
 
@@ -430,11 +466,19 @@ def _identity(manifest: ArchiveManifest) -> tuple[object, ...]:
     produced "already archived, identical content" while the committed manifest kept the
     old attribution — and `--track` recovery then returned another speaker's audio. That is
     an INV-11 violation reached through an equality check. Found by M7a's code review.
+
+    **The library versions are not**, which `ArchiveCodec.describe` always said: they are
+    description, not identity, because a zstd frame is readable by any later libzstd. They
+    were being compared anyway, so an ordinary `uv lock --upgrade` of `zstandard` made
+    every already-archived session report `divergent` — the word this project reserves for
+    "the bucket and the disk disagree about content" — and made `upload` fail fatally
+    telling the operator to pick a new session id or restore. A false alarm about a backup
+    is not a cheap thing to raise. Found by M7a's second code review.
     """
     return (
         manifest.session_id,
         manifest.archive_version,
-        tuple(sorted(manifest.codec.items())),
+        tuple(sorted(_recipe_identity(manifest.codec).items())),
         tuple(
             (
                 entry.path,
@@ -522,6 +566,12 @@ def run_status(session_dir: Path, *, storage: ArchiveStorage) -> ArchiveReport:
             if committed is not None
             else any(True for _ in _iter_prefix(storage, _session_prefix(session_id)))
         )
+        # The source set was inventoried before a network round trip that takes as long as
+        # it takes. Re-checked here for the same reason every other operation re-checks:
+        # comparing the bucket against a directory that moved underneath the comparison
+        # produces an answer about neither. INV-01 is a claim about every exit path, and
+        # `status` was the one operation that never made it. Found by M7a's second review.
+        sources.verify_unchanged(config)
     except Exception as exc:
         return _failed(ArchiveOperation.STATUS, session_id, exc, started, entries_in_scope=0)
 
@@ -566,7 +616,7 @@ def run_status(session_dir: Path, *, storage: ArchiveStorage) -> ArchiveReport:
     # *history*, so its only honest source is the report the committing upload wrote — and
     # that report exists locally, beside the session, which is exactly where this operation
     # is standing. Absent one, `committed` is all that can be said (ADR-0039).
-    verified_at_commit = _upload_report_says_verified(session_dir)
+    verified_at_commit = _upload_report_says_verified(session_dir, session_id, payload)
     return ArchiveReport(
         operation=ArchiveOperation.STATUS,
         status=OperationStatus.COMPLETE,
@@ -593,24 +643,36 @@ def run_status(session_dir: Path, *, storage: ArchiveStorage) -> ArchiveReport:
     )
 
 
-def _upload_report_says_verified(session_dir: Path) -> bool:
-    """Whether the local upload report records a commit that read every object back.
+def _upload_report_says_verified(session_dir: Path, session_id: str, manifest_bytes: bytes) -> bool:
+    """Whether the local upload report vouches for **this** committed manifest.
 
     Deliberately tolerant: a missing, unreadable, or unrecognized report simply means the
     weaker answer. Treating a parse failure as "verified" would be the one direction that
     matters, and treating it as an error would make `status` fail over an artifact it does
     not need.
+
+    **The report must name this session and this manifest.** It used to be believed on the
+    strength of saying `upload`, `complete` and `verified` and nothing else, so a report
+    left behind by an earlier archive of a different session id — or by an upload of an
+    earlier manifest for this one — vouched for bytes it had never seen. A claim about
+    history is only worth making about the history it is actually a record of. Found by
+    M7a's second code review.
     """
     path = _report_path(session_dir, "upload")
     try:
         document = json.loads(path.read_bytes())
     except (OSError, json.JSONDecodeError):
         return False
+    if not isinstance(document, dict):
+        return False
+    scope = document.get("scope")
     return (
-        isinstance(document, dict)
-        and document.get("operation") == ArchiveOperation.UPLOAD.value
+        document.get("operation") == ArchiveOperation.UPLOAD.value
         and document.get("verification") == VerificationState.VERIFIED.value
         and document.get("status") == OperationStatus.COMPLETE.value
+        and isinstance(scope, dict)
+        and scope.get("session_id") == session_id
+        and document.get("manifest_sha256") == sha256_bytes(manifest_bytes)
     )
 
 
@@ -643,8 +705,17 @@ def run_list(*, storage: ArchiveStorage) -> tuple[list[str], ArchiveReport]:
                 unreadable.append(encoded)
                 continue
 
+            # The key must be **the** manifest key for that session, not merely a key that
+            # ends in the manifest filename. `.../<session>/objects/x/archive-manifest.v1.
+            # json` was being read as a committed session whose id came from the first
+            # component, which is a session id this project never wrote a manifest for.
+            # Found by M7a's second code review.
+            if key != manifest_key(session_id):
+                unreadable.append(session_id)
+                continue
+
             head = storage.head_object(key)
-            if head is None or head.size_bytes == 0:
+            if head is None or head.size_bytes < _SMALLEST_POSSIBLE_MANIFEST_BYTES:
                 unreadable.append(session_id)
                 continue
             session_ids.append(session_id)
@@ -755,14 +826,26 @@ def run_restore(
     """
     started = _now()
     try:
+        # Before the network, deliberately. A destination inside a source root is illegal
+        # whatever the bucket holds, and checking it second meant the INV-01 refusal was
+        # reached only for sessions that happened to be committed — so on a fresh bucket
+        # the operation failed with `archive_not_committed` and the guard never ran. It
+        # also spends a manifest GET to learn something local.
+        _check_destination(destination, protected_session_dirs)
         remote, manifest_bytes = _require_remote_manifest(storage, session_id)
         selected = _select(remote, track_id)
-        _check_destination(destination, protected_session_dirs)
         _preflight_restore(selected, destination, free_bytes=free_bytes)
     except Exception as exc:
         return _failed(ArchiveOperation.RESTORE, session_id, exc, started, entries_in_scope=0)
 
-    staging = destination.parent / f"{_RESTORE_STAGING_PREFIX}{encode_component(session_id)}"
+    # Named by digest, for the reason the multipart state files were: a valid session id
+    # can be long enough that percent-encoding it passes the 255-byte filename-component
+    # limit, so an upload that succeeded — object keys have a 1 024-byte budget — could not
+    # be restored. Locks and multipart records were converted after M7a's first code
+    # review; this one was missed. Found by the second.
+    staging = destination.parent / (
+        _RESTORE_STAGING_PREFIX + sha256_bytes(encode_component(session_id).encode("ascii"))[:32]
+    )
     shutil.rmtree(staging, ignore_errors=True)
     results: list[ObjectResult] = []
 
@@ -808,7 +891,12 @@ def run_restore(
             ),
             verification=VerificationState.COMMITTED,
             manifest_sha256=sha256_bytes(manifest_bytes),
-            objects=results,
+            # Relabelled, because the restore is transactional: the staging tree these
+            # entries were written into has just been deleted and the destination is
+            # untouched, so `restored` would name files that do not exist anywhere. They
+            # were downloaded and verified and then deliberately discarded, which is
+            # `skipped`. Found by M7a's second code review.
+            objects=[_as_unpublished(result) for result in results],
             errors=[_as_error(exc)],
             notes=[
                 "The destination was left untouched, so re-running this command is a "
@@ -863,6 +951,12 @@ def _require_current_manifest(session_dir: Path, config: SessionConfig) -> dict[
         message = f"{MANIFEST_RELATIVE_PATH} is not readable JSON: {exc}"
         raise ArchiveError(message, code="archive_manifest_absent") from exc
 
+    # Checked before anything is read *out* of the document, which is the only order that
+    # works: `.get` on a JSON array raises `AttributeError`, so the guard below used to sit
+    # downstream of the call it was guarding and could never fire.
+    if not isinstance(document, dict):
+        message = f"{MANIFEST_RELATIVE_PATH} is not a manifest object"
+        raise ArchiveError(message, code="archive_manifest_absent")
     if document.get("config_hash") != config_hash(config):
         message = (
             f"{MANIFEST_RELATIVE_PATH} was written under a different configuration than "
@@ -870,9 +964,6 @@ def _require_current_manifest(session_dir: Path, config: SessionConfig) -> dict[
             f"`dnd-audio inspect` again before archiving."
         )
         raise ArchiveError(message, code="archive_manifest_stale")
-    if not isinstance(document, dict):  # pragma: no cover - schema-validated on write
-        message = f"{MANIFEST_RELATIVE_PATH} is not a manifest object"
-        raise ArchiveError(message, code="archive_manifest_absent")
     return document
 
 
@@ -950,7 +1041,14 @@ def _preflight_restore(
 
 
 def _check_destination(destination: Path, protected: Sequence[Path]) -> None:
-    """An empty directory, outside every protected source root, reached without a symlink."""
+    """An empty directory, outside every protected source root, reached without a symlink.
+
+    Every message here names paths by their final component rather than in full. These
+    strings reach the operation report, which the completion gate requires to carry no
+    local machine identity — and an absolute destination is a home directory and a username
+    (ADR-0039). Nothing is lost: there is exactly one destination per invocation and the
+    operator typed it. Found by M7a's second code review.
+    """
     resolved = destination.resolve()
     for session_dir in protected:
         try:
@@ -961,9 +1059,9 @@ def _check_destination(destination: Path, protected: Sequence[Path]) -> None:
             root_path = (session_dir if root == "." else session_dir / root).resolve()
             if resolved == root_path or root_path in resolved.parents:
                 message = (
-                    f"the restore destination resolves inside {root_path}, which is a "
-                    f"session's source directory. Nothing may be written under one "
-                    f"(INV-01) — restore somewhere else and compare by hand."
+                    f"the restore destination resolves inside the source directory "
+                    f"{root!r} of session {session_dir.name!r}. Nothing may be written "
+                    f"under one (INV-01) — restore somewhere else and compare by hand."
                 )
                 raise ArchiveError(message, code="archive_destination_protected")
 
@@ -973,7 +1071,11 @@ def _check_destination(destination: Path, protected: Sequence[Path]) -> None:
     # rule the upload side applies (ADR-0036). Found by M7a's code review.
     for component in (destination, *destination.parents):
         if component.is_symlink():
-            shown = "the restore destination" if component == destination else str(component)
+            shown = (
+                "the restore destination"
+                if component == destination
+                else f"the path component {component.name!r} above the restore destination"
+            )
             message = (
                 f"{shown} is a symlink. Where it points decides what gets written, and "
                 f"that is not visible from the command line — the archive refuses a link "
@@ -981,13 +1083,15 @@ def _check_destination(destination: Path, protected: Sequence[Path]) -> None:
             )
             raise ArchiveError(message, code="archive_symlink_refused")
     if not destination.is_dir():
-        message = f"the restore destination {destination} does not exist or is not a directory"
+        message = (
+            f"the restore destination {destination.name!r} does not exist or is not a directory"
+        )
         raise ArchiveError(message, code="archive_destination_unusable")
     if any(destination.iterdir()):
         message = (
-            f"the restore destination {destination} is not empty. A restore recreates a "
-            f"whole tree and will not merge into existing files — point it at an empty "
-            f"directory so what arrives is unambiguous."
+            f"the restore destination {destination.name!r} is not empty. A restore "
+            f"recreates a whole tree and will not merge into existing files — point it at "
+            f"an empty directory so what arrives is unambiguous."
         )
         raise ArchiveError(message, code="archive_destination_not_empty")
 
@@ -1224,6 +1328,13 @@ def _scope_note(track_id: str | None) -> list[str]:
         f"Scope was track {track_id!r} only. Files not attributed to a track — nested "
         f"notes, unassigned audio — are covered only by a whole-session operation."
     ]
+
+
+def _as_unpublished(result: ObjectResult) -> ObjectResult:
+    """One restore result, demoted because the transaction rolled back over it."""
+    if result.outcome is not ArchiveObjectOutcome.RESTORED:
+        return result
+    return result.model_copy(update={"outcome": ArchiveObjectOutcome.SKIPPED})
 
 
 def _safe_verify(

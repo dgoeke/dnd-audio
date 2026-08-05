@@ -132,8 +132,9 @@ manifest hash, following ADR-0003.
 
 One upload for a session ID may run at a time. A local interprocess lock enforces that on the
 single supported archive host, and the operator contract forbids concurrent writers elsewhere.
-Object keys are immutable. Before committing, `upload` fully GETs an existing fixed manifest:
-canonical byte equality is idempotent success and any difference is a fatal divergence. A
+Object keys are immutable. Before committing, `upload` fully GETs an existing fixed manifest
+and compares full entry identity plus the byte-deciding half of the recipe (ADR-0038):
+identity equality is idempotent success and any difference is a fatal divergence. A
 HEAD-then-PUT sequence is never presented as a distributed compare-and-swap. The manifest is
 PUT last only after all objects pass local and remote verification.
 

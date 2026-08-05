@@ -15,6 +15,7 @@ exhaustion, one retry bound rather than two, and error messages that carry no bu
 from __future__ import annotations
 
 import io
+import json
 from pathlib import Path
 from typing import Any
 
@@ -70,6 +71,7 @@ class RecordingClient:
         #: on how the object was chunked rather than on a leftover.
         self.part_sizes: dict[str, list[int]] = {}
         self.aborted: list[str] = []
+        self.upload_counter = 0
         self.errors: dict[str, list[Exception]] = {}
         self.list_pages: list[dict[str, Any]] = []
 
@@ -106,7 +108,11 @@ class RecordingClient:
     def create_multipart_upload(self, *, Bucket: str, Key: str) -> dict[str, Any]:
         self._record("create_multipart_upload")
         self.parts[Key] = []
-        return {"UploadId": "upload-1"}
+        # A fresh id every time, because S3 never reissues one — and a fake that did made
+        # two *distinct* in-flight uploads at one key indistinguishable, which is precisely
+        # the state the upload record has to keep straight.
+        self.upload_counter += 1
+        return {"UploadId": f"upload-{self.upload_counter}"}
 
     def upload_part(
         self, *, Bucket: str, Key: str, UploadId: str, PartNumber: int, Body: bytes
@@ -358,6 +364,69 @@ class TestMultipartBoundaries:
         storage.put_object("k", path)
         assert "abort_multipart_upload" in client.operations
 
+    def test_a_second_orphan_does_not_erase_the_first(
+        self, storage: SpacesStorage, client: RecordingClient, tmp_path: Path
+    ) -> None:
+        """A record held one id, so the next upload overwrote an orphan it had not aborted.
+
+        The failed-abort case above deliberately keeps the record — and then the very next
+        upload at that key wrote its own id over it, permanently losing the id of a
+        multipart upload that is still billing. Both must survive and both must be tried.
+        Found by M7a's second code review.
+        """
+        big = tmp_path / "big.bin"
+        big.write_bytes(b"j" * (MIN_MULTIPART_PART_BYTES * 2))
+
+        # First attempt: completes badly, and the abort is refused.
+        client.errors["complete_multipart_upload"] = [ProviderError("InternalErrorFatal", 500)]
+        client.errors["abort_multipart_upload"] = [ProviderError("AccessDenied", 403)]
+        with pytest.raises(ArchiveError):
+            storage.put_object("k", big)
+
+        # Second attempt: same again, so now there are two unaborted uploads at one key.
+        # Two abort errors, because this run makes two abort calls — one retrying the
+        # orphan it found, one for the upload it is about to fail on.
+        client.errors["complete_multipart_upload"] = [ProviderError("InternalErrorFatal", 500)]
+        client.errors["abort_multipart_upload"] = [ProviderError("AccessDenied", 403)] * 2
+        with pytest.raises(ArchiveError):
+            storage.put_object("k", big)
+
+        record = storage._upload_record("k")
+        assert record is not None
+        recorded = json.loads(record.read_text(encoding="utf-8"))["upload_ids"]
+        assert len(recorded) == 2, f"an orphan was forgotten: {recorded}"
+
+        # A third run, with the provider healthy, clears both rather than one.
+        client.errors.clear()
+        client.aborted.clear()
+        storage.put_object("k", big)
+        assert len(client.aborted) == 2
+        assert not record.is_file()
+
+    def test_a_failure_recording_the_upload_id_still_aborts(
+        self, storage: SpacesStorage, client: RecordingClient, tmp_path: Path
+    ) -> None:
+        """`_record_upload` sat above the `try`, so its own failure leaked the upload.
+
+        An ENOSPC writing the state file left a created multipart upload with no record and
+        no abort — the exact billable orphan the record exists to prevent, produced by the
+        mechanism meant to prevent it. Found by M7a's second code review.
+        """
+        big = tmp_path / "big.bin"
+        big.write_bytes(b"k" * (MIN_MULTIPART_PART_BYTES * 2))
+        # The state directory is a *file*, so writing the record beneath it fails.
+        state = storage.upload_state_dir
+        assert state is not None
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text("not a directory", encoding="utf-8")
+
+        with pytest.raises(OSError, match="Not a directory"):
+            storage.put_object("k", big)
+
+        assert "abort_multipart_upload" in client.operations, (
+            "a multipart upload was created and then leaked when its record could not be written"
+        )
+
 
 class TestPagination:
     def test_it_follows_markers_to_exhaustion(
@@ -462,6 +531,59 @@ class TestRetry:
         client.errors["put_object"] = [ProviderError("SlowDown", 503)] * 3
         storage.put_object("k", small(tmp_path))
         assert delays == [0.5, 1.0, 2.0]
+
+    def test_a_retried_put_sends_the_whole_file_again(
+        self, client: RecordingClient, tmp_path: Path
+    ) -> None:
+        """The retry that stored nothing, and the reason the tests above could not see it.
+
+        `RecordingClient` raises from `_record`, *before* it touches `Body`. A real request
+        cannot do that: it transmits the body and then reads the response, so the handle is
+        at EOF when the retry re-enters. botocore computes `Content-Length` from the
+        current position, so the retried PUT sent **zero bytes** — and because the key is
+        content-addressed and `_publish` refuses to overwrite an existing object, one
+        transient `503` made the session permanently unarchivable, with no delete command
+        to recover it.
+
+        `Consuming` is the fake corrected on exactly that point. Verified by reverting the
+        fix: with the handle opened outside the retry thunk, `stored` is empty.
+        """
+
+        class Consuming(RecordingClient):
+            """Reads the body before it can fail, the way a transmitted request does."""
+
+            def put_object(self, *, Bucket: str, Key: str, Body: Any) -> dict[str, Any]:
+                sent = Body.read() if hasattr(Body, "read") else bytes(Body)
+                self.operations.append("put_object")
+                queued = self.errors.get("put_object")
+                if queued:
+                    raise queued.pop(0)
+                self.objects[Key] = sent
+                return {"ETag": '"etag"'}
+
+        consuming = Consuming()
+        storage = SpacesStorage(
+            client=consuming,
+            bucket="example-cold",
+            multipart_threshold_bytes=256 * 1024 * 1024,
+            multipart_part_bytes=MIN_MULTIPART_PART_BYTES,
+            max_retries=3,
+            retry_base_seconds=0.0001,
+            sleep=lambda _: None,
+            upload_state_dir=tmp_path / "uploads",
+        )
+
+        payload = b"one archived object, several thousand bytes long. " * 100
+        source = tmp_path / "object.zst"
+        source.write_bytes(payload)
+        consuming.errors["put_object"] = [ProviderError("SlowDown", 503)] * 2
+
+        storage.put_object("k", source)
+
+        assert consuming.operations.count("put_object") == 3
+        assert consuming.objects["k"] == payload, (
+            "the retry stored a truncated object at a content-addressed key"
+        )
 
     def test_a_non_retryable_error_fails_immediately(
         self, storage: SpacesStorage, client: RecordingClient, tmp_path: Path
