@@ -1,7 +1,7 @@
 # Transcript assembly evaluation — 2026-08-04
 
 This is a fixed-response evaluation of M9 against the four-file jam-verification capture. It
-is not the H1 fixture: one operator announced microphones while holding one at a time, so the
+is a limited capture: one operator announced microphones while holding one at a time, so the
 capture contains no ground-truthed genuine multi-speaker speech. It can prove recovery and
 bleed behavior for these utterances; it cannot authorize aggressive exact-short collapse.
 
@@ -47,7 +47,7 @@ JSON and Markdown views render it as one turn. Both exact one-word `Okay` record
 rule, and exact text is excluded from that rule in any case.
 
 The result meets the conservative target for this capture: intended words are complete,
-activity and mix are unchanged, and unresolved evidence remains visible. H1/H2 still owe
-genuine overlap, multi-wearer hard onsets and controlled conversational pauses before the
+activity and mix are unchanged, and unresolved evidence remains visible. M11 still audits
+genuine overlap, multi-wearer hard onsets and natural conversational pauses before the
 20 ms grace, 300/1000 containment margin or 350 ms presentation gap can be treated as broadly
 calibrated defaults.

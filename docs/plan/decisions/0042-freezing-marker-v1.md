@@ -101,5 +101,5 @@ change to any of those turns that test red, which is the desired behaviour: they
 of what the frozen bytes mean.
 
 What would make us revisit: a materially better phone, a receiver firmware change altering the
-recorded band, or H2 evidence that the marker is failing in practice. Any of those is a new
+recorded band, or live-session evidence that the marker is failing in practice. Any of those is a new
 version, never an edit to this one.

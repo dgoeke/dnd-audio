@@ -7,7 +7,6 @@
 *.flac
 *.m4a
 models/
-samples/
 .hf-cache/
 *.safetensors
 *.ckpt
@@ -63,4 +62,3 @@ docs/plan/reviews/*.raw.md
 
 # Scratch
 .scratch/
-/bench-markers/

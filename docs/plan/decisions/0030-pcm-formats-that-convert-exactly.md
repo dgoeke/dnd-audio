@@ -28,7 +28,7 @@ edges round-trip with zero error, and the identical test on 32-bit integers fail
 
 This is not hypothetical. Two of four transmitters in the 2026-08-02 probe wrote `pcm_s24le`
 `_orig` files, from a per-transmitter setting the operator had not matched across kits — the
-exact mistake H1's recipe already warns about, which means it will be made again. **It is the
+exact mistake the capture guide warns about, which means it will be made again. **It is the
 item on M8's list that can cost a whole session**, and it would be discovered after the
 recording rather than during it.
 

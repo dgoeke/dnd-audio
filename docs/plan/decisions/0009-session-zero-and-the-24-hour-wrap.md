@@ -145,6 +145,6 @@ rollover therefore does **not** depend on OQ-003.
   genuinely spans more than half a day with no configured origin will be read as a short
   session across midnight, which is wrong. Nothing in the evidence distinguishes the two;
   a dated origin does, and the diagnostic says so.
-- If H1 shows DJI stamps an origination *date* on every chunk (OQ-001), most of the
+- The real DJI captures show an origination *date* on every chunk (OQ-001), so most of the
   inference disappears: a dated chunk needs no rollover reasoning at all, and this ADR's
   inference rules become the fallback rather than the common path.

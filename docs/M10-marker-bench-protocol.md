@@ -138,9 +138,9 @@ stopwatch** — see [Why there is no event log](#why-there-is-no-event-log).
 On the project machine:
 
 ```bash
-dnd-audio marker build ./bench-markers/cand-a --marker cand-a
-dnd-audio marker build ./bench-markers/cand-b --marker cand-b
-dnd-audio marker build ./bench-markers/cand-c --marker cand-c
+dnd-audio marker build /tmp/dnd-audio-marker-bench/cand-a --marker cand-a
+dnd-audio marker build /tmp/dnd-audio-marker-bench/cand-b --marker cand-b
+dnd-audio marker build /tmp/dnd-audio-marker-bench/cand-c --marker cand-c
 ```
 
 One directory each, because the manifest is named `marker-manifest.json` and describes the pair
@@ -162,9 +162,9 @@ is a clean stop, not a problem to work around.
 Three files per candidate:
 
 ```text
-bench-markers/cand-a/dnd-audio-sync-marker-cand-a.wav     the canonical bytes
-bench-markers/cand-a/dnd-audio-sync-marker-cand-a.html    the standalone player, with those exact bytes inside it
-bench-markers/cand-a/marker-manifest.json                 published last, as the completeness marker
+/tmp/dnd-audio-marker-bench/cand-a/dnd-audio-sync-marker-cand-a.wav     the canonical bytes
+/tmp/dnd-audio-marker-bench/cand-a/dnd-audio-sync-marker-cand-a.html    the standalone player, with those exact bytes inside it
+/tmp/dnd-audio-marker-bench/cand-a/marker-manifest.json                 published last, as the completeness marker
 ```
 
 ## Step 2 — get the pages onto the phone
@@ -312,8 +312,8 @@ that is INV-01 and there is a regression matrix behind it — but a bench is exa
 to check the checker independently.
 
 Write a `session.yaml` beside `raw/` in the usual shape (the
-[H1 runbook](H1-two-person-recording-runbook.md) has a complete example; six tracks, the real
-receiver/channel map, and the timecode section matching the receivers).
+[live Session Zero capture guide](session-zero-capture-guide.md) has the production procedure;
+six tracks, the real receiver/channel map, and the timecode section matching the receivers).
 
 ## Why there is no event log
 
@@ -428,7 +428,7 @@ Sanitized measurements, commands, hashes and conclusions get written up under `d
 ## What not to do
 
 - **Do not improvise a waveform.** If all three candidates fail, that is the finding, and the
-  three-clap procedure in the H1/H2 runbooks is what a real session falls back to.
+  three-clap procedure in the live capture guide is what a real session falls back to.
 - **Do not move the phone between the opening and closing blocks.** It is the single mistake
   that produces a confident wrong number instead of an honest inconclusive one — and with no
   written log, the spoken slate is the only thing that would reveal it. If it happens, say so

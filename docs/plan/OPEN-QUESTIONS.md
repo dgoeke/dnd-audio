@@ -19,7 +19,7 @@ reachable through `ffprobe -show_format -show_streams`.
 **Why it matters:** The entire timecode strategy chain in M1/M2 rests on it. The
 spec explicitly forbids inventing a layout.
 **Evidence:** Raw `ffprobe` JSON + RIFF chunk inventory from a real file.
-**Needs:** H1 · **Blocks:** M1, M2 · **Status:** **answered** (sample probe, 2026-08-02)
+**Needs:** nothing further · **Blocks:** M1, M2 · **Status:** **answered** (sample probe, 2026-08-02)
 
 **Answer — `bext` and `iXML`, both present, and no `INFO`/`ISMP` timecode.** Four real
 DJI Mic 3 transmitter files (firmware `ver:02.00.06.01`) carry, in order: `fmt `(16),
@@ -45,7 +45,7 @@ can both produce `TX01`. Directory identity is authoritative (INV-11).
 **Why it matters:** If it were unique it would be a useful cross-check; if it is
 not, treating it as identity would silently mis-attribute a speaker.
 **Evidence:** Filenames from six transmitters across three kits recorded together.
-**Needs:** H1 · **Blocks:** M1 (validation hints only) · **Status:** **answered**
+**Needs:** nothing further · **Blocks:** M1 (validation hints only) · **Status:** **answered**
 (sample probe, 2026-08-02)
 
 **Answer — no, it is not unique, and the assumption was right.** Two receivers recording
@@ -62,7 +62,7 @@ monotonically increasing counter usable only as a secondary chunk-order hint.
 **Why it matters:** Chunk discontinuity warnings and `orig`/`edit` pairing in M1.
 **Evidence:** A full directory listing from the fixture, including a
 power-cycle-induced discontinuity.
-**Needs:** H1 · **Blocks:** M1 · **Status:** open — **grammar confirmed, counter not**
+**Needs:** nothing further · **Blocks:** nothing · **Status:** **dropped** (ADR-0043)
 
 **Partial evidence (sample probe, 2026-08-02).** The grammar is exactly as assumed:
 `TX##_MIC###_YYYYMMDD_HHMMSS_orig.wav`, and `inspection`'s parser recognized all four real
@@ -77,8 +77,11 @@ files without a change. Two observations about the middle field, which M1 reads 
   not at all. Consistent with, not evidence for — two files at `001` prove very little.
 
 The date and time components match `bext.origination_date`/`_time` exactly in all four.
-**Still unanswered:** what the counter does across a power cycle, which is the only reason
-M1 wants it, and whether it ever wraps. The sample has no power cycle in it.
+**Why the remainder was dropped.** The grammar has since been observed across the sample,
+jam-verification, minimal-acoustic, and marker-bench captures. The counter is only a secondary
+warning hint: authoritative directory identity, content hashes, BWF placement, and explicit
+overlap handling do not depend on monotonicity. A dedicated power cycle would answer device
+trivia without changing a pipeline decision, so ADR-0043 does not carry it into M11.
 
 ## OQ-004 — Is `time_reference` present, midnight-relative, and at the file rate?
 **Assumption:** Yes: integer sample count since midnight at the file's own sample
@@ -86,7 +89,7 @@ rate, kept as an integer and never rounded through frames (INV-04).
 **Why it matters:** It is the preferred source in the strategy chain; the fallback
 is a timecode tag plus configured frame rate.
 **Evidence:** `bext` chunk contents from a file whose wall-clock start is known.
-**Needs:** H1 · **Blocks:** M1, M2 · **Status:** **answered — and the answer is no, on
+**Needs:** nothing further · **Blocks:** M1, M2 · **Status:** **answered — and the answer is no, on
 both halves** (sample probe, 2026-08-02). **The implementation was corrected in M8**
 (2026-08-03, ADR-0031); see the consequences below.
 
@@ -185,7 +188,7 @@ from the earliest source instead sidesteps all of it, and that path already exis
   **Retracted 2026-08-03 — the setting does not reach the file.** A receiver set to 60 fps
   wrote `TIMECODE_RATE 30/1` and a `time_reference` on a 1600-sample boundary exactly like
   the 30 fps receiver beside it. See **OQ-024**. 33.3 ms *is* the floor on this hardware for
-  the files this project consumes, and H1's recipe no longer asks for 60 fps.
+  the files this project consumes, and the capture guide does not ask for 60 fps.
 
 **An unused signal worth remembering — and now known unusable across receivers.**
 `bext.origination_date`/`origination_time` carry real wall clock — 19:26:55 on the rx-a pair,
@@ -216,7 +219,7 @@ needs a DJI-specific parser rather than standard BWF handling.
 **Evidence:** RIFF chunk inventory from the fixture.
 **Also matters for:** M7a — a compressor that cannot reproduce an unknown private
 chunk byte-for-byte fails the archival hash check.
-**Needs:** H1 · **Blocks:** M1, M7a · **Status:** **answered** (sample probe, 2026-08-02)
+**Needs:** nothing further · **Blocks:** M1, M7a · **Status:** **answered** (sample probe, 2026-08-02)
 
 **Answer — no private chunks, and the iXML carries nothing new.** The inventory is
 `fmt `, `bext`, `iXML`, `cue`, `PAD`, `data` — all standard. The iXML is a `<BWFXML>`
@@ -247,9 +250,8 @@ acceptable for the MVP. Jammed timecode is timeline sync, not a shared word cloc
 future coherent processing degrade over four hours.
 **Evidence:** Differential clap lag measured near the start and near the end of a
 ~4-hour recording.
-**Needs:** H2 · **Blocks:** nothing (warning threshold tuning) · **Status:** **partially
-answered — bounded at ≈1 ppm, catastrophic case ruled out** (jam verification capture,
-2026-08-03); the long-baseline confirmation is still H2
+**Needs:** nothing further for the MVP · **Blocks:** nothing · **Status:** **answered — no
+automatic drift correction is justified** (jam verification plus marker bench, 2026-08-05)
 
 **First measurement — the clocks are far better than consumer tolerance.** This is the
 question that decided whether the architecture works at all, and it is not really about
@@ -274,9 +276,13 @@ quantization already present at file start** (**OQ-004**) — so the cross-track
 does not grow materially with session length, and the MVP's decision to skip affine drift
 correction is supported rather than merely assumed.
 
-**Why this stays open.** A 30 s baseline cannot distinguish 1 ppm from 3 ppm, and it contains
-no thermal excursion, no battery swap, and no power cycle — all of which H2 will. It rules
-out the catastrophic case; it does not set the warning threshold.
+**Why this is now sufficient.** The later fixed-geometry marker bench measured at most 17
+samples (0.35 ms) of same-geometry change over about 11.8 minutes across all six transmitters,
+while the jam capture bounded the underlying rate near 1 ppm. Together they rule out the
+architectural failure and support the existing no-correction MVP. ADR-0043 declines a dedicated
+four-hour soak. Live Session Zero still reviews marker/timecode QA, but moving wearers cannot
+turn that observation into recorder-drift evidence (ADR-0040), so it is not a deferred answer
+to this question.
 
 **M2 built the instrument.** `session.sync_qa` (off by default) correlates each track
 against a reference near both ends and reports the lag at each, never a correction — a
@@ -292,13 +298,12 @@ is the only file consumed.
 **Why it matters:** Selection rules, duplicate detection, and the
 `allow_processed_audio` recovery path in M1.
 **Evidence:** A fixture recorded with dual-file mode enabled.
-**Needs:** H1 · **Blocks:** M1 · **Status:** open — **but half the assumption is already
-known false**
+**Needs:** nothing further · **Blocks:** nothing · **Status:** **dropped** (ADR-0043)
 
 **`orig` is not always 32-bit float (sample probe, 2026-08-02).** Two of four real
 transmitters wrote `pcm_s24le` `_orig` files and two wrote `pcm_f32le`, same firmware,
 same session — a per-transmitter setting the operator had not matched across kits, which
-is exactly the mistake H1's recipe already tells the owner to check for. It will be made
+is exactly the mistake the capture guide tells the owner to check for. It will be made
 again, so the pipeline has to survive it.
 
 **It currently does not.** `ingest` refuses the 24-bit files:
@@ -327,9 +332,11 @@ mixed-format session ingests end to end, and the operator still gets an
 `unexpected_codec` warning naming the settings mismatch — readable is not the same as
 intended. The spec's "32-bit float" input rule is amended in the same change.
 
-**The remaining half of this entry is untouched:** whether `orig`/`edit` pairs appear as
-assumed still needs a fixture recorded in dual-file mode. The sample captures have no
-`edit` files at all, so this entry stays **open**.
+**Why the remaining half was dropped.** `orig` selection and same-stem `edit` rejection are
+already deterministic and synthetically covered; normal capture does not require dual-file
+mode, and receiver-side processed files are not pipeline inputs. A future unexpected filename
+is surfaced as an inspection/selection error rather than silently consumed. Recording a
+special dual-file take would add no production confidence proportional to its ceremony.
 
 ## OQ-008 — Does AMD's stable `gfx1151` index yield a working Torch under uv + FHS?
 **Assumption:** Yes, with the `rocm[libraries]` sdist building at install time
@@ -386,7 +393,13 @@ one worth closing, and on that host `torch.cuda.is_available()` is already false
 **Evidence:** A host with two DRM render nodes, and a way to tie one to Torch's device 0 —
 `amdgpu`'s sysfs topology under `/sys/class/kfd/kfd/topology/nodes/` carries the DRM render
 minor per agent, which is the obvious source if this ever needs answering.
-**Needs:** a second GPU on a target host · **Blocks:** nothing · **Status:** open
+**Needs:** a future multi-GPU target host · **Blocks:** nothing · **Status:** **dropped until
+the deployment topology changes** (ADR-0043)
+
+The production host has one GPU, and `doctor` already catches the material failure through
+Torch even if a future node-to-device explanation is imperfect. This is an environment-porting
+note, not unfinished work for the current pipeline; reopen it only when a multi-GPU target host
+actually exists.
 
 ## OQ-022 — Is Qwen inference on ROCm reproducible across cold runs?
 **Assumption:** Yes. `transcript.json`, `transcript.md` and `work/transcript-records.json`
@@ -505,7 +518,8 @@ fallback when it is not.
 one-sample duration tolerance in M2's gate.
 **Evidence:** Compare `ffprobe` output against a decoded sample count on a real
 file and on synthetic fixtures.
-**Needs:** M1 (synthetic), H1 (real) · **Blocks:** M2 · **Status:** open
+**Needs:** nothing further · **Blocks:** M2 · **Status:** **answered** (M1 plus real DJI
+inspect/ingest captures, 2026-08-05)
 
 **Synthetic half answered in M1, and the approach changed as a result.** No decode is
 needed for either half: the RIFF `data` chunk size divided by the block alignment is
@@ -514,8 +528,9 @@ is the source and `duration_ts` is the cross-check, rather than the other way ro
 Across all twelve canonical-fixture files the two agree exactly
 (`tests/test_probe.py::TestExactSampleCount`). Their agreement is recorded per source in
 the manifest as `container.sample_count_agrees`, and a disagreement raises a
-`sample_count_disagreement` warning — so H1 answers the real half by reading the
-manifest rather than by running an experiment. A `data` size that is not a whole number
+`sample_count_disagreement` warning. The sample, jam-verification, minimal-acoustic, and
+six-transmitter marker-bench captures all passed the real inspect/ingest path, so the real
+half no longer needs a separate fixture. A `data` size that is not a whole number
 of frames falls back to `duration_ts` instead of flooring, which would invent a sample.
 
 ## OQ-012 — Do all three receivers hold identical timecode after the LTC jam?
@@ -524,9 +539,8 @@ of frames falls back to `duration_ts` instead of flooring, which would invent a 
 the start is a capture-procedure problem the pipeline should detect and warn about.
 **Evidence:** Displayed timecode/rate on all three receivers recorded after the
 jam procedure, cross-checked against the files' embedded timecode.
-**Needs:** H1 · **Blocks:** nothing directly · **Status:** **answered for two receivers**
-(jam verification capture, 2026-08-03); the third receiver and "stays matched for the
-session" are still H1/H2
+**Needs:** nothing further · **Blocks:** nothing directly · **Status:** **answered** (jam
+verification plus three-receiver marker bench, 2026-08-05)
 
 **Answered — the jam holds, and it reaches the files.** Two receivers jammed L-OUT → L-IN
 produced files whose `bext.time_reference` values agree on the true inter-receiver offset to
@@ -535,10 +549,11 @@ produced files whose `bext.time_reference` values agree on the true inter-receiv
 deferred to **OQ-023** — that a matched display propagates into the written file — is
 answered affirmatively there.
 
-**Two caveats keep this from being fully closed.** Only two of the three receivers were
-exercised, and the capture is 47 seconds, so "they stay matched for the session" is
-untested — that is OQ-006 and H2. Note also that the two receivers were on **different frame
-rates** (**OQ-024**) and the jam held anyway.
+**The breadth check is also complete.** The intended-phone marker bench used all three jammed
+receivers and all six transmitters continuously for about 14.7 minutes; every source inspected,
+ingested, and detected the expected events. The earlier two-receiver capture also put the
+receivers on different frame rates and the jam held anyway (**OQ-024**). There is no remaining
+three-versus-two receiver question.
 
 **The capability is not in doubt (operator, 2026-08-03).** Connecting the receivers
 L-OUT → L-IN and pressing SYNC visibly aligns the timecodes on their displays. This entry
@@ -555,19 +570,10 @@ It is consistent with what the files say. **OQ-004** derived per-receiver epochs
 19:20:26.9 and 19:21:16.8 from the `bext` references — about fifty seconds apart, which is
 what two independently-started receivers look like and not what a successful jam does.
 
-**Two consequences.** For M6b, none: every measurement in this milestone used TX03 and TX04
-only — one receiver, one pair — so nothing here rests on cross-receiver alignment. For H1,
-the lesson survives the correction above even though the diagnosis changed: the jam is a step
-whose *outcome is not visible in the output*, so the recipe has to capture evidence of it at
-the time. `session.sync_qa` (M2, off by default) is the instrument that would settle it from
-the audio, and running it on the sample pair is a cheap way to turn this inference into a
-measurement.
-
-**What this entry is actually asking, restated.** Two receivers holding the same displayed
-timecode is necessary and not sufficient. The pipeline never sees a display — it reads
-`bext.time_reference`. Whether a jammed display propagates into the written file is a
-separate assumption and is now **OQ-023**, which is the one to test first, because if it
-fails then holding identical timecode on the displays buys this project nothing.
+**Operational consequence.** Matching displays are necessary but the pipeline reads
+`bext.time_reference`, not the display. OQ-023 proved the value propagates, and marker analysis
+now supplies acoustic jam QA for live capture. Keep the jam and its verification procedure;
+there is no remaining hardware-count experiment.
 
 ## OQ-013 — How much working disk does a full session actually consume?
 **Assumption:** Roughly 25 GiB for a four-hour six-transmitter session — about 15 GiB of
@@ -579,7 +585,7 @@ about a pipeline that does not exist yet.
 the warning into noise that fires once the disk is already gone. M2 owns the real
 preflight, which knows the actual session length instead of assuming four hours.
 **Evidence:** Measure `work/` after the first complete run.
-**Needs:** M2 (preflight), H2 or the first real session (real numbers) ·
+**Needs:** M11 using live Session Zero ·
 **Blocks:** nothing · **Status:** open
 
 **Partially answered in M2, and the arithmetic's premise changed.** M2 builds a preflight
@@ -588,7 +594,7 @@ hours, and from the artifacts actually requested. Two of the three terms in the 
 estimate are now wrong by construction: the 48 kHz working audio is a segment map rather
 than 15 GiB of materialized float32 (ADR-0011), and the mix intermediate belongs to M5.
 What M2 can measure is its own footprint; the full-pipeline number this question asks for
-still needs H2 or a real session, so this stays **open**.
+still needs a full live run, so this stays **open** for M11.
 
 ## OQ-014 — How long is a real session, and when is an inferred span implausible?
 **Assumption:** Under 12 hours. A span longer than that is unambiguous arithmetically —
@@ -599,7 +605,11 @@ Set too low it is noise; set too high it never fires and the operator learns not
 a session whose timecode is a day out.
 **Evidence:** The wall-clock length of real sessions, and whether the warning ever fires
 on one.
-**Needs:** H2 or the first real session · **Blocks:** nothing · **Status:** open
+**Needs:** nothing further · **Blocks:** nothing · **Status:** **dropped** (ADR-0043)
+
+The configured 12-hour boundary is a conservative warning that changes no placement. One live
+session cannot establish a population, and ordinary campaign sessions are not expected to
+approach it. Keep the warning; revisit only if an actual valid session triggers it.
 
 ## OQ-016 — Is a session always the shortest arc through its chunk start times?
 **Assumption:** Yes. With no configured origin, M2 infers which chunks fall after midnight
@@ -615,7 +625,11 @@ moves audio by hours. Every session relying on the inference is warned
 the question entirely.
 **Evidence:** The wall-clock span of real sessions, and whether any is ever run without a
 configured origin. Overlaps with OQ-014, which asks the same thing from the other side.
-**Needs:** H2 or the first real session · **Blocks:** nothing · **Status:** open
+**Needs:** nothing further · **Blocks:** nothing · **Status:** **dropped** (ADR-0043)
+
+This ambiguity requires a session longer than half a day with no configured origin. It is not
+a normal campaign case, every inferred rollover warns, and an explicit origin removes it. The
+guarded generic capability remains; a dedicated capture would not improve the production path.
 
 ## OQ-015 — Where is the DJI receivers' timecode zero relative to real midnight?
 **Assumption:** `00:00:00:00` is jammed to real midnight, so a timecode and a BWF sample
@@ -629,7 +643,12 @@ one does (ADR-0009). The canonical fixture mixes exactly these domains, at 30F, 
 timecode day *is* 86 400 seconds and the question does not arise.
 **Evidence:** The displayed timecode on all three receivers after the LTC jam, recorded
 against wall-clock time, cross-checked with the `bext` origination time in the files.
-**Needs:** H1 · **Blocks:** nothing directly · **Status:** open
+**Needs:** nothing further · **Blocks:** nothing directly · **Status:** **answered — the
+receiver counter is not real midnight and must not be mixed with wall clock** (M8, ADR-0031)
+
+OQ-004 and the jam capture measured the decisive fact: receiver wall clocks differed by 48.7 s
+while the recorder-domain count agreed. The implementation now keeps recorder epoch and
+descriptive wall clock distinct. No capture-time wall-clock observation can improve that rule.
 
 ## OQ-017 — What separates real speech from lav bleed at a real table?
 **Assumption:** Bleed arriving at another wearer's lav is both *much quieter* than that
@@ -658,7 +677,7 @@ distribution of peak normalized correlation and its lag for those same intervals
 pipeline already records exactly these numbers for every candidate pair in
 `work/activity.json` and in the report, so answering this is reading one real session's
 graph rather than running an experiment.
-**Needs:** H2 or the first real session · **Blocks:** nothing (threshold tuning) ·
+**Needs:** M11 using live Session Zero · **Blocks:** nothing (threshold tuning) ·
 **Status:** open — **first real measurements taken, from a deliberately hard geometry**
 
 **First real numbers (sample probe, 2026-08-02).** 47 s, two transmitters, one operator
@@ -732,7 +751,7 @@ truncated response and observe both the finish signal and whether a split resolv
 needs a real session, or at minimum a real recording of one utterance heard on two
 transmitters — the same evidence OQ-017 waits on, from the text side rather than the acoustic
 one.
-**Needs:** H1/H2 or the first real session · **Blocks:** nothing — M4/M9 are correct under the
+**Needs:** M11 using live Session Zero · **Blocks:** nothing — M4/M9 are correct under the
 configured values · **Status:** **items 1–3 answered** (M6b, 2026-08-03, measured against the
 real model); **items 4–5 open**, and so is whether a low-energy split beats a midpoint — all
 need speech this capture does not contain
@@ -833,7 +852,7 @@ short utterances.
 
 The same result left one intended same-track turn in two records with a 320 ms word gap. M9's
 350 ms presentation default is the smallest rounded threshold above it, with shared request
-lineage as an additional prerequisite. H1/H2 must test pauses and genuine overlap before either
+lineage as an additional prerequisite. M11 must audit natural pauses and genuine overlap before either
 default is treated as calibrated conversation evidence. Item 4 and item 5 remain **open**.
 
 ## OQ-019 — What do the automix constants need to be at a real table?
@@ -872,7 +891,7 @@ decide whether the result is pleasant to listen to, which no test can assert.
 **Evidence:** The first real session's mix, listened to, against the graph that produced it.
 The pipeline already records each track's correction and every measurement in the report, so
 answering this is reading one report and one MP3 rather than running an experiment.
-**Needs:** H2 or the first real session · **Blocks:** nothing — the mix is correct under
+**Needs:** M11 using live Session Zero · **Blocks:** nothing — the mix is correct under
 whatever the configured values are · **Status:** open
 
 ## OQ-020 — What does a real 128 kbps mono MP3 encode actually do to peak and duration?
@@ -907,7 +926,14 @@ which the spec forbids in as many words. The failure direction is safe either wa
 **Evidence:** The measurements are already retained in the report for every attempt, so a
 first real session answers both halves by being encoded once. A 10.5-second fixture answers
 neither: overshoot is a property of material with real dynamics over a real duration.
-**Needs:** H2 or the first real session · **Blocks:** nothing · **Status:** open
+**Needs:** nothing further · **Blocks:** nothing · **Status:** **dropped as a standing
+question** (ADR-0043)
+
+The encode/decode verifier, bounded retry path, duration tolerance, and true-peak checks are
+all regression-tested and fail closed with retained attempt diagnostics. Live Session Zero gets
+an ordinary listening and report review in M11, but material-dependent codec measurements are
+not an unanswered architecture question; an actual compliance failure is a reproducible defect,
+not a reason to preserve a speculative tuning obligation.
 
 ## OQ-023 — Does the receiver's displayed timecode reach `bext.time_reference` in the WAV?
 **Assumption:** Yes. The receiver holds one timecode, shows it on the display, and writes
@@ -949,7 +975,7 @@ Three outcomes worth telling apart:
 per source at ingest and compare across receivers; disagreement is exactly the
 "capture-procedure problem the pipeline should detect and warn about" OQ-012 names, and
 unlike the display it is checkable after the fact, on every session, for free.
-**Needs:** H1, or five minutes with the receivers · **Blocks:** nothing yet — but it decides
+**Needs:** nothing further · **Blocks:** nothing — it decided
 what OQ-004's rework has to achieve · **Status:** **answered — outcome (1), the jam
 propagates** (jam verification capture, 2026-08-03)
 
@@ -986,7 +1012,7 @@ sets the quantization of `bext.time_reference`, so choosing a finer rate buys fi
 cross-track resolution.
 **Why it matters:** **OQ-004** concluded from DJI's documentation that 50 and 60 fps are
 supported and that 60 fps would halve the quantum from 1600 samples (33.3 ms) to 800
-(16.7 ms), and H1's recipe was amended to require 60 fps on all three receivers. If the
+(16.7 ms), and the then-current capture recipe was amended to require 60 fps on all three receivers. If the
 setting does not reach the file, that instruction is an unverified ritual and 33.3 ms is the
 floor.
 **Evidence:** Record simultaneously on two receivers set to different rates and diff the
@@ -1002,7 +1028,7 @@ four files: `TIMECODE_RATE 30/1`, `MASTER_SPEED 30/1`, `CURRENT_SPEED 30/1`,
 shows finer resolution. (Testing for "exact at 60F" is vacuous: anything divisible by 1600 is
 divisible by 800.)
 
-**Consequences.** OQ-004's 60 fps recommendation is retracted, H1's recipe no longer asks for
+**Consequences.** OQ-004's 60 fps recommendation is retracted, the capture guide does not ask for
 it, and **33.3 ms is the cross-track quantization floor on this hardware.** That is
 acceptable — see the error budget in **OQ-025**.
 
@@ -1023,7 +1049,7 @@ degraded. Keep the rates consistent as hygiene, but no known behaviour depends o
 Jammed timecode places every file, including a restarted transmitter with no shared acoustic
 event. A generated marker can make jam failure and long-baseline drift cheaper and more
 precise to detect. **M10 owns the bench-validated generator and matched-filter detector.**
-H1/H2 may now use marker v1; the human-checkable three-clap pattern remains the fallback.
+Live Session Zero uses marker v1; the human-checkable three-clap pattern remains the fallback.
 **Why it matters:** The LTC jam is accurate — 17–30 ms cross-receiver, better than one frame
 (**OQ-023**) — but it is a tedious manual ritual at the start of every session: cable up
 A → B, SYNC, disconnect, A → C, SYNC, disconnect, and confirm three displays. An acoustic
@@ -1082,7 +1108,7 @@ identification. That proves a shared room sound is precise enough for verificati
 claps varied in shape and level and still required manual picking. It does not remove the
 acoustic-arrival geometry floor or place a restarted file that missed the sound.
 
-**Recommendation as of 2026-08-04: keep the jam and implement M10 before H2 if time permits.**
+**Recommendation as of 2026-08-04: keep the jam and implement M10 before the next live session.**
 Generate a deterministic 48 kHz PCM marker:
 three 500 Hz → 8 kHz linear chirps with a smooth amplitude envelope and asymmetric gaps, at a
 conservative level. Play the prepared WAV from one fixed central table position near both
@@ -1094,7 +1120,7 @@ the detector and synthetic delayed/noisy/reverberant regression tests are what t
 into evidence. M10's standalone phone HTML embeds the CLI-generated WAV bytes rather than
 reimplementing synthesis in JavaScript; this proves the digital assets equal but cannot bypass
 browser resampling, phone-speaker response, media volume, or room propagation. Keep claps until
-that complete path is bench-tested. Revisit replacing the jam only if H2 shows the ritual
+that complete path is bench-tested. Revisit replacing the jam only if live capture shows the ritual
 failing in practice, or if restarted/missing-anchor files are proven irrelevant.
 
 **M10's 2026-08-05 bench turned this entry's empirical questions into frozen constants.**
@@ -1227,12 +1253,17 @@ never reaches it, because its counters are a few hundred seconds apart and nothi
 wrap.
 **Evidence:** A receiver left running long enough for its counter to approach 24 hours, or
 vendor documentation stating the counter's width. Either settles it; neither is urgent.
-**Needs:** H2, or DJI documentation · **Blocks:** nothing · **Status:** open
+**Needs:** nothing further · **Blocks:** nothing · **Status:** **dropped** (ADR-0043)
 
 **Raised by M8's plan review** (`reviews/M8-plan-20260803-1729.md`, finding 2), which noticed
 that OQ-004's answer had quietly orphaned an assumption nobody had written down. The reviewer
 argued for removing the wrap; the narrower remedy — register it and cite it — is recorded there
 with the reason.
+
+**Why it is dropped now.** Normal campaign sessions do not approach 24 hours, DJI's own counter
+never enters the generic rollover inference on observed captures, and the implementation warns
+and refuses ambiguous evidence. The tested BWF capability remains for standards-compliant
+recorders; there is no reason to run a day-long DJI experiment for the current product.
 
 ---
 
@@ -1250,7 +1281,8 @@ combines two populations: an opening word the best-source candidate genuinely lo
 heard in the padding of a weaker bleed/tail candidate that should not automatically become
 content. A pad sweep that calls both populations "recovered" tunes toward wrong attribution.
 
-**Measured 2026-08-03**, during M8's verify phase, over all four recordings in `samples/`
+**Measured 2026-08-03**, during M8's verify phase, over all four recordings in the retained
+jam corpus (`/data/dnd-audio/2026-08-03-jam-capture/` on the target host)
 (`tests/test_qwen_smoke.py::TestOq018TimestampStability`):
 
 | recording | paired | worst delta | **interior worst** |
@@ -1338,12 +1370,12 @@ second reason the pad cannot be tuned from transcript drops alone.
 direct-source onset from a bleed copy and the same measurement covers utterances after real
 turn gaps. If the first-word effect persists beyond the request-padding bound, correction at
 the aligner seam can be reconsidered; these files provide no evidence for that extra machinery.
-**Needs:** H1/H2 · **Blocks:** committing a new `activity.vad.pad_ms` default without
+**Needs:** M11 using live Session Zero · **Blocks:** committing a new `activity.vad.pad_ms` default without
 multi-wearer evidence; it no longer blocks a 30/50 ms A/B on this capture · **Status:** open,
 with the production consequence bounded and the earlier causal claim corrected
 
-**Raised by M8's verify phase.** The `host_smoke` suite failed from `.venv-rocm` after
-`samples/` was replaced during M8's start phase — a 6160 ms outlier against a 1000 ms bound.
+**Raised by M8's verify phase.** The `host_smoke` suite failed from `.venv-rocm` after the jam
+corpus was replaced during M8's start phase — a 6160 ms outlier against a 1000 ms bound.
 The bound was not widened: it now applies to interior words, which is the population the claim
 was always about, and the first-word behaviour is asserted in its own right by
 `test_a_words_start_depends_on_how_much_lead_in_its_window_had`.
@@ -1359,7 +1391,7 @@ speech reference or mix.
 M9 therefore defaults `transcript.leading_ownership_grace_ms` to 20, bounded by submitted
 padding and the preceding same-track interval (ADR-0033). That is a conservative remedy for
 the measured failure, not an answer about all speakers or rooms. This entry remains **open**
-for H1/H2, and it still blocks changing `activity.vad.pad_ms` without multi-wearer evidence.
+for M11, and it still blocks changing `activity.vad.pad_ms` without multi-wearer evidence.
 
 ## OQ-028 — Does DigitalOcean Spaces paginate object listings, and by which API?
 **Assumption:** Legacy `ListObjects` marker pagination works and is complete;

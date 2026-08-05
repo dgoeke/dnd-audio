@@ -7,15 +7,16 @@ Run from the ROCm environment on the target host:
 
 Everything here is marked `host_smoke` and excluded from `./scripts/gate.sh` (INV-05). The
 gate asks for one thing — a short real transcription and alignment that passes — and most of
-this file is the other thing this milestone owes: the numbers behind **OQ-018**, **OQ-009**
-and **OQ-022**, which are guesses about *this* model that nothing before now could measure.
+this file retains the measurements that answered **OQ-009** and **OQ-022**, plus the evidence
+behind **OQ-018**'s remaining conversational calibration.
 
 **Real speech is required and is not synthesized.** INV-10 forbids expecting a learned model
 to behave a particular way on audio no human made, and every question below is about what
-Qwen does with a voice. Whatever recordings are in `samples/` are used — they are gitignored
-because they are session audio, and they are *discovered* rather than named so that replacing
-them re-runs these measurements instead of silently skipping them. Without any, the
-measurements skip with a reason naming what they cannot be measured against.
+Qwen does with a voice. Whatever recordings are in the target host's retained 2026-08-03 jam
+capture are used. They live outside the repository because they are session audio, and they
+are *discovered* rather than named so that replacing them re-runs these measurements instead
+of silently skipping them. Without any, the measurements skip with a reason naming what they
+cannot be measured against.
 """
 
 from __future__ import annotations
@@ -45,25 +46,22 @@ MARGIN = 16
 #: Session-absolute, and deliberately not zero: a decoder that forgot to rebase word times
 #: onto the request's own grid passes every test that starts at sample zero.
 WINDOW_START = 1_600_000
+JAM_CAPTURE = Path("/data/dnd-audio/2026-08-03-jam-capture")
 
 
 #: Whatever real speech is on this machine, lowest filename first.
 #:
-#: **Discovered rather than pinned**, and that is deliberate. The recordings this milestone
-#: measured against were an early smoke-test capture, and the owner intends to replace them
-#: with a properly synced set in the right formats. A pinned filename would turn that
-#: replacement into a silent skip — every measurement here quietly not running, with a green
-#: suite and no signal — which is the worst of the three possible outcomes.
+#: **Discovered rather than pinned**, and that is deliberate. A pinned filename would turn a
+#: future corpus replacement into a silent skip — every measurement here quietly not running,
+#: with a green suite and no signal — which is the worst of the three possible outcomes.
 #:
 #: Any of the four decodes: `ffmpeg` reads `pcm_s24le` as happily as `pcm_f32le`, and the
-#: 24-bit refusal is `ingest`'s working-path guard (**OQ-007**), not a limit on ASR.
+#: former 24-bit refusal was `ingest`'s working-path guard, not a limit on ASR; M8 fixed it.
 #:
-#: One file, not several. Nothing here needs two tracks, and the sample probe's four are
-#: **not** mutually aligned — within a receiver they are timecode-synced, but the jam between
-#: receivers is reported not to have taken (**OQ-012**). A test that concatenated across the
-#: pairs would be measuring that rather than the model.
+#: One file, not several. Nothing here needs two tracks, and concatenating aligned tracks would
+#: measure repeated content and capture geometry rather than the model behavior under test.
 def _sample() -> Path | None:
-    found = sorted(Path("samples").glob("*.wav"))
+    found = sorted(JAM_CAPTURE.glob("*.wav"))
     return found[0] if found else None
 
 
@@ -72,8 +70,9 @@ SAMPLE = _sample()
 _no_speech = pytest.mark.skipif(
     SAMPLE is None,
     reason=(
-        "needs real speech at samples/ — OQ-018 and OQ-022 are questions about what this "
-        "model does with a voice, and INV-10 forbids answering them against synthetic noise"
+        f"needs real speech at {JAM_CAPTURE}/ for OQ-018's remaining conversational "
+        "measurements and the real-model regression evidence; INV-10 forbids substituting "
+        "synthetic noise"
     ),
 )
 
@@ -187,8 +186,8 @@ def speech() -> npt.NDArray[np.float32]:
         # Belt and braces: every class here already carries `_no_speech`, and this catches
         # a future test that requests the fixture without the marker.
         pytest.skip(
-            "needs real speech at samples/ — OQ-018 and OQ-022 are questions about this "
-            "model's behaviour on a voice, which INV-10 forbids answering with noise"
+            f"needs real speech at {JAM_CAPTURE}/ for OQ-018's remaining conversational "
+            "measurements; INV-10 forbids substituting synthetic noise"
         )
     return decode(_speech_path(), seconds=20.0)
 
@@ -403,7 +402,7 @@ class TestOq018TimestampStability:
         # The **ratio** is the assertion that matters and the half that could not fail
         # before: it is the stitch rule's own hit rate, and a word the rule fails to pair is
         # one it emits twice. Re-measured 2026-08-03 over all four of the jam capture's
-        # recordings, after `samples/` was replaced during M8:
+        # recordings, after the jam corpus was replaced during M8:
         #
         #     TX01_MIC002  16/16 paired, worst 6160 ms, interior worst 80 ms
         #     TX01_MIC005  15/16 paired, worst   80 ms, interior worst 80 ms
@@ -457,7 +456,7 @@ class TestOq018TimestampStability:
 
         Stated as a comparison between two requests rather than as a millisecond bound: how
         much lead-in precedes the first word is a property of the recording, and asserting a
-        number would pin this test to `samples/` again — the failure that produced it.
+        number would pin this test to one jam corpus again — the failure that produced it.
         """
         early = transcriber.transcribe(
             a_request(decode(_speech_path(), seconds=16.0, start=8.0), request_id="lead-in-long")

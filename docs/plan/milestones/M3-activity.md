@@ -204,7 +204,7 @@ Five recorded before any code was written, and one amended after it:
   "we did not install the package" a packaging decision rather than a change of artifact.
 - **OQ-017 raised**, before the first default threshold rather than after. Every default in
   `activity.vad`, `activity.bleed`, and `activity.scoring` cites it, and so does the speech
-  reference estimator. Its evidence is H2 or the first real session — **not H1**, whose
+  reference estimator. Its evidence is M11's live Session Zero — **not a short metadata capture**, whose
   two-minute metadata fixture cannot tune a bleed threshold. The pipeline already records
   every number needed to answer it (per-candidate levels, per-pair peak correlation and its
   lag, each track's reference), so answering it is reading one real session's graph rather

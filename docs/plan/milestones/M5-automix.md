@@ -162,7 +162,7 @@ M4 leaves M5 is not data, it is three runner patterns and one trap.
   Candidates are already sorted by start sample, so a sweep would be `O(n log n)` plus the
   pairs that genuinely overlap. Deferred in M3 with no measured evidence either way — the
   per-pair work rejected is one integer comparison, and a real session's candidate count is
-  unknown until H2. If M5 walks the candidate set at scale and it hurts, that is the fix.
+  unknown until a full live run. If M5 walks the candidate set at scale and it hurts, that is the fix.
 - The true-peak ceiling applies to the decoded MP3, not the pre-encode
   intermediate. Lossy encoding introduces overshoot.
 
@@ -310,7 +310,7 @@ and it was right.
   validators refuse an unachievable combination — but they decide whether the result is
   pleasant, which no test can assert. Amended during verify: `overlap_min_gain_db` is now
   **derived** rather than estimated, and the entry records why the original −15 was 0.66 dB
-  optimistic. Needs H2 or a first real session; blocks nothing.
+  optimistic. Needs M11's live Session Zero; blocks nothing.
 - **[OQ-020](../OPEN-QUESTIONS.md)** — what a real 128 kbps mono MP3 encode does to peak and
   duration, raised here. Three assumptions now: that the retry budget resolves real overshoot,
   that decoded duration lands within one MP3 frame, and (added during verify) that an
@@ -436,7 +436,7 @@ belongs in it — `from_cache` was in there and had to come out.
 4. **`activity.bleed.compare_pairs` stays quadratic.** The charter's risk note said "if M5
    walks the candidate set at scale and it hurts, that is the fix". M5 walks the retained
    candidates once, linearly, to build the presence signal; it never enumerates pairs. Still no
-   measured evidence, and the real candidate count is unknown until H2.
+   measured evidence, and the real candidate count is unknown until a full live run.
 5. **No `work/mix.json` and no new schema**, per the plan review — a new artifact with no named
    consumer is a choice made on behalf of milestones that have not asked. Byte-stability is
    proved on the intermediate itself, which is a stronger thing to prove it on.

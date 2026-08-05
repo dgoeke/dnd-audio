@@ -151,7 +151,7 @@
     },
     "DeclinedStrategyRecord": {
       "additionalProperties": false,
-      "description": "A strategy that ran and found nothing, and what it was looking for.\n\nRecorded because it is what makes H1 cheap: answering OQ-001 becomes reading these\nreasons across a real fixture rather than re-running an investigation.",
+      "description": "A strategy that ran and found nothing, and what it was looking for.\n\nRecorded so real-capture evidence for OQ-001 is readable from these reasons rather than\nrequiring the metadata investigation to be repeated.",
       "properties": {
         "reason": {
           "minLength": 1,

@@ -1,7 +1,7 @@
 # M7b — Processed publishing and local reclamation
 
-**Status:** sketch — deliberately unplanned until a real session has been validated
-**Depends on:** M7a, M4, M5, and one complete real session whose outputs the owner accepts
+**Status:** sketch — deliberately unplanned until live Session Zero has been validated
+**Depends on:** M7a, M11, and the accepted live Session Zero outputs
 **Spec sections:** archival extension added by M7a; amend its publication and reclamation
 sections during this milestone's start phase
 
@@ -81,8 +81,8 @@ Each deliberate choice becomes an ADR. Any real-world guess that code relies on 
 
 ## Provisional working plan
 
-1. Process and manually accept the first real session; measure artifact sizes, cache sizes,
-   expected audience, and retrieval/reprocessing costs.
+1. Take M11's accepted Session Zero artifacts and measured cache/output sizes; record the
+   expected audience and retrieval/reprocessing costs.
 2. Amend the product spec and INV-01 for the narrowly authorized owner reclamation path; write
    privacy/publication, retention, cache, and deletion ADRs.
 3. Add an output-publication manifest and a separate provider adapter/configuration boundary

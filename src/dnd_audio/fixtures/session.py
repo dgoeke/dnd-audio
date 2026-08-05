@@ -11,7 +11,7 @@ against numbers re-derived from the same fixture proves nothing. Every property 
 gate asks for is stated here, in samples, before any file exists.
 
 Rendering is per chunk rather than per track. A whole-track buffer would be simpler and
-would make the four-hour soak fixture H2 needs impossible: six session-length float32
+would make any full-session evaluation impractical: six session-length float32
 arrays is what INV-07 exists to forbid. Events are rendered once at full length and
 sliced into whichever chunks they touch, so where a chunk boundary falls cannot change
 a sample.
@@ -436,7 +436,7 @@ def dji_filename(tx_label: str, sequence: int, start: dt.datetime, variant: Vari
     Written as an explicit format string rather than shared with
     :mod:`dnd_audio.inspection.naming`, which parses. Sharing one grammar table would
     make the round-trip test prove only that the table is self-consistent — and the
-    grammar itself is a guess until H1 lands.
+    grammar itself is measured, while the counter remains only a secondary hint (OQ-003).
     """
     return f"{tx_label}_MIC{sequence:03d}_{start:%Y%m%d}_{start:%H%M%S}_{variant}.wav"
 

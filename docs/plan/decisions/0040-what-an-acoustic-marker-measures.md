@@ -28,7 +28,8 @@ measured ≈1 ppm and bounded it at ±3 ppm, or 14–43 ms across four hours.
 M10's charter already says this correctly, because it was **finding 3 of the first M10 plan
 review** (`../reviews/M10-plan-20260804-1735.md`): "fixed phone position alone cannot isolate
 recorder drift. A moving lav changes propagation delay even when recorder clocks are perfect."
-That finding was accepted, and propagated into the charter, H1, H2, OQ-025, `STATE.md` and
+That finding was accepted and propagated into the marker charter, downstream capture plans,
+OQ-025, `STATE.md` and
 `ROADMAP.md`. It was never propagated into **the spec**, which is the authoritative document.
 So the spec, the charter and the gate disagreed, and the working agreement is explicit that
 code and spec must never disagree silently — a rule that applies equally to spec and charter.
@@ -104,8 +105,9 @@ instrument is worth having for jam verification even when it can say nothing abo
 
 An operator who plays the marker at both ends of an ordinary session gets a real measurement
 and an honest label: differential arrival changed by *n* samples, geometry unverified. An
-operator who runs a fixed-transmitter soak — H2's job — gets the drift number OQ-006 still
-owes, from the same instrument and the same command.
+operator who runs a fixed-transmitter experiment gets an additional fixed-endpoint clock-rate
+measurement from the same instrument and command. OQ-006 already accepts the no-correction MVP;
+new evidence matters only if it shows a material problem.
 
 What this makes harder: the event log becomes load-bearing rather than a convenience, because
 the geometry ID is the only thing that can license the stronger claim. An operator who does not

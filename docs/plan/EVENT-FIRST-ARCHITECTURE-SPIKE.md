@@ -1,12 +1,13 @@
 # Event-first transcript architecture spike
 
-Status: **hypothesis awaiting acoustic evidence**. This is not an ADR, does not amend the
-product spec, and does not authorize a production change. It records the architectural
-direction to test after M9 so the reasoning is not lost between sessions.
+Status: **contingency retained for M11**. This is not an ADR, does not amend the product spec,
+and does not authorize a production change. The minimal acoustic capture now exists; the
+conservative M9 pipeline remains the production baseline, and live Session Zero decides
+whether this hypothesis addresses a real problem worth implementing.
 
-The smallest input is the
-[minimal two-person acoustic direction check](../minimal-acoustic-direction-check.md). H1
-remains a separate hardware fixture with different obligations.
+The initial input was the
+[minimal two-person acoustic direction check](../minimal-acoustic-direction-check.md). ADR-0043
+retires the separate controlled hardware captures; ordinary-play evidence now belongs to M11.
 
 ## Why reconsider the stage boundary
 
@@ -163,8 +164,8 @@ choice becomes a production default from this one capture.
 
 There are three acceptable outcomes:
 
-1. **The event-first hypothesis is supported.** Create a new software milestone, separate from
-   H1, to define the event schema and one narrow pre-ASR inference path. Take the independent
+1. **The event-first hypothesis is supported.** Amend M11 to define the event schema and one
+   narrow pre-ASR inference path. Take the independent
    plan review, write the ADRs, and amend the product spec before implementation.
 2. **The evidence is weak or brittle.** Keep the conservative M9 architecture and add only a
    clearly separate editorial/LLM cleanup layer if desired. Preserve both canonical `Okay`
@@ -173,8 +174,9 @@ There are three acceptable outcomes:
    metadata. Let it improve source ranking and diagnostics without authorizing deletion until
    broader table evidence exists.
 
-In every case, H1 and H2 continue to answer their hardware and long-session questions. This
-spike decides a software direction; it does not substitute for either fixture.
+In every case, the baseline is processed first and M11 decides a software direction only from
+ordinary-play evidence. The spike is not a capture obligation and does not substitute for live
+Session Zero.
 
 ## Research leads for the spike
 

@@ -84,8 +84,8 @@ reasoning behind each.
 
 - Depends on **OQ-001, OQ-003, OQ-004, OQ-005, OQ-007, OQ-011**. Every guess about
   DJI's real layout must be behind a named strategy in the chain and tagged with
-  its `OQ-` ID so H1 can settle it cheaply.
-- **Start acquiring the H1 fixture during this milestone.** Do not wait.
+  its `OQ-` ID so real hardware evidence can settle it cheaply.
+- **Start acquiring real DJI evidence during this milestone.** Do not wait.
 - Byte-identical output is easy to lose to dict ordering, path separators, and
   float formatting. Build the canonical writer first and route everything through it.
 
@@ -169,7 +169,7 @@ The proofs that carry the most weight:
 
 ### Assumptions made and open questions raised
 
-No new open questions. Three existing ones gained evidence that changes what H1 has to do:
+No new open questions. Three existing ones gained evidence that changed what later real captures had to do:
 
 - **OQ-005 is half-answered, and about FFprobe rather than about DJI.** Against FFmpeg
   8.0, a file carrying both an `iXML` chunk and a four-byte-named private chunk produces
@@ -179,7 +179,7 @@ No new open questions. Three existing ones gained evidence that changes what H1 
 - **OQ-011's synthetic half is answered, and answering it changed the approach.** No decode
   is needed for either half: the RIFF `data` size over the block alignment is exact by
   construction for PCM. So the `data` chunk is the source and `duration_ts` is the
-  cross-check, not the reverse. Their agreement is recorded per source, so H1 answers the
+  cross-check, not the reverse. Their agreement is recorded per source, so a real capture answers the
   real half by *reading a manifest* rather than running an experiment.
 - **OQ-001** records what was built while waiting: both tags are reachable, each is a named
   strategy, and every manifest entry says which one fired and why the others declined.
@@ -302,5 +302,5 @@ Begin M2 — the timeline. Start with session zero and the rollover rules, becau
 everything else in that milestone hangs off where time zero is, and the evidence they
 consume is already in the manifest in typed form.
 
-Real DJI metadata has **still not been validated**. Acquiring the H1 fixture is now the
+Real DJI metadata had **still not been validated at this closeout**. Acquiring real evidence was the
 oldest outstanding item in the project and gates five open questions.

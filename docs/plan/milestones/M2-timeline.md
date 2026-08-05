@@ -80,7 +80,7 @@ mapping between source samples, working samples, and session time.
 - Depends on **OQ-004, OQ-006, OQ-011**, and **partially answers OQ-013**: the work-space
   preflight this milestone builds replaces `doctor`'s estimated 40 GiB warning threshold
   with a number derived from the session's actual length. It does not *settle* the
-  question, which asks for measured full-pipeline disk use — that needs H2 or a real
+  question, which asks for measured full-pipeline disk use — that needs M11's live
   session, and two terms of the original estimate now belong to M5 or do not exist
   (ADR-0011). This charter previously claimed to settle it; corrected during the start
   phase after independent review.
@@ -261,13 +261,13 @@ assumptions are findable when a real session contradicts them:
 But two of the three terms in `doctor`'s original 40 GiB estimate turn out not to exist:
 the 48 kHz working audio is a segment map rather than 15 GiB of materialized float32, and
 the mix intermediate belongs to M5. The full-pipeline number the question asks for still
-needs H2 or a real session, so it stays **open**. The charter originally claimed to settle
+needs a full live session, so it stays **open** for M11. The charter originally claimed to settle
 it; that was corrected during the start phase after review.
 
 **Depended on and still open.** OQ-004 (is `time_reference` present, midnight-relative, at
 the file rate?) and OQ-011 (does FFprobe expose an exact PCM sample count?) are load-bearing
 for everything here and remain unsettled against real hardware. OQ-006 gains its measuring
-instrument: `sync_qa` produces exactly the differential-lag number H2 needs.
+instrument: `sync_qa` produces the differential-lag number later capture QA needs.
 
 ### Notes for future implementors
 
@@ -429,9 +429,9 @@ matters later.
   it, `wavwrite` is the streamed RF64 writer for the mix intermediate, the preflight needs
   M5's own term added, and `test_memory.py`'s ordered event log is the technique for proving
   INV-07 over a composed path.
-- **H1** adds **OQ-015** to the list of questions its recording must settle — the displayed
+- The then-planned short capture added **OQ-015** to the list of questions its recording might settle — the displayed
   timecode after the LTC jam, recorded against wall-clock time.
-- **H2** adds **OQ-014** and **OQ-016**, and records that the measuring instrument now
+- The then-planned long capture added **OQ-014** and **OQ-016**, and recorded that the measuring instrument now
   exists: `session.sync_qa` produces the differential lag its gate asks for.
 - **INVARIANTS.md** — INV-01 gains the session-root scoping rule, INV-07 gains M2's
   composed-path proof technique, INV-08 gains "commit the cache entry only after

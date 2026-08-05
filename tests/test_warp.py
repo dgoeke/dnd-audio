@@ -10,9 +10,8 @@ So there is a test-local affine implementation here, and the assertion is that s
 parameter, this fails immediately rather than in whichever milestone finally needs drift
 correction.
 
-The MVP does not correct drift because how far the three kits' clocks actually diverge is
-**OQ-006** — unmeasured until H2 — and correcting by an unmeasured amount is inventing
-timing (INV-12).
+**OQ-006** accepts the no-correction MVP. Correcting without new fixed-endpoint evidence of a
+material problem would invent timing (INV-12).
 """
 
 from __future__ import annotations
@@ -150,8 +149,8 @@ class TestTheMvpDoesNotUseIt:
     def test_no_drift_correction_is_configurable(self) -> None:
         """There is no session.yaml field that turns one on, and that is deliberate.
 
-        Adding one before H2 has measured anything would let an operator correct by a
-        number nobody has evidence for, which is what INV-12 forbids.
+        Adding one without fixed-endpoint evidence of a material problem would let an
+        operator correct by a number nobody has evidence for, which INV-12 forbids.
         """
         from dnd_audio.config import SessionConfig
 

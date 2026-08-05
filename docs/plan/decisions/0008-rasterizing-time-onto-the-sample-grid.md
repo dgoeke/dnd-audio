@@ -96,7 +96,7 @@ produced the two starts, not a global constant.
   and still be treated as contiguous. That is correct, and it means a *genuine* overlap
   smaller than one frame is invisible at those rates. Nothing can recover it; the evidence
   does not contain it.
-- If H1 shows DJI writes sub-frame timing in a private chunk (OQ-005), the tolerance for
+- If a future DJI format writes sub-frame timing in a private chunk (OQ-005), the tolerance for
   that evidence kind becomes 1 sample and the rule above does not otherwise change.
 - A future affine drift warp (the interface hook this milestone adds) composes with this
   cleanly, because it operates on the exact rational time before quantization.

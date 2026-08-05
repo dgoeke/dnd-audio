@@ -10,7 +10,8 @@ timecode offset: the receivers disagree about what time it is, which is a captur
 problem. A lag that *changes* between the start and the end is something else entirely —
 the two sample clocks are running at different rates, which is **OQ-006**, the assumption
 the MVP rests on and has no evidence for. The MVP still does not correct it (INV-12 forbids
-correcting by an unmeasured amount); it says so, loudly, and H2 is what will settle it.
+correcting from geometrically confounded evidence); it says so loudly. OQ-006 accepts the
+no-correction MVP, and M11 revisits it only if live evidence shows a material problem.
 
 **Low correlation is reported as low confidence, not as nothing.** Correlating two
 independent noise floors produces a confident-looking peak at some arbitrary lag, so a weak

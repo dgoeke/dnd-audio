@@ -291,7 +291,7 @@ including the spec's own transcript example checked into `tests/data/`.
 
 Begin M1: the synthetic fixture generator first, then discovery and `ffprobe` capture.
 The generator is the thing everything after it is tested against, and the charter is
-explicit that acquiring the H1 hardware fixture should start during M1 rather than wait.
+explicit that real DJI evidence should be acquired during M1 rather than wait.
 
 Real DJI metadata has **not** been validated. Every layout assumption in M1 must sit
 behind a named strategy tagged with its `OQ-` ID.

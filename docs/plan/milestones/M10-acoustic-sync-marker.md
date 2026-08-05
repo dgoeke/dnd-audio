@@ -240,7 +240,7 @@ start all recordings, and use the intended phone/browser:
 
 Only after this evidence selects one candidate does the ADR name and freeze marker v1; the
 public builder/analyzer and their golden proofs follow. If any intended track fails, retain the
-three-clap H1/H2 procedure. Do not improvise a new waveform during Session Zero.
+three-clap capture procedure. Do not improvise a new waveform during Session Zero.
 
 ## Explicitly not in this milestone
 
@@ -673,8 +673,8 @@ naming precisely what was unlabelled and why.
    parameter and not a re-baseline; only a change to the candidate *design space* or to the
    detector's shape costs real work, and those are the two outcomes the mid-milestone bench
    exists to surface before the schemas are frozen.
-4. Update H1's and H2's charters, the spec, OQ-025 and OQ-029 with the measured result, and
-   fold the marker into `docs/H1-two-person-recording-runbook.md` as an *alternative* to the
+4. Update the downstream capture charters, the spec, OQ-025 and OQ-029 with the measured result,
+   and fold the marker into the operator capture guide as an *alternative* to the
    three-clap pattern — never as a replacement for the LTC jam, and never for a restarted
    file that missed the marker.
 5. `./scripts/codex-review.sh code M10 main`, mutation checks on every load-bearing proof,
@@ -689,13 +689,14 @@ naming precisely what was unlabelled and why.
 **Changed:** `cli.py` (the `marker` sub-app); `schema_export.py`; `tests/test_raw_guard.py`
 (`COMPOSED`); `tests/test_memory.py`; `tests/test_schema_drift.py`;
 `dnd-audio-ingestion-agent-spec.md`; `docs/plan/{OPEN-QUESTIONS,INVARIANTS,ROADMAP,STATE}.md`;
-`docs/plan/milestones/{H1,H2}-*.md`; `docs/H1-two-person-recording-runbook.md`.
+the downstream capture charter and operator guide (later consolidated by ADR-0043 into M11 and
+`docs/session-zero-capture-guide.md`).
 
 ### Completion gate → the proof that demonstrates it
 
 | # | Criterion | Proof | Phase |
 | --- | --- | --- | --- |
-| 1 | Docs agree on what the marker is and is not | ADR-0040/0042, the spec amendment, OQ-025/OQ-029, H1/H2, the runbook; `check_plan.py` in the gate | B |
+| 1 | Docs agree on what the marker is and is not | ADR-0040/0042, the spec amendment, OQ-025/OQ-029, downstream capture docs; `check_plan.py` in the gate | B |
 | 2 | Byte-stable WAV/HTML/manifest; extracted WAV identical to the CLI WAV | `test_marker_build.py` — two builds byte-identical per candidate; the page's payload decoded and compared to the WAV bytes **and** to the manifest's SHA-256; the payload asserted to occur exactly once | A (per candidate), B (v1) |
 | 3 | The page works offline on the intended phone, one playback at a time, no external resource, no second synthesis | `test_marker_page.py` — the document parsed and **every** URL-bearing attribute asserted absent or a `blob:`/`data:` the page generated, plus a `default-src 'none'` CSP; no oscillator or `Math.sin`; the declarative state-machine table parsed and asserted to admit no play-while-playing transition. That the JS *applies* the table, that `ended` resets the UI, and that the download works are **bench** claims — see the amended criterion 3 | A (static) + bench |
 | 4 | The bench detects every fixed-position marker on all tracks, no clipping near, decisive far, no false sequence on ordinary material | Split, and the halves are answered in different places. **False positives: already done** — `tests/test_marker_false_positives.py` (`host_smoke`) over every real DJI recording on the host, written up in `../../fixtures/2026-08-05-marker-false-positive-sweep.md`. **Reach, clipping and decisiveness:** the bench takes, scored through `marker analyze`; **sanitized** measurements, commands, hashes and conclusions in `docs/fixtures/` — never the takes, and no audio committed | A (negatives) + bench (positives) |
@@ -748,8 +749,8 @@ service worker or PWA; no committed audio binaries; and no browser dependency (A
 
 ## Completion gate
 
-- [x] The spec, ADR, OQ-025, H1/H2 charters, and operator runbook agree that marker v1 verifies
-      the jam, always reports differential acoustic arrival, and calls it recorder-drift
+- [x] The spec, ADR, OQ-025, downstream capture docs, and operator guide agree that marker v1
+      verifies the jam, always reports differential acoustic arrival, and calls it recorder-drift
       evidence only with fixed phone **and lav** geometry; it never replaces timecode or
       corrects a track.
 - [x] `marker build` produces byte-stable WAV, standalone HTML, and manifest artifacts; the WAV
@@ -839,7 +840,7 @@ service worker or PWA; no committed audio binaries; and no browser dependency (A
   evidence; a fixed-transmitter soak provides the clean clock-drift measurement.
 - The page can request playback at unity gain but cannot read or lock the physical media-volume
   step reliably. Operator setup and bench evidence remain part of the instrument.
-- A marker obvious enough to detect is audible and briefly interrupts the room. H1/H2 should
+- A marker obvious enough to detect is audible and briefly interrupts the room. Live Session Zero should
   place it before play begins and after play ends, not inside conversational content.
 
 ---
@@ -907,14 +908,16 @@ source-validation, event-role, conclusive-status, and identity repairs.
   29 samples (0.60 ms), leaving 1,411 samples against the structural tolerance; no disrupted
   or nonuniform sequence appeared.
 - The 17-sample fixed-position change over about 11.8 minutes is a repeatability observation,
-  not H2's four-hour drift answer. OQ-006 therefore remains owned by H2.
+  not by itself a full-duration drift answer. ADR-0043 later accepted the combined jam and
+  fixed-geometry bench evidence for the no-correction MVP.
 
 ### Notes for future implementors
 
 Do not reconstruct bench roles with an event log that never existed. Amendment A5 makes the
 spoken slates and fixed block order the record; `marker_roles_unassigned` is the correct output.
-For H1/H2, an actual event log is valuable because it can assert occurrence roles and geometry,
-but it must name the session and cannot resolve overlapping claims by playback order.
+For live Session Zero, an actual event log is valuable because it can assert occurrence roles
+and geometry, but it must name the session and cannot resolve overlapping claims by playback
+order.
 
 Keep the two memory ceilings distinct. Complete occurrences are not the only retained state:
 a long input can contain many isolated marker-like chirps that never assemble. Both ceiling
@@ -941,14 +944,14 @@ manifests, browser state, layout images, and all audio remain operator-local out
 
 ### Downstream charters updated
 
-- **H1** and its operator runbook offer marker v1 as the preferred generated alternative to
+- The live Session Zero capture guide offers marker v1 as the preferred generated alternative to
   three claps while retaining the LTC jam and the clap fallback.
-- **H2** uses v1 for the long-baseline pair, requires fixed phone and transmitter/lav geometry
+- **M11** reviews v1 start/end QA, requiring fixed phone and transmitter/lav geometry
   before calling a change recorder drift, and otherwise reports differential arrival only.
 - The product spec, OQ-025, OQ-029, and `STATE.md` carry the same boundaries and canonical hash.
 
 ### Next smallest step
 
-Record and process **H1**. Build v1 before the room is occupied, use the bench-tested phone at
-the documented approximately 90% volume if practical, keep its position/orientation fixed for
+Record and process live Session Zero. Build v1 before the room is occupied, use the bench-tested
+phone at the documented approximately 90% volume if practical, keep its position/orientation fixed for
 the chosen pair, and use the three-clap pattern if the prepared phone path is unavailable.

@@ -3,7 +3,7 @@
 The spec is emphatic that no DJI metadata layout may be invented, so this is a short
 ordered list of named strategies, each of which either produces evidence or declines
 with a reason. Both outcomes are recorded — a manifest that says *which* strategies
-declined and *why* is what makes H1 cheap, because settling OQ-001 then means reading
+declined and *why* made the real-capture check cheap, because settling OQ-001 meant reading
 the recorded reasons rather than re-running an investigation.
 
 **Evidence is a tagged union and is never collapsed into one number** (ADR-0006). The

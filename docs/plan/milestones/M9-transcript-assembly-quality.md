@@ -217,7 +217,7 @@ phrase. Both acoustically unresolved one-word `Okay` records remain visible.
   conservative defaults supported by this capture. Exact-short duplicate safety and natural
   conversational pauses still need genuine multi-speaker evidence.
 - No new open question was needed: the empirical claims belong to OQ-018/OQ-027, and both now
-  name the M9 evidence and remaining H1/H2 work.
+  name the M9 evidence and remaining M11 live-session work.
 
 ### Notes for future implementors
 
@@ -254,16 +254,16 @@ contains hashes and aggregate results without host-specific paths or audio.
 
 ### Downstream charters updated
 
-- **H1** now measures multi-wearer hard onsets at 0/20/100 ms grace, exact simultaneous
+- **M11** measures natural multi-wearer hard onsets at 0/20/100 ms grace, exact simultaneous
   `Yes`/`Okay`, contained fragments, and controlled 320/350 ms same-speaker pauses while scoring
   granular records and public turns separately.
-- **H2** repeats those controls over natural speech and truncation/retry seams, checks
+- The same live-session evaluation covers natural speech and truncation/retry seams, checks
   contained-fragment audit chains, and keeps exact-short matches until evidence supports more.
 - **OPEN-QUESTIONS.md**, the product spec, ADR-0032 and both new ADRs carry the semantic and
   empirical boundaries. The activity defaults remain 30 ms padding and 200 ms merge gap.
 
 ### Next smallest step
 
-Record and process **H1**. Use the production activity defaults, keep both unresolved short
+Record and process live Session Zero. Use the production activity defaults, keep both unresolved short
 copies in the baseline, and compare the transcript-only controls against known wearer/phrase
 ground truth. M9 has no remaining software or documentation work.

@@ -78,7 +78,7 @@ class TestStrategyOrder:
         assert found.strategy == "bwf_time_reference"
 
     def test_what_declined_and_why_is_recorded(self) -> None:
-        """H1 gets cheaper the more this says: settling OQ-001 becomes reading the
+        """Real capture checks get cheaper the more this says: settling OQ-001 becomes reading the
         recorded reasons rather than re-running an investigation."""
         found = extract_start_time(context(tags={"timecode": "19:00:00:00"}))
         assert found.strategy == "timecode_tag"
@@ -153,7 +153,7 @@ class TestEvidenceKeepsItsUnits:
 
 class TestAssumptionsAreTagged:
     def test_every_file_metadata_strategy_names_its_open_question(self) -> None:
-        """`rg OQ-004` has to find every place that changes when H1 answers it."""
+        """`rg OQ-004` has to find every place that changed when the real evidence answered it."""
         bwf = extract_start_time(context(tags={"time_reference": "1"}))
         assert any("OQ-004" in note for note in bwf.assumptions)
         assert any("OQ-001" in note for note in bwf.assumptions)

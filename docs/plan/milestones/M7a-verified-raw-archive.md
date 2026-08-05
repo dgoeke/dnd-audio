@@ -474,7 +474,7 @@ design; keep test uploads small and few.
 
 ### Next smallest step
 
-**M10, then H1.** M7a removes the risk that a lost disk costs a session, which was the reason
+**M10, then the next real recording.** M7a removes the risk that a lost disk costs a session, which was the reason
 to do it before Session Zero. Archive the first real session as soon as it is inspected — the
 command is `dnd-audio archive upload`, and `archive verify` afterwards is what makes the
 backup a fact rather than a belief.

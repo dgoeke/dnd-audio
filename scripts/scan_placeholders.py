@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 ROOTS = ("src", "tests")
-JUSTIFIED = re.compile(r"\b(M\d+[a-z]?|H\d+|OQ-\d+)\b")
+JUSTIFIED = re.compile(r"\b(M\d+[a-z]?|OQ-\d+)\b")
 SKIP_MARK = re.compile(r"\bmark\.(skip|skipif|xfail)\b")
 
 # Runtime skips. A decorator is not the only way to skip a test, and these leave no
@@ -31,7 +31,7 @@ SKIP_MARK = re.compile(r"\bmark\.(skip|skipif|xfail)\b")
 # and behaves as a silent skip when the import is exactly what a milestone was
 # supposed to deliver.
 RUNTIME_SKIP = re.compile(r"\bpytest\.(skip|xfail|importorskip)\s*\(")
-DEFERRED = re.compile(r"DEFERRED:\s*(M\d+[a-z]?|H\d+|OQ-\d+)")
+DEFERRED = re.compile(r"DEFERRED:\s*(M\d+[a-z]?|OQ-\d+)")
 LOOSE = re.compile(r"\b(TODO|FIXME|XXX|HACK)\b")
 
 # Only a `raise` is placeholder work. Matching the bare name would also flag an

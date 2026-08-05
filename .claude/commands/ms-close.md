@@ -1,12 +1,12 @@
 ---
 description: Close a milestone — record decisions, notes, and state, then commit
-argument-hint: "<milestone id, e.g. 0, 2, 6a, H1> [additional context]"
+argument-hint: "<milestone id, e.g. 0, 2, 6a, 11> [additional context]"
 ---
 
 **Invocation:** `$ARGUMENTS` — the milestone ID first, then anything else.
 
 Resolve **$0** to its charter under `docs/plan/milestones/`; a bare number means
-the M track (`2` is M2, never H2). That charter's own ID — `M0`, `M6a`, `H1` — is
+the M track (`2` is M2). That charter's own ID — `M0`, `M6a`, `M11` — is
 what `<ID>` means below. Anything the invoker typed after the ID is something they
 want recorded in the closeout. Write it in; it never substitutes for a section you
 would otherwise have filled.
@@ -51,7 +51,7 @@ This is the step that keeps the plan honest, and the one most likely to be skipp
 - Milestone status → `closed`, with the closing commit SHA.
 - Current milestone → the next one.
 - Refresh **What works end to end** and **Next smallest step**.
-- Note anything now blocked, especially waiting on the H1 hardware fixture.
+- Note anything now blocked, especially waiting on live Session Zero evidence.
 
 ## 4. Commit and integrate
 

@@ -315,9 +315,9 @@ session-2026-08-15/
 The physical transmitters will be labeled `tx-a` through `tx-f`. Directory identity
 is authoritative. Do not treat DJI's `TX01`/`TX02` filename component as globally
 unique. DJI documents it as a receiver-assigned pairing-order identifier that changes
-after re-pairing, so independent kits can reuse the same value; confirm the observed
-behavior in the real hardware fixture. Even if a future firmware changes the naming,
-filename identity remains only a secondary validation hint.
+after re-pairing, so independent kits can reuse the same value; the 2026-08-02 sample probe
+confirmed duplicate identifiers across receiver groups (OQ-002). Even if a future firmware
+changes the naming, filename identity remains only a secondary validation hint.
 `receiver_id` and `receiver_channel` document and validate the stable physical setup,
 but they are not permitted to override the authoritative `track_id` directory.
 
@@ -584,12 +584,13 @@ transmitter/lav are asserted to have stayed fixed between the two occurrences �
 a fixed-transmitter soak can assert and an ordinary session with people wearing the
 microphones cannot. Neither reading ever applies a correction.
 
-The two-minute hardware fixture validates metadata and synchronization plumbing, not
-multi-hour clock stability. Before relying on the no-drift-correction MVP assumption,
-run a roughly four-hour soak fixture with synchronized transients near the beginning
-and end, or use the first full session's start/end clap measurements as that evidence.
-Record the measured differential lag and configured warning threshold. Automatic
-affine drift correction remains post-MVP.
+The hardware evidence is sufficient for the no-drift-correction MVP (ADR-0043). A jammed
+two-receiver capture measured relative clock rate near 1 ppm, bounded by a ±3 ppm measurement
+floor, and the later fixed-geometry six-transmitter marker bench measured at most 17 samples
+(0.35 ms) of same-geometry change over about 11.8 minutes. Automatic affine drift correction
+remains post-MVP and requires new fixed-endpoint evidence of a material problem; an ordinary
+session with moving wearers cannot provide that evidence. Live Session Zero still records
+start/end marker QA where practical, under ADR-0040, but no dedicated soak is required.
 
 ### Milestone 3: conservative speech activity and bleed rejection
 
@@ -1024,33 +1025,19 @@ with explicit configurable tolerances that:
 - Gain envelopes contain no discontinuities and do not exceed configured attack,
   release, or maximum-slew limits.
 
-Before claiming real DJI support is complete, validate against a short hardware
-fixture. If none is available, implement everything possible with synthetic data
-and clearly mark this one integration step as pending rather than guessing DJI's
-metadata tags.
+Real DJI support has been validated through the sample probe, jam-verification capture,
+minimal two-person acoustic capture, and intended-phone marker bench. Together they cover real
+PCM formats and metadata, receiver-domain timecode propagation, real speech and deliberate
+overlap, all six transmitters, all three jammed receivers, marker reach, and marker false
+positives. Sanitized evidence lives under `docs/fixtures/`; no session audio is committed.
 
-Recommended real fixture recording:
-
-- All six labeled transmitters and all three synchronized receivers.
-- About two minutes total.
-- Keep the kits as independent two-transmitter groups. Jam receiver B from receiver
-  A's LTC output, disconnect it, then jam receiver C from A and disconnect it. Record
-  the displayed timecode/rate on all three receivers after the procedure.
-- Start the transmitters a few seconds apart.
-- Each wearer states their transmitter label and speaks alone for several seconds.
-- Include one two-person overlap.
-- Turn one transmitter off, wait several seconds, turn it back on, and record again.
-- Make a distinctive three-clap pattern near the start and end, or play marker v1 from one
-  fixed central position — same role, detected automatically rather than picked by hand.
-  Use the exact artifacts from `dnd-audio marker build`, the same phone orientation and
-  media-volume step at both ends, and `dnd-audio marker analyze` after ingest. It supplements
-  the LTC jam and never replaces it: timecode places a transmitter that was switched off and
-  back on, and a sound at the top of the session cannot.
-- Export both `orig` and `edit` files if dual-file mode is enabled.
-
-Document the discovered DJI file naming and metadata in a fixture note, and store
-only sanitized `ffprobe` JSON plus the generic RIFF chunk inventory in the repository
-unless the user explicitly approves committing a tiny audio sample.
+The next recording is the campaign's live Session Zero with all players. Follow
+`docs/session-zero-capture-guide.md`: confirm the physical roster and six internal recording
+indicators, jam the three receivers, use marker v1 (or claps) for acoustic QA, preserve every
+raw byte, establish the verified private archive, and process the production baseline before
+tuning. Do not stage a power cycle, dual-file export, scripted overlap, receiver-count test, or
+dedicated clock experiment during live play. M11 owns only tuning that ordinary play supports
+and the event-first/affine hooks if concrete evidence justifies them (ADR-0043).
 
 ### Implementation order
 
@@ -1064,7 +1051,7 @@ Work in this order and keep the main branch runnable after each step:
 5. Fake ASR end-to-end transcript outputs.
 6. Automix and MP3 rendering.
 7. Qwen ASR/forced-aligner adapter and model-independent caching.
-8. Real DJI fixture validation and threshold tuning.
+8. Live Session Zero validation and evidence-backed tuning (M11).
 
 At the end of each work session, report:
 
@@ -1126,9 +1113,8 @@ Design extension points where cheap, but do not implement these features now.
    active internal-recording indicator after recording starts.
 4. Disable transmitter loop recording for normal sessions unless overwriting the
    oldest internal recordings is deliberately desired and separately backed up.
-5. Give the implementation agent the short real hardware fixture described above as
-   soon as practical. That is the one thing an architecture prompt cannot safely
-   substitute for.
-6. For the first real session, keep raw files and pipeline outputs even if the
+5. Follow `docs/session-zero-capture-guide.md` for the live Session Zero recording; do not
+   recreate the retired controlled fixtures (ADR-0043).
+6. For live Session Zero, keep raw files and pipeline outputs even if the
    transcript is imperfect; the diagnostics will be the basis for tuning bleed
    thresholds and the automixer.

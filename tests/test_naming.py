@@ -1,9 +1,9 @@
 """Filename parsing is fail-soft, and yields hints rather than decisions.
 
 The two tests that matter most here are the ones asserting what parsing *cannot* do:
-produce a track identity (INV-11) or a timing source (INV-12). The grammar itself is a
-guess until H1 lands (OQ-003), so the tests state the guess explicitly and prove that
-being wrong about it costs a hint rather than a file.
+produce a track identity (INV-11) or a timing source (INV-12). The grammar is measured,
+while its counter remains non-authoritative (OQ-003), so the tests prove that being wrong
+about it costs a hint rather than a file.
 """
 
 from __future__ import annotations

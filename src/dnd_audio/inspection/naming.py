@@ -13,7 +13,8 @@ can be turned into one.
 diagnostics and for cross-checking, and are never a timing source. A file whose only
 apparent timing is in its name has no timing, and inspection says so.
 
-**And the grammar is a guess** until the H1 fixture lands (OQ-003). Parsing is therefore
+The grammar is measured across the available DJI captures, while the sequence counter remains
+non-authoritative (OQ-003). Parsing is therefore
 fail-soft in one specific direction: an unrecognized name yields hints that say so, and
 the file remains a candidate. If this grammar became an inclusion filter, real hardware
 whose names differ from the guess would be silently omitted — the worst possible failure

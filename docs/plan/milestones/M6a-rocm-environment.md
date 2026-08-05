@@ -349,5 +349,5 @@ Before that, one queued piece of unrelated work the owner asked for: **`pytest-x
 parallelism in the gate**, as its own commit with its own gate run. It touches every
 milestone's tests, so it does not belong inside a milestone.
 
-**Real DJI metadata has still not been fully validated.** H1 remains the oldest outstanding
-item; M6a neither needed nor touched it.
+**Real DJI metadata had not yet been fully validated at this closeout.** M6a neither needed nor
+touched that evidence; the later captures and M8 closed it.

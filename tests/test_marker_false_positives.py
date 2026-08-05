@@ -5,14 +5,14 @@ contains a marker — they predate it. That makes this the one half of the bench
 false-positive question that needs no bench: real DJI hardware, real rooms, real voices,
 already on disk.
 
-**It answers only that half.** Whether a marker played from a phone speaker is *found* on a
-lav across a table is a question about acoustics, and nothing here touches it. See
-`docs/M10-marker-bench-protocol.md`.
+The positive path — a marker played from a phone speaker and found on lavs across a table —
+was answered separately by M10's intended-phone/DJI bench. See
+`docs/fixtures/2026-08-05-marker-phone-dji-bench.md`.
 
-Marked `host_smoke` and excluded from `./scripts/gate.sh`, because the recordings are
-gitignored session audio. The default suite proves the same property against synthetic
-speech and music in `test_marker_detect.py`; this is the same claim against a real capture
-chain, which INV-10's reasoning says is the one that counts.
+Marked `host_smoke` and excluded from `./scripts/gate.sh`, because the recordings are local
+session audio kept outside version control. The default suite proves the same property against
+synthetic speech and music in `test_marker_detect.py`; this is the same claim against a real
+capture chain, which INV-10's reasoning says is the one that counts.
 
 Recordings are **discovered rather than named**, the convention `test_qwen_smoke.py`
 established for the same reason: pinning a filename turns a replaced corpus into a silent
@@ -38,11 +38,15 @@ from dnd_audio.timeline.pcm import PcmReader, open_pcm
 
 pytestmark = pytest.mark.host_smoke
 
-#: Both corpora of real DJI audio this host carries. `samples/` is one person announcing
-#: microphones; `minimal-test-samples/` is two people talking over each other on purpose,
+#: Both corpora of real DJI audio this host carries. The retained jam capture is one person
+#: announcing microphones; `minimal-test-samples/` is two people talking over each other on
+#: purpose,
 #: with hand claps at both ends — the closest thing on disk to a hostile negative control,
 #: since a clap is broadband and a marker chirp is what a clap would be mistaken for.
-CORPORA: Final = ("samples", "minimal-test-samples")
+CORPORA: Final = (
+    Path("/data/dnd-audio/2026-08-03-jam-capture"),
+    Path("minimal-test-samples"),
+)
 
 #: How close a single chirp may come to its acceptance threshold on real speech before this
 #: stops being reassuring. Measured 2026-08-05: the worst case across 13.7 minutes was 186
@@ -52,7 +56,7 @@ HEADROOM_CEILING_PERMILLE: Final = 250
 
 
 def _recordings() -> list[Path]:
-    return sorted(path for corpus in CORPORA for path in Path(corpus).glob("*.wav"))
+    return sorted(path for corpus in CORPORA for path in corpus.glob("*.wav"))
 
 
 RECORDINGS: Final = _recordings()
@@ -60,9 +64,9 @@ RECORDINGS: Final = _recordings()
 _no_audio = pytest.mark.skipif(
     not RECORDINGS,
     reason=(
-        "OQ-025 — needs real recordings in samples/ or minimal-test-samples/, which are "
-        "gitignored session audio. This asks what the detector does with a real capture "
-        "chain, and INV-10's reasoning is that synthetic speech cannot answer it; "
+        "M10/OQ-025 real-hardware regression needs the retained jam capture or "
+        "minimal-test-samples/. INV-10's reasoning is that synthetic speech cannot prove "
+        "what the detector does with a real capture chain; "
         "test_marker_detect.py carries the synthetic half in the default gate"
     ),
 )

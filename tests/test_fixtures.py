@@ -188,7 +188,8 @@ class TestNamingAndMetadata:
     ) -> None:
         """Literal, so a change to either the writer or the assumed grammar is visible.
 
-        The grammar is a guess until H1 lands (OQ-003). Asserting exact strings is what
+        The grammar is measured, while its sequence counter remains non-authoritative
+        (OQ-003). Asserting exact strings is what
         makes the guess a *stated* one rather than an implicit one.
         """
         names = [Path(chunk.relative_path).name for chunk in canonical_fixture.for_track("tx-a")]
@@ -271,7 +272,7 @@ class TestDeterminism:
     def test_chunking_does_not_change_a_sample(self, tmp_path: Path) -> None:
         """The same events, split differently, must render identically.
 
-        Rendering per chunk is what keeps H2's four-hour fixture possible (INV-07). It
+        Rendering per chunk is what keeps a full live session possible (INV-07). It
         is only safe if a chunk boundary cannot perturb the samples around it — which
         is why events are rendered whole and then sliced.
         """

@@ -29,9 +29,9 @@ fi
 
 command -v codex >/dev/null 2>&1 || { echo "codex not on PATH"; exit 127; }
 
-# Resolve the charter, accepting 0, m1, M6a, or H1. A bare number means the M
-# track: '2' is M2, never H2. Getting this wrong reviews the wrong milestone
-# against a prompt that still looks plausible, so it is deliberately explicit.
+# Resolve the charter, accepting 0, m1, or M6a. Bare numbers name the M track.
+# Getting this wrong reviews the wrong milestone against a prompt that still looks
+# plausible, so it is deliberately explicit.
 MS="${MS^}"
 CHARTER=$(ls docs/plan/milestones/"${MS}"-*.md 2>/dev/null | head -1)
 [ -n "$CHARTER" ] || CHARTER=$(ls docs/plan/milestones/M"${MS}"-*.md 2>/dev/null | head -1)

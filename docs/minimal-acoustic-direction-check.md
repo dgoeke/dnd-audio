@@ -1,10 +1,9 @@
 # Minimal two-person acoustic direction check
 
-This is the **smallest useful capture for choosing the project's next architecture**. It is
-not the H1 hardware fixture and will not close H1's metadata, timecode, power-cycle, or
-dual-file questions. Use the full
-[H1 two-person recording runbook](H1-two-person-recording-runbook.md) later if those questions
-still matter.
+This is the protocol used for the completed 2026-08-04 minimal acoustic capture. It supplied
+two-person speech, deliberate overlap, exact-short controls, handoffs, and a hard marker
+false-positive corpus. The separate sample probe, jam verification, and six-transmitter marker
+bench settled the hardware breadth; ADR-0043 records why no controlled follow-up is planned.
 
 The burden on the second person is about five minutes: wear one transmitter, read a few lines,
 and speak on silent visual cues. There is no paper log, receiver jam, wall-clock observation,
@@ -222,5 +221,7 @@ The follow-up analysis should answer only these questions before proposing more 
 7. Should the three-second `Okay ... now` gap remain acoustically separate and be joined only
    in an editorial view?
 
-The result is a direction decision, not a new production threshold. Do not modify H1, activity
-defaults, transcript semantics, or the mix merely to make this tiny corpus look perfect.
+The result is architecture-direction evidence, not a new production threshold. Do not modify
+activity defaults, transcript semantics, or the mix merely to make this tiny corpus look
+perfect. M11 may revisit the event-first hypothesis only if live Session Zero exposes a
+concrete limitation in the conservative baseline.

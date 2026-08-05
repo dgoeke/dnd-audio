@@ -16,8 +16,9 @@ would accumulate the rounding error it exists to remove (INV-04, ADR-0008).
 
 Why the MVP does not correct drift: jammed timecode is timeline synchronization, not a
 shared word clock, and how far the three kits' sample clocks actually diverge over four
-hours is **OQ-006** — unmeasured until H2. Correcting by an unmeasured amount would be
-inventing timing (INV-12). M2 warns instead; see :mod:`~dnd_audio.timeline.syncqa`.
+hours is bounded by **OQ-006** and accepted for the no-correction MVP. Correcting without new
+fixed-endpoint evidence of a material problem would still invent timing (INV-12). M2 warns
+instead; see :mod:`~dnd_audio.timeline.syncqa`.
 """
 
 from __future__ import annotations

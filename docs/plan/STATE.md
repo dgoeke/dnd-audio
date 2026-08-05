@@ -7,16 +7,19 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 
 ## Right now
 
-- **Current milestone:** H1 — hardware fixture (**not started**). The minimal
-  acoustic direction capture is complete enough to guide later event-first work but does not
-  close or replace H1. M7b deliberately retains the post-session publication, retention, cache,
-  and deletion decisions.
+- **Current milestone:** M11 — Session Zero validation and tuning (**blocked on the live
+  recording**). The campaign's next recording is live Session Zero with all players, not a
+  dedicated metadata or clock-stability capture. ADR-0043 retires both pre-campaign steps: the
+  sample probe, jam verification, minimal acoustic capture, and six-transmitter/three-receiver
+  marker bench have already settled the structural hardware questions. M11 retains only
+  evidence-backed real-play tuning and genuine technical contingencies. M7b still owns the
+  later publication, retention, cache-reclamation, and deletion decisions.
 
   **M10 is closed.** The intended-phone/six-DJI bench selected cand-b as marker v1; ADR-0042
-  freezes its exact waveform, hash, detector constants, and margins. H1/H2 may use the offline
-  phone player as an alternative to the three-clap pattern. It remains acoustic verification,
+  freezes its exact waveform, hash, detector constants, and margins. Live Session Zero uses the
+  offline phone player, with three claps as the fallback. It remains acoustic verification,
   never timecode replacement or automatic correction.
-- **Branch:** `milestone/M10-acoustic-sync-marker`
+- **Branch:** `main`
 - **Last closed milestone:** M10 — acoustic synchronization marker
 - **Gate status at HEAD:** passes, zero skips (8 checks, 3,111 tests); M10's real-DJI
   false-positive host smoke also passes 8 tests. `main` was last verified
@@ -53,7 +56,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
   and three-way duplicates resolve best-source-first under a separately versioned assembly
   semantic.
 
-  **The diagnostics now make H1/H2 evidence rather than a listening anecdote.** Per-track
+  **The diagnostics make Session Zero tuning evidence rather than a listening anecdote.** Per-track
   activity counts and references are explicit. Every dropped `(request, word)` pair reports
   exact edge-distance geometry, side and word position. OQ-027's initial seconds-scale causal
   claim was corrected: production damage is bounded by the 500 ms request padding.
@@ -62,8 +65,8 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
   30 dropped pairs and 10 rendered segments; at 50, 26 and 12; at 100, 21 and 12. The 100 ms
   run retained all four known direct-source openings, but also retained more wrong-track/short
   fragments and worsened two speech-reference clamps by up to 1.44 dB. `vad.pad_ms` stays at
-  30. H1 records hard-onset phrases against intended track ids and compares 30 with 100; H2 or
-  a real table decides.
+  30. M11 evaluates hard onsets against wearer identity in ordinary play and changes the
+  default only if the full activity/transcript/mix evidence supports it.
 
   **M9 recovers transcript edges without moving activity.** A 20 ms leading ownership grace is
   applied after ASR and bounded by each submitted occurrence. Conservative contained-fragment
@@ -117,7 +120,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
   `70355baad6bb72b38e0b606cddbbaa3428c11429bec74cd127aa6f8935ecdf6f`.
   It remains jam QA, never timeline authority. A normal session reports differential arrival;
   only fixed source **and** lav geometry, asserted in an event log, licenses a drift claim
-  (ADR-0040). H1/H2 retain claps as the fallback.
+  (ADR-0040). Live Session Zero retains claps as the fallback.
 
   **A measurement worth retaining:** detection survives about 1000 ppm of
   playback speed error and fails by 2000 ppm, and what breaks is per-chirp correlation
@@ -129,14 +132,16 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
   **The jam/timing result remains strong.** Two receivers started 5.28 s apart and their
   independently written references agree on that offset to 17–30 ms, inside one 30 fps frame
   (**OQ-023**). Relative sample-clock drift measured ≈1 ppm, bounded ±3 ppm over 30 s
-  (**OQ-006**); H2 still owes the long baseline. A receiver set to 60 fps still wrote 30 fps
-  quantum boundaries (**OQ-024**), and two receivers' wall clocks were 48.7 s apart while the
-  jammed counter agreed — the case M8 now guards against.
+  (**OQ-006**). The fixed-geometry marker bench then bounded same-geometry change to 17 samples
+  (0.35 ms) over about 11.8 minutes across all six transmitters. Together those results answer
+  the MVP decision: no automatic drift correction is justified. A receiver set to 60 fps still
+  wrote 30 fps quantum boundaries (**OQ-024**), and two receivers' wall clocks were 48.7 s
+  apart while the jammed counter agreed — the case M8 now guards against.
 
-  What H1 still owes: OQ-003's counter across a power cycle, OQ-007's `orig`/`edit` pairing,
-  **OQ-015** (receiver displays read against wall clock — unrecoverable afterwards), the
-  **third receiver** (OQ-012 is answered for two), six transmitters, and real speech at a
-  real table. Breadth and operational questions — no longer an existential one.
+  **No hardware-breadth capture remains.** The marker bench exercised six transmitters and all
+  three jammed receivers. Filename counter behavior, receiver-side `edit` pairing, absolute
+  wall-clock zero, and a dedicated power cycle are non-authoritative or guarded details with no
+  remaining pipeline decision. ADR-0043 records why they are not transferred to M11.
 
   **OQ-008 answered** (M6a): `torch 2.9.1+rocm7.13.0` (HIP `7.13.99004-3309c6114a`) on
   `Radeon 8060S Graphics` / `gfx1151`, bfloat16 and float32 both exact.
@@ -144,10 +149,11 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
   is one this project never calls.
   **OQ-022 answered** (M6b): Qwen inference on this stack is reproducible in process and
   across cold processes, so **INV-02 stands unamended**.
-  **OQ-018 items 1–3 answered** (M6b); item 4 and the low-energy-split half of item 3 need
-  a real session and are H2's.
-  **OQ-017**, **OQ-019**, **OQ-020** wait on H2 or a first real session. **OQ-021** asks
-  which render node backs the compute device on a multi-GPU host; nothing is blocked on it.
+  **OQ-018 items 1–3 answered** (M6b); its conversational calibration, **OQ-017** real-table
+  behavior, **OQ-019** automix acceptance, **OQ-027** ownership tuning, and **OQ-013** measured
+  cache footprint are M11's remaining evidence work. **OQ-020** is closed because the
+  encode/verify loop is fail-closed and records every material-dependent attempt. **OQ-021** is dropped
+  until a multi-GPU target host exists; it blocks no production behavior.
 
   **Do not run a transcription alongside a heavy ComfyUI or large-LLM workload.** The host
   has unified memory, so a GPU allocation and system RAM come from one pool and
@@ -170,10 +176,9 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | M8  | Real-session readiness     | closed      | `8ad15e3` |
 | M9  | Transcript assembly quality | closed      | `d3e2cbb` |
 | M7a | Verified private raw archive | closed      | `5bc24a3` |
-| H1  | Hardware fixture (2 min)   | not started | —         |
-| H2  | Drift soak / first session | not started | —         |
 | M7b | Publishing and reclamation | sketch      | —         |
 | M10 | Acoustic sync marker       | closed      | `38a18c9` |
+| M11 | Session Zero validation and tuning | blocked | —       |
 
 **Closed at** is the milestone's close commit, and it is recorded by a small follow-up
 commit — a commit cannot contain its own hash (the same limit ADR-0003 names for the report).
@@ -339,24 +344,21 @@ writer that cannot lose a stage, and a test suite that is provably offline.
 
 ## Next smallest step
 
-**Record H1 — six transmitters, three receivers, two human voices, and the exact runbook.**
-Marker v1 is prepared for its start/end landmarks; the three-clap pattern remains the fallback.
-The unrecoverable evidence is still the receiver-display/wall-clock observation, the real
-receiver/channel map, spoken ground truth, power-cycle order, and any phone/lav movement.
+**Record live Session Zero with all players, following `docs/session-zero-capture-guide.md`.**
+Marker v1 is prepared for its acoustic QA landmarks; the three-clap pattern remains the
+fallback. Confirm the physical roster, LTC jam, all six recording indicators, marker geometry,
+and any operational restart, but do not turn live play into another controlled fixture.
 
 **Archive the first real session as soon as it is inspected.** `dnd-audio archive upload
 <session>`, then `dnd-audio archive verify --session-id <id>` — the second is what turns the
 backup from a belief into a fact, and it is a full download by design.
 
-Nothing in H1 is a code task until the recordings exist. What the pipeline will do with them
-on arrival is already built: `inspect` names the strategy, the evidence and the assumption
-*by OQ id* in every manifest, so answering several of these is reading one manifest rather
-than writing an analysis. `tests/test_qwen_smoke.py` discovers `samples/*.wav` by glob, so
-dropping better recordings in re-runs every OQ-018 and OQ-022 measurement M6b took, without
-a code change. Keep the first pass at `activity.vad.pad_ms: 30`, compare transcript ownership
-grace at 0, 20 and 100 ms against the logged hard-onset phrases, exercise the exact-short and
-320/350 ms pause controls, and score granular records and public turns separately. The M8/M9
-studies prove that neither dropped-word count nor rendered-line count is a loss function alone.
+M11 begins only after the immutable recordings exist. The pipeline path is already built:
+process the production baseline first, archive and preserve it, then inspect the activity,
+transcript, mix, cache, and marker diagnostics together. Natural opening words, exact-short
+responses, overlaps, and pauses provide the calibration evidence; no scripted controls are a
+capture obligation. The M8/M9 studies prove that neither dropped-word count nor rendered-line
+count is a loss function alone.
 
 **`pytest-xdist` parallelism is done** (2026-08-03), outside any milestone because it
 touches every milestone's tests. **The suite went from 120 s to ~30 s and the whole gate
@@ -388,20 +390,10 @@ default everywhere: on one fast unit file `-n 8` costs 0.7 s where `-n auto` cos
 1.8 s. Hence 8 rather than `auto` — the whole speedup at a quarter of the fixed cost,
 against mildly oversubscribing a 4-core machine.
 
-**Real DJI metadata has been validated — for two receivers, one take, no speech.** This
-sentence used to read "has still not been validated", which was written at M6a's close and
-was already false the next day, when the 2026-08-03 jam capture landed four real Mic 3
-files in `samples/` and M8 was built on them. It survived two milestones because nothing
-re-reads the bottom of this file. **Not existence any more; breadth.**
-
-What real files settled: what the Mic 3 embeds (**OQ-001**), `TX01`/`TX02` uniqueness
-(**OQ-002**), `time_reference` present, midnight-relative and at the file rate
-(**OQ-004**), no DJI-private or iXML chunk carrying timing (**OQ-005**), the displayed
-timecode reaching `bext.time_reference` (**OQ-023**), the receiver's frame-rate setting
-**not** reaching the transmitter's file (**OQ-024**), and identical post-jam timecode
-across **two** receivers (**OQ-012**).
-
-What no file on this disk can settle, and H1 still owes: the sequence counter across a
-power cycle (**OQ-003**), `orig`/`edit` pairing (**OQ-007**), an exact PCM sample count
-from `ffprobe` (**OQ-011**), timecode zero against wall clock (**OQ-015**), the third
-receiver, six transmitters, and real speech at a real table.
+**Real DJI support is validated at production breadth.** The sample probe, jam verification,
+minimal acoustic capture, and marker bench collectively cover real metadata and PCM formats,
+two-person speech and deliberate overlap, all six transmitters, all three jammed receivers,
+and the intended phone/marker path. They settled OQ-001/002/004/005/006/011/012/015/023/024/025
+and OQ-029. ADR-0043 drops the remaining filename-counter, dual-file, receiver-count, and
+artificial-duration obligations because they are non-authoritative, guarded, or add no
+pipeline decision. What remains is ordinary-play tuning in M11, not hardware validation.

@@ -37,7 +37,8 @@ together. `veto_db` (12.0) then keeps any candidate within 12 dB of it. When mos
 candidates are bleed, the percentile lands on bleed, and the veto protects bleed from
 suppression.
 
-Measured on the jam capture (`samples/`), where direct-to-bleed is 17.4 dB:
+Measured on the jam capture (now retained at
+`/data/dnd-audio/2026-08-03-jam-capture/`), where direct-to-bleed is 17.4 dB:
 
 | track | candidates | reference the pipeline computed | what it actually is |
 | --- | --- | --- | --- |
@@ -70,7 +71,7 @@ float32's 24-bit significand; the conversion is lossless. The reason is correct 
 integer and wrong for the format DJI actually produced.
 
 Two of four transmitters in the 2026-08-02 probe wrote `pcm_s24le` from a per-transmitter
-setting the operator had not matched across kits — the exact mistake H1's recipe warns about,
+setting the operator had not matched across kits — the exact mistake the capture guide warns about,
 which means it will be made again. **This is the item that can cost a whole session**, and it
 would be discovered after the recording, not during it. **OQ-007.**
 
@@ -246,7 +247,7 @@ function — a weak lav's padding can contain another speaker's words.
       leading/non-leading counts; a composed-run test proves those fields reach the report.
 - [ ] A fixture reproducing the jam capture's acoustics is checked in — **synthetic audio
       calibrated from the measurements** (direct ≈ −39 dBFS, bleed ≈ −56, floor ≈ −66,
-      17.4 dB rejection), not committed session audio (INV-06, and H1's no-audio rule).
+      17.4 dB rejection), not committed session audio (INV-06 and the repository's no-audio rule).
 - [ ] Every deliverable stays byte-stable on rerun (INV-02) and `raw/` is untouched (INV-01).
 
 ## Explicitly not in this milestone
@@ -254,7 +255,7 @@ function — a weak lav's padding can contain another speaker's words.
 - **Threshold tuning.** `vad.pad_ms`, `duplicate.min_text_words`, `bleed.veto_db`,
   `bleed.min_score_margin`, `sync_qa.min_correlation`. These need a real table; 47 seconds of
   one operator holding one microphone at a time is not evidence to move a detector on. This
-  milestone makes them *measurable*, and H1/H2 move them.
+  milestone makes them *measurable*, and M11 moves them only from live evidence.
 - **The acoustic sync signal** (**OQ-025**). Keeping the jam is the current decision.
 - **An activity-side parameter sweep.** Sweeping thresholds against a broken veto measures the
   breakage. If a sweep is wanted, it belongs after defect 1 is fixed.
@@ -280,7 +281,7 @@ function — a weak lav's padding can contain another speaker's words.
   and 9 make it measurable), OQ-024 (defects 2b and 5a consume its answer). **Raises OQ-026** —
   whether a DJI receiver's timecode counter wraps at all, and with what period, which
   "device-local counter" no longer implies. **Does not answer** OQ-017's actual thresholds,
-  which need H1.
+  which need real-play evidence.
 - **The spec is amended by this milestone**, per AGENTS.md's rule that a proved correction
   moves code and spec in one commit: `orig` input is not always 32-bit float, a BWF
   `time_reference` is not samples since midnight, and origins are not calendar-day based.
@@ -306,11 +307,12 @@ _Scratch. Replaced by the Closeout at the end of the milestone._
 **Preconditions.** Tree clean; M6b `closed`; `./scripts/gate.sh` green at `6d00b35` — 8 checks,
 2294 tests, zero skips.
 
-**A charter correction, made at the start phase.** This document and `STATE.md` call the jam
-capture `samples2`. The operator has since deleted the old `samples/` (the 2026-08-02 probe) and
-moved `samples2/` into its place, so every reference here is renamed to `samples/`. The
-consequence is not cosmetic: `tests/test_qwen_smoke.py` discovers `samples/*.wav` by glob, so
-the `host_smoke` suite is now measuring **different audio**, and M6b's closeout warns that its
+**A charter correction, made at the start phase.** This document and `STATE.md` initially used
+a generic working name for the jam capture. The operator then deleted the 2026-08-02 probe and
+promoted the synchronized replacement corpus. It has since moved outside the repository to
+`/data/dnd-audio/2026-08-03-jam-capture/`. The consequence is not cosmetic:
+`tests/test_qwen_smoke.py` discovers that directory's WAVs by glob, so the `host_smoke` suite
+is measuring **different audio**, and M6b's closeout warns that its
 OQ-018(2) delta bound "is a bound on which file sorts first". Re-running `host_smoke` and
 re-recording those numbers is part of verify.
 
@@ -609,7 +611,7 @@ activity artifact, transcript and mix together.
 
 The listening extracts and complete scratch table are beside the isolated sessions under the
 operator's `dnd-audio-pad-ab-20260803/` scratch directory; they are intentionally untracked and
-reproducible from the source session. H1's recipe now logs unique hard-onset phrases against
+reproducible from the source session. The then-current capture recipe logged unique hard-onset phrases against
 intended track ids so the next measurement can label benefit and cost rather than infer them
 from source score.
 
@@ -624,14 +626,13 @@ from source score.
   purpose on the first real run: choosing a pad still required reconstructing edge distances
   from cache. Exact geometry and a composed report test close that usability gap.
 - The 30/50/100 study was kept out of the default. M8 explicitly excluded threshold tuning;
-  the study bounds the candidate and improves H1/H2, while respecting that exclusion.
+  the study bounds the candidate and improves later live evaluation, while respecting that exclusion.
 
 ### Downstream charters updated
 
-- **H1** carries the third receiver, power-cycle and `orig`/`edit` evidence, plus logged
-  hard-onset phrases, short handoffs and known track identity for OQ-017/OQ-027.
-- **H2** still owns long-baseline drift, first-session disk use, natural truncation and
-  duplicate-text calibration.
+- The then-planned controlled captures carried receiver breadth, power-cycle, `orig`/`edit`,
+  hard-onset, long-baseline, disk-use, truncation, and duplicate-text questions. ADR-0043 later
+  closed or dropped the hardware-only items and transferred only real-play tuning to M11.
 - **OPEN-QUESTIONS.md** records OQ-026 and OQ-027, the corrected bound, the real A/B and the
   fixed-response counterfactual.
 - The product spec, affected ADRs, schemas and later charter wording were amended alongside
@@ -639,7 +640,7 @@ from source score.
 
 ### Next smallest step
 
-Record and process **H1**. The software path is complete and the remaining decisions need
+Record and process the next real table capture. The software path is complete and the remaining decisions need
 multi-wearer audio or receiver-display observations that cannot be reconstructed later. Keep
 `activity.vad.pad_ms` at 30 for the baseline, run 100 ms as the one candidate comparison, and
 do not commit either result until direct-source and overlap ground truth are scored.

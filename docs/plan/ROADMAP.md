@@ -11,25 +11,24 @@ rather than discovering the drift six weeks later.
 
 ```text
 M0 Foundation
- └─ M1 Inspection ──┬─ M2 Timeline ── M3 Activity ─┬─ M4 Fake transcript ─┐
-                    │                              └─ M5 Automix ─────────┤
-                    │                                                     │
-                    └─ H1 Hardware fixture ── H2 Drift soak / first session ────────────────┐
-                                                                          │
-                              M6a ROCm env ── M6b Qwen adapter ────────────┴─ MVP
-                                                            │                 │
-                                                            │                 └─ M8 Readiness ─┬─ M9 Transcript assembly ── M7a Verified raw archive
-                                                            │                                  └─ M10 Acoustic marker (optional H1/H2 instrument)
-                                                            └──────────────────────────────────────────────────────────────────────┴─ M7b Publish/reclaim
+ ├─ M1 Inspection ── M2 Timeline ── M3 Activity ─┬─ M4 Fake transcript ─┐
+ │                                               └─ M5 Automix ─────────┤
+ └─ M6a ROCm environment ── M6b Qwen adapter ───────────────────────────┴─ MVP
+                                                                           └─ M8 Readiness ─┬─ M9 Transcript assembly ── M7a Verified raw archive ─┐
+                                                                                             └─ M10 Acoustic marker ───────────────────────────────┤
+                                                                                                                                                 └─ Live Session Zero
+                                                                                                                                                    └─ M11 Validate/tune ── M7b Publish/reclaim
 ```
 
-M8 sits between the MVP and the first real session. M7a was split out of the old M7 so the
-off-site copy exists **before** that irreplaceable recording; it needs an inspected session,
-not an accepted transcript. M7b still waits until a real session has been processed and
-validated because publishing, retention, cache sizing, and deletion policy need real evidence.
-M10 is a pre-session instrument but not an H1/H2 dependency: after its phone/DJI bench passes,
-its generated chirp replaces claps as acoustic QA; until then the existing clap procedure keeps
-both hardware milestones runnable.
+M8 sits between the MVP and live Session Zero. M7a was split out of the old M7 so the off-site
+copy exists **before** that irreplaceable recording; it needs an inspected session, not an
+accepted transcript. M10 supplies the bench-validated acoustic QA instrument. ADR-0043 retires
+the dedicated short metadata capture and long clock-stability capture because the sample
+probe, jam capture,
+minimal acoustic capture, and six-transmitter/three-receiver marker bench already settled their
+structural questions. M11 starts after Session Zero and owns only measured real-play tuning or a
+genuine technical contingency. M7b then uses the accepted result for publication, retention,
+cache sizing, and any deletion-policy decision.
 
 M5 depends only on M3, never on M4 or M6 — the mix must survive a transcription
 failure. M6a can start any time after M0; it is sequenced late only because
@@ -173,7 +172,7 @@ jam-capture acoustics (17.4 dB rejection) is checked in, with no session audio c
 ### M9 — Transcript assembly quality
 
 **Status: closed.** The implementation and fixed-response four-file evaluation are recorded in
-the M9 closeout; H1/H2 retain the empirical calibration questions.
+the M9 closeout; M11 retains the narrow empirical calibration questions for ordinary play.
 
 Transcript-only recovery and presentation changes established by the four-file local
 evaluation: 20 ms of bounded leading ownership grace after ASR, conservative collapse of a
@@ -211,7 +210,7 @@ verifies the LTC jam and measures start/end differential acoustic arrival withou
 timeline; only fixed phone-and-lav geometry isolates recorder drift.
 
 **Status: closed 2026-08-05.** Cand-b is frozen as marker v1 after the intended-phone/six-DJI
-bench; H1/H2 may use it, and claps remain the fallback.
+bench; live Session Zero uses it, and claps remain the fallback.
 
 **Gate:** CLI WAV and HTML-embedded WAV are byte-identical; offline page playback, matched-filter
 detection, exact integer-sample lags, false-positive negatives, bounded streaming, unchanged
@@ -229,30 +228,27 @@ restore belong to M7a and must not be redesigned here.
 **Gate:** provisional; see the charter. Any raw deletion requires a fresh full M7a restore
 verification, dry-run-first exact targeting, and an explicit INV-01 amendment.
 
-### H1 — Hardware fixture (parallel track)
+### M11 — Session Zero validation and tuning
 
-A ~2-minute real six-transmitter, three-receiver recording per the spec's recipe,
-used to validate DJI naming, metadata layout, and timecode assumptions. Blocked on
-physical recording, not on code.
+Process the campaign's live Session Zero at production defaults, verify and archive its
+immutable sources, audit real-table activity/transcript/mix behavior, measure cache footprint,
+and change only defaults supported by concrete evidence. The conservative production pipeline
+is the expected outcome. Affine timing or event-first work remains a conditional response to a
+demonstrated defect, not presumed scope.
 
-**Gate:** Every `OQ-` question tagged `needs: H1` is answered or explicitly
-re-scoped; the fixture note is written; sanitized `ffprobe` JSON + RIFF inventory
-are committed; assumptions the fixture disproves are fixed in M1/M2 with tests.
+**Status: blocked on the live recording.** This is the last implementation milestone in the
+list and the only remaining tuning milestone.
 
-### H2 — Drift soak / first session
-
-A ~4-hour soak fixture with synchronized markers near both ends, or the first
-real session's start/end marker measurements, used as evidence for the
-no-drift-correction assumption.
-
-**Gate:** Measured differential lag and the configured warning threshold are
-recorded; the drift warning fires on synthetic drift without applying correction.
+**Gate:** the baseline completes and remains reproducible; OQ-013, OQ-017, OQ-018, OQ-019, and
+OQ-027 are answered or narrowed from ordinary play; every changed default has evidence and a
+regression; unsupported changes are explicitly declined; M7b receives measured sizing and the
+accepted-session boundary; the full gate remains green.
 
 ## Working rules
 
 - Each milestone is one branch merged to `main`; `main` stays runnable and green.
-- Start acquiring the H1 fixture during M1. Do not postpone metadata discovery.
-- H2 is a validation gate, not a blocker for the first vertical slice.
+- Live Session Zero is external evidence, not a controlled milestone. Preserve and archive it
+  before M11 tuning.
 - No placeholder implementations and no unexplained skipped tests satisfy a gate.
 - When real hardware disproves an assumption, update the fixture note, the affected
   `OQ-` entry, and the schemas in the same change.
@@ -263,11 +259,10 @@ recorded; the drift warning fires on synthetic drift without applying correction
 
 Recorded so the reasoning is not lost:
 
-1. **Hardware validation became a parallel track (H1/H2), not milestone 7.** It is
-   gated on a physical recording session, so it should not sit behind five
-   software milestones. Every DJI-metadata guess made in M1/M2 gets an `OQ-`
-   marker; H1's arrival triggers a targeted revisit instead of a large late
-   milestone.
+1. **Hardware assumptions were registered separately from software.** This made every early
+   DJI-metadata guess traceable while the implementation proceeded on synthetic evidence. The
+   later sample probe, jam verification, minimal acoustic capture, and marker bench supplied
+   the real evidence without requiring a monolithic late validation milestone.
 2. **The old M6 split into M6a (environment) and M6b (adapter).** The AMD Torch
    index, the `rocm[libraries]` build, and device permissions fail in completely
    different ways than adapter code, and M6a can be verified on its own.
@@ -286,7 +281,10 @@ Recorded so the reasoning is not lost:
    an inspected session; publication, cache sizing, retention, and deletion need a processed
    real session and materially different authority. M7a is therefore a narrow INV-06
    exception with no deletion, while INV-01 remains untouched until M7b can justify one.
-8. **M10 gives OQ-025 an owner without hiding it in H1/H2.** A generated marker and detector
-   are software semantics, while H1/H2 are evidence captures. The standalone phone page embeds
-   the CLI's exact WAV rather than maintaining a second JavaScript synthesizer; physical phone
-   output still requires a bench before the runbook authorizes it.
+8. **M10 gives OQ-025 an explicit software owner.** The standalone phone page embeds the CLI's
+   exact WAV rather than maintaining a second JavaScript synthesizer; physical phone output was
+   bench-validated before the live-session capture guide adopted it.
+9. **ADR-0043 retires the two dedicated hardware captures and adds M11 last.** Existing real
+   evidence already validates the hardware breadth and MVP clock decision. Live Session Zero
+   now supplies ordinary-play tuning data, while only genuine technical contingencies survive
+   into M11.

@@ -558,8 +558,9 @@ class SyncQaConfig(_Strict):
     #: not raise a disagreement. Without the threshold, two independent noise floors yield a
     #: confident-looking number for a clap that was never recorded — but discarding the
     #: number entirely threw away six correct measurements on the 2026-08-03 capture, whose
-    #: lags matched an independent hand measurement. The value is a starting point; H1 and
-    #: H2 are what will tune it (OQ-006, OQ-025).
+    #: lags matched an independent hand measurement. The jam capture and marker bench now
+    #: support the value for the MVP (OQ-006, OQ-025); M11 revisits it only if live Session
+    #: Zero exposes a material false warning.
     min_correlation: float = Field(default=0.5, gt=0.0, le=1.0)
 
 

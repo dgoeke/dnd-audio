@@ -1,6 +1,6 @@
 # Jam verification capture — 2026-08-03
 
-Not the H1 fixture. A four-file probe recorded specifically to settle **OQ-023**: does a
+A four-file probe recorded specifically to settle **OQ-023**: does a
 timecode jam the operator can see on the receiver displays reach `bext.time_reference` in
 the written WAVs? It also produced the project's first measurement of **OQ-006**, relative
 sample-clock drift, and refuted a recommendation this ledger had made about frame rate.
@@ -104,7 +104,8 @@ materially with session length.
 
 This does not close OQ-006. A 30 s baseline cannot distinguish 1 ppm from 3 ppm, and it
 observes no thermal excursion, no battery swap and no power cycle. It rules out the
-catastrophic case; H2 must confirm the bound over hours.
+catastrophic case. ADR-0043 later accepted the combined jam and fixed-geometry marker-bench
+evidence for the no-correction MVP.
 
 ## Result 4 — the frame-rate setting did not reach the files (OQ-024)
 
@@ -122,7 +123,7 @@ is divisible by 800.)
 
 This refutes a recommendation the ledger had already adopted. OQ-004 concluded from DJI's
 documentation that 50 and 60 fps are supported and that "at 60 fps the quantum halves to 800
-samples — 16.7 ms. That is a menu setting and should be applied before the next capture." H1's
+samples — 16.7 ms. That is a menu setting and should be applied before the next capture." The
 recipe was amended to require 60 fps on all three receivers. **On the evidence here that
 setting changes nothing in an `orig` file**, and the instruction has been removed rather than
 left as an unverified ritual.

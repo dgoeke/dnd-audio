@@ -342,8 +342,8 @@ them badly wrong.
 
 **A bound measured on one sample file is a bound on which file sorts first.** The replacement
 delta bound for OQ-018(2) was drafted at 250 ms and passed — because TX01 sorts ahead of TX03,
-whose worst is 400 ms. Replacing `samples/` would have turned the suite red for a reason
-nobody could reconstruct. `samples/` is *discovered* rather than named precisely so new
+whose worst is 400 ms. Replacing the jam corpus would have turned the suite red for a reason
+nobody could reconstruct. Its WAVs are *discovered* rather than named precisely so new
 recordings re-run these measurements instead of silently skipping them; the corollary is that
 any threshold set from them has to hold for all of them.
 
@@ -410,11 +410,11 @@ dependency` is what would catch it.
 
 ### Downstream charters updated
 
-- **H1 (hardware fixture)** — now also the event that settles `activity.vad.pad_ms`, which
+- **A real-table capture** — now also the evidence that settles `activity.vad.pad_ms`, which
   OQ-018(1) found is dropping the first word of roughly half the segments. The symptom to look
   for is a transcript quietly missing an utterance's opening word rather than anything that
   raises.
-- **H2 (drift soak / first session)** — owns OQ-018(4), the text-similarity thresholds, and
+- **M11 (live Session Zero validation)** — owns OQ-018(4), the text-similarity thresholds, and
   the unmeasured half of item 3: whether a low-energy split resolves a truncation better than
   a midpoint needs an utterance long enough to exhaust 1024 tokens.
 - **M6a's deferred promotion of the two gfx1151 environment variables to host defaults** was
@@ -423,9 +423,10 @@ dependency` is what would catch it.
 
 ### Next smallest step
 
-**H1 — the hardware fixture.** Every remaining open question that blocks anything is waiting
-on real recordings rather than on code: OQ-003 (the transmitter counter), OQ-007, OQ-012 (the
-LTC jam, which the sample capture is reported not to have achieved), OQ-017 and OQ-018(4). The
-owner has said better samples are coming, captured with a proper sync procedure and in the
-right formats. `tests/test_qwen_smoke.py` discovers `samples/*.wav` by glob, so dropping them
-in re-runs every measurement in this closeout without a code change.
+**Superseded closeout direction.** At M6b close, the next step was a better synchronized
+real-table capture covering OQ-003, OQ-007, OQ-012, OQ-017, and OQ-018(4). The later jam,
+minimal-acoustic, and marker-bench evidence answered or retired the first three (ADR-0043).
+M11 now owns only the ordinary-play calibration in OQ-017 and OQ-018. The retained jam corpus
+is at `/data/dnd-audio/2026-08-03-jam-capture/`; `tests/test_qwen_smoke.py` discovers its WAVs
+by glob, so replacing its contents re-runs every measurement in this closeout without a code
+change.

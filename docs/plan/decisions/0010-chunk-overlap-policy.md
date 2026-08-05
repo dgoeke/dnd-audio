@@ -92,6 +92,6 @@ chunk.
   turn, and so on; every sample survives each time.
 - The segment map carries both the rasterized start and the placed start, so a consumer
   can always see what the evidence said before the layout adjusted it.
-- If H1 shows DJI chunk boundaries routinely overlap by a fixed amount, the fixed amount
+- If future DJI evidence shows chunk boundaries routinely overlap by a fixed amount, the fixed amount
   becomes evidence for a different default — and it will be visible in the decisions of
   every session inspected before then.

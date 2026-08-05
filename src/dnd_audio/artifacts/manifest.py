@@ -142,8 +142,8 @@ StartEvidenceRecord = Annotated[
 class DeclinedStrategyRecord(_Artifact):
     """A strategy that ran and found nothing, and what it was looking for.
 
-    Recorded because it is what makes H1 cheap: answering OQ-001 becomes reading these
-    reasons across a real fixture rather than re-running an investigation.
+    Recorded so real-capture evidence for OQ-001 is readable from these reasons rather than
+    requiring the metadata investigation to be repeated.
     """
 
     strategy: str = Field(min_length=1)

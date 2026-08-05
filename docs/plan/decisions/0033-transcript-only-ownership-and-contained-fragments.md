@@ -107,5 +107,5 @@ remain unchanged; only new contained-fragment rejections carry the distinct rule
 - A word can begin before its activity candidate and still be honestly retained because both
   intervals are present in the records.
 - Contained suffix/long fragments may disappear only under a stronger source-dominance floor
-  than ordinary similarity collapse. Exact short ambiguity remains visible for H1/H2.
+  than ordinary similarity collapse. Exact short ambiguity remains visible for M11.
 - Assembly semantics bump; ASR semantics and the ASR cache do not.

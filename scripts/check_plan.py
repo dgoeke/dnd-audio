@@ -43,7 +43,7 @@ REQUIRED = (
 
 # Milestone ID prefixes in use — see ROADMAP.md. Add one when a new parallel
 # track is introduced. Keep in sync with scripts/scan_placeholders.py.
-MILESTONE_PREFIXES = ("M", "H")
+MILESTONE_PREFIXES = ("M",)
 
 # Where references are scanned from: every top-level *.md (the spec included) plus
 # these directories, walked for docs and source. Reviews are excluded because an

@@ -1,8 +1,10 @@
 # M10 intended-phone/DJI marker bench — 2026-08-05
 
 This is the sanitized evidence record for M10's physical positive-path bench. The source take,
-generated marker assets, standalone page, layout image and analysis artifacts remain local and
-untracked. No audio is committed.
+layout image and analysis artifacts remain local and untracked at
+`/data/dnd-audio/samples-marker-bench/` on the target host. Generated marker assets are
+reproducible from the frozen recipe and are not retained beside the repository. No audio is
+committed.
 
 ## Capture and evidence handling
 

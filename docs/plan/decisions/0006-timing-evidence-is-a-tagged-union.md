@@ -94,5 +94,5 @@ timecode** (here) from placement **on a timeline** (M2).
   charter now says so.
 - A fixture whose timecode does not land on a whole sample is not expressible as ground
   truth in M1 — the generator refuses to write one rather than rounding silently.
-- If H1 shows DJI writes some fourth kind of timing evidence, it becomes a fourth
+- If a future DJI format writes some fourth kind of timing evidence, it becomes a fourth
   variant rather than a lossy conversion into one of these three (OQ-001, OQ-005).
