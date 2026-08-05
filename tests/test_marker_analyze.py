@@ -640,3 +640,117 @@ class TestSearchedIntervals:
 
         anchors = [(item.track_id, item.anchor_sample) for item in analysis.occurrences]
         assert len(anchors) == len(set(anchors)), "an occurrence was reported twice"
+
+
+class TestTheDefaultWindowsAreBounded:
+    """`--start-window-s`/`--end-window-s` decide what is read when no event log does.
+
+    The canonical fixture is 10.5 s long and the marker sits at :data:`FIRST`, 3.96 s in.
+    A one-second window at each end therefore cannot reach it and a five-second opening
+    can, which is what makes these assertions about the *search* rather than about the
+    detector.
+    """
+
+    def test_a_window_too_narrow_to_reach_the_marker_finds_nothing(
+        self, marked_session: Path
+    ) -> None:
+        result = run_marker_analyze(
+            marked_session, marker=SPEC.name, start_window_seconds=1, end_window_seconds=1
+        )
+        assert result.exit_code is ExitCode.OK, "an unsearched marker is not a failure"
+        assert analysis_of(marked_session).occurrences == []
+
+    def test_a_wide_enough_opening_reaches_it(self, marked_session: Path) -> None:
+        """And finds exactly what the unbounded default does — no more, no fewer."""
+        run_marker_analyze(marked_session, marker=SPEC.name)
+        whole = {
+            (item.track_id, item.anchor_sample) for item in analysis_of(marked_session).occurrences
+        }
+        assert whole, "the fixture itself is broken"
+
+        run_marker_analyze(
+            marked_session, marker=SPEC.name, start_window_seconds=5, end_window_seconds=1
+        )
+        found = {
+            (item.track_id, item.anchor_sample) for item in analysis_of(marked_session).occurrences
+        }
+        assert found == whole
+        assert all(anchor == FIRST + SPEC.anchor_sample + DELAYS[track] for track, anchor in found)
+
+    def test_the_two_windows_stay_disjoint_rather_than_scanning_everything(
+        self, marked_session: Path
+    ) -> None:
+        run_marker_analyze(
+            marked_session, marker=SPEC.name, start_window_seconds=1, end_window_seconds=1
+        )
+        intervals = analysis_of(marked_session).identity.searched_intervals
+        assert len(intervals) == 2
+        assert intervals[0][1] < intervals[1][0], "the ends met in the middle"
+
+    def test_an_event_log_is_not_widened_by_them(
+        self, marked_session: Path, tmp_path: Path
+    ) -> None:
+        """A log states its own intervals; the window flags must not reach past them."""
+        path = tmp_path / "events.yaml"
+        path.write_text(
+            yaml.safe_dump(
+                {
+                    "schema_version": 1,
+                    "session_id": "session-01",
+                    "events": [
+                        {
+                            "role": "start",
+                            "marker_name": SPEC.name,
+                            "start_ms": 3_500,
+                            "end_ms": 4_500,
+                            "playback_order": 0,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        narrow = run_marker_analyze(
+            marked_session,
+            marker=SPEC.name,
+            event_log=path,
+            start_window_seconds=1,
+            end_window_seconds=1,
+        )
+        logged = analysis_of(marked_session).identity.searched_intervals
+        assert narrow.exit_code is ExitCode.OK
+
+        run_marker_analyze(
+            marked_session,
+            marker=SPEC.name,
+            event_log=path,
+            start_window_seconds=600,
+            end_window_seconds=600,
+        )
+        assert analysis_of(marked_session).identity.searched_intervals == logged
+
+    def test_a_zero_length_window_is_refused_rather_than_searched(
+        self, marked_session: Path
+    ) -> None:
+        """Otherwise it would report `marker_not_found` without ever having looked."""
+        result = run_marker_analyze(marked_session, marker=SPEC.name, start_window_seconds=0)
+        assert result.exit_code is ExitCode.FATAL
+        assert [error.code for error in result.report.errors] == ["invalid_search_window"]
+
+    def test_the_command_rejects_a_zero_before_the_session_is_opened(
+        self, marked_session: Path
+    ) -> None:
+        invoked = runner.invoke(
+            app,
+            [
+                "marker",
+                "analyze",
+                str(marked_session),
+                "--marker",
+                SPEC.name,
+                "--end-window-s",
+                "0",
+            ],
+        )
+        assert invoked.exit_code != 0
+        assert not (marked_session / MARKER_REPORT_RELATIVE_PATH).exists()

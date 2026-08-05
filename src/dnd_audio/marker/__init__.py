@@ -36,6 +36,7 @@ from typing import Final
 
 __all__ = [
     "ANALYSIS_RELATIVE_PATH",
+    "DEFAULT_WINDOW_SECONDS",
     "DETECTOR_SEMANTICS_VERSION",
     "MARKER_ANALYSIS_SEMANTICS_VERSION",
     "MARKER_MANIFEST_FILENAME",
@@ -61,6 +62,11 @@ MARKER_ANALYSIS_SEMANTICS_VERSION: Final = 1
 #: marker built at any other rate would need resampling to correlate, and resampling is the
 #: one operation that would put a second, inexact implementation on the path.
 MARKER_SAMPLE_RATE: Final = 48000
+
+#: How much of each end of the session `marker analyze` searches when no event log says
+#: otherwise. It lives here rather than in `runner` so the CLI can name it as an option
+#: default without importing NumPy to draw its `--help`.
+DEFAULT_WINDOW_SECONDS: Final = 120
 
 #: Published beside the WAV and the page, last, as the completeness marker (ADR-0041).
 MARKER_MANIFEST_FILENAME: Final = "marker-manifest.json"

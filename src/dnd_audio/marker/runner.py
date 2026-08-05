@@ -29,7 +29,6 @@ import datetime as dt
 from dataclasses import dataclass, field
 from fractions import Fraction
 from pathlib import Path
-from typing import Final
 
 import numpy
 import scipy
@@ -41,6 +40,7 @@ from dnd_audio.determinism import sha256_bytes, to_milliseconds, write_json_atom
 from dnd_audio.errors import DndAudioError, ExitCode
 from dnd_audio.marker import (
     ANALYSIS_RELATIVE_PATH,
+    DEFAULT_WINDOW_SECONDS,
     DETECTOR_SEMANTICS_VERSION,
     MARKER_ANALYSIS_SEMANTICS_VERSION,
     MARKER_REPORT_RELATIVE_PATH,
@@ -77,9 +77,6 @@ from dnd_audio.timeline.reader import TrackReader
 from dnd_audio.timeline.syncqa import offset_floor_samples
 
 __all__ = ["MarkerAnalysisResult", "marker_analyze_outputs", "run_marker_analyze"]
-
-#: Default half-open window at each end of the session when no event log is supplied.
-DEFAULT_WINDOW_SECONDS: Final = 120
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,10 +144,20 @@ def _canonical_intervals(
     return merged
 
 
-def _default_windows(duration: int) -> list[tuple[int, int]]:
-    """A window at each end of the session, when no event log says otherwise."""
-    span = min(DEFAULT_WINDOW_SECONDS * MARKER_SAMPLE_RATE, max(duration // 2, 1))
-    return [(0, span), (max(0, duration - span), duration)]
+def _default_windows(
+    duration: int, *, start_seconds: int, end_seconds: int
+) -> list[tuple[int, int]]:
+    """A window at each end of the session, when no event log says otherwise.
+
+    Each span is clamped to half the session so the two windows cannot swallow the middle and
+    turn the default into an accidental whole-session scan — the charter wants that explicit.
+    On a session shorter than twice the requested span they meet in the middle, and
+    :func:`_canonical_intervals` then merges them into one, which is why
+    :func:`_assign_roles` checks the *default windows* rather than counting occurrences.
+    """
+    opening = min(start_seconds * MARKER_SAMPLE_RATE, max(duration // 2, 1))
+    closing = min(end_seconds * MARKER_SAMPLE_RATE, max(duration // 2, 1))
+    return [(0, opening), (max(0, duration - closing), duration)]
 
 
 def _source_coordinate(track: TimelineTrack, sample: int) -> tuple[str | None, int | None]:
@@ -457,9 +464,15 @@ def run_marker_analyze(
     marker: str | None = None,
     reference_track: str | None = None,
     event_log: Path | None = None,
+    start_window_seconds: int = DEFAULT_WINDOW_SECONDS,
+    end_window_seconds: int = DEFAULT_WINDOW_SECONDS,
     thresholds: DetectorThresholds | None = None,
 ) -> MarkerAnalysisResult:
-    """Find the marker on every track and write the analysis and the report."""
+    """Find the marker on every track and write the analysis and the report.
+
+    The two window spans apply only when no event log is supplied: a log states its own
+    intervals, and silently widening them would search audio the operator did not ask about.
+    """
     started = dt.datetime.now(dt.UTC)
     settings = thresholds if thresholds is not None else DetectorThresholds()
     accumulator = _Accumulator()
@@ -502,6 +515,7 @@ def run_marker_analyze(
             log,
             reference_track,
             settings,
+            (start_window_seconds, end_window_seconds),
             accumulator,
         )
         verify_unchanged(session_dir, roots, before)
@@ -559,9 +573,18 @@ def _analyze(
     log: MarkerEventLog | None,
     configured_reference: str | None,
     settings: DetectorThresholds,
+    windows_seconds: tuple[int, int],
     accumulator: _Accumulator,
 ) -> SyncMarkerAnalysis:
     """Detect, group, compare. Every read is bounded; nothing is written here."""
+    if min(windows_seconds) < 1:
+        message = (
+            f"--start-window-s and --end-window-s must each be at least 1 second, got "
+            f"{windows_seconds[0]} and {windows_seconds[1]}. A zero-length window would "
+            f"report `marker_not_found` while never having looked."
+        )
+        raise DndAudioError(message, code="invalid_search_window")
+
     timeline = artifacts.timeline
     duration = timeline.duration_samples
     windows = (
@@ -569,7 +592,9 @@ def _analyze(
         if log is not None
         else []
     )
-    defaults = _default_windows(duration)
+    defaults = _default_windows(
+        duration, start_seconds=windows_seconds[0], end_seconds=windows_seconds[1]
+    )
     intervals = _canonical_intervals(
         windows or defaults, duration=duration, halo=spec.total_samples
     )

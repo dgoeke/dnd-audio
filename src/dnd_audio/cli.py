@@ -47,6 +47,11 @@ from dnd_audio.determinism import canonical_json
 from dnd_audio.doctor import CheckStatus, overall_status, run_checks
 from dnd_audio.errors import DndAudioError, ExitCode
 from dnd_audio.inspection.runner import InspectionResult, run_inspect
+
+# One constant, for an option default that has to exist when Typer builds `--help`. The
+# marker package's `__init__` imports nothing heavier than `typing`; the runner that would
+# pull NumPy in is imported inside `marker_analyze`.
+from dnd_audio.marker import DEFAULT_WINDOW_SECONDS
 from dnd_audio.mix.runner import MixResult, run_mix
 from dnd_audio.models import (
     QWEN3_ALIGNER,
@@ -852,6 +857,24 @@ def marker_analyze(
             "and no drift classification is possible.",
         ),
     ] = None,
+    start_window_s: Annotated[
+        int,
+        typer.Option(
+            "--start-window-s",
+            min=1,
+            help="How much of the session's opening to search when no event log is given. "
+            "Clamped to half the session, so the two windows never merge into a whole-"
+            "session scan by accident.",
+        ),
+    ] = DEFAULT_WINDOW_SECONDS,
+    end_window_s: Annotated[
+        int,
+        typer.Option(
+            "--end-window-s",
+            min=1,
+            help="How much of the session's close to search when no event log is given.",
+        ),
+    ] = DEFAULT_WINDOW_SECONDS,
 ) -> None:
     """Find the marker on every track and write the analysis and the report.
 
@@ -871,6 +894,8 @@ def marker_analyze(
         marker=marker,
         reference_track=reference_track,
         event_log=event_log,
+        start_window_seconds=start_window_s,
+        end_window_seconds=end_window_s,
     )
     _summarize_marker(result)
     if result.exit_code is not ExitCode.OK:
