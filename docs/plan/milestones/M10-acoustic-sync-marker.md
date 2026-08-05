@@ -624,13 +624,49 @@ naming precisely what was unlabelled and why.
 
 ### Phase B — freeze against the evidence, then close
 
-1. Score every take with `dnd-audio marker analyze` — peak sharpness and ambiguity per track,
-   clipping at the nearest lav, decisiveness at the farthest, false positives on the
-   speech/media block, repeatability of same-position lag, and the moved-phone diagnostic
-   enumerated but **not** called drift.
+1. Score every take with `dnd-audio marker analyze`, once per candidate:
+
+   ```bash
+   dnd-audio marker analyze <session> --marker cand-a --start-window-s 1200 --end-window-s 1200
+   ```
+
+   **There is no event log (A5), so the take's own structure is the record.** The operator
+   played a fixed order and spoke a slate before each block; the four blocks are, in order:
+   nine opening plays (three of each candidate), a ten-minute unattended gap, three closing
+   plays (one of each), then two moved-phone plays of `cand-a` only. Sorting a candidate's
+   occurrences by `anchor_sample` therefore identifies which block each belongs to. **Listen to
+   a track to confirm the slates before trusting that mapping**, and if the counts disagree with
+   the structure, that is a finding to record rather than a discrepancy to reconcile.
+
+   Each run overwrites both artifacts, so copy each candidate's pair aside before the next.
+
+   What to read out of them: per-track `score_permille` and `runner_up_permille` at the nearest
+   and farthest seats, `clipped` on the nearest, `weak` on the farthest, `gap_errors_samples`
+   (the direct OQ-029 measurement — how much the phone's playback stretched), spread of
+   `relative_lag_samples` across the three same-position repeats, and the timecode comparison.
+
+   `marker_roles_unassigned` will warn on every run. **That is expected**, not a failure: the
+   start/end pair is named by hand from the block structure, and the start-to-end differential
+   arrival is arithmetic over two groups' per-track lags. Compute it; do not reach for
+   `--event-log` to make the warning go away. The moved-phone plays must be enumerated and
+   **must not** be called drift.
+
+   The false-positive half is already discharged (A4) — do not expect a speech/media block in
+   the take, and do not treat its absence as missing evidence.
 2. Select v1. **ADR-0042** freezes its exact integer PCM sequence by SHA-256, its anchor,
    the detector thresholds and tolerances, and the human-readable recipe. Add the `v1` entry
    to `MARKER_SPECS`, so `marker build OUTDIR` resolves; the candidate names stay as history.
+
+   **The trap here is fitting the thresholds to the observations.** Every constant in
+   `DetectorThresholds` currently cites OQ-025 or OQ-029, and the temptation on seeing one
+   bench is to set each to whatever the take produced. Two guards against that: the
+   false-positive sweep says the score threshold may fall as far as **100 permille** before
+   real speech starts assembling sequences (`../../fixtures/2026-08-05-marker-false-positive-sweep.md`),
+   so a weak farthest seat is a reason to *lower the threshold*, not to reject a candidate; and
+   a threshold set exactly at the observed value has no margin, so state the margin and its
+   reasoning in the ADR rather than the observation alone. If the evidence argues for changing
+   the detector's *shape* rather than its constants, say so — that is one of the two outcomes
+   this mid-milestone bench exists to surface before the schemas freeze.
 3. Re-baseline whatever the evidence moves. The synthetic regression battery is
    **parametrized over every candidate spec** precisely so that a different winner is a
    parameter and not a re-baseline; only a change to the candidate *design space* or to the
