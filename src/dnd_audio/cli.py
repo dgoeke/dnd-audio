@@ -619,17 +619,26 @@ def _reject_report_inside_raw(report_path: Path) -> None:
             refused.
     """
     from dnd_audio.config import load_session_config
+    from dnd_audio.errors import DiscoveryError
     from dnd_audio.raw_guard import raw_roots, reject_outputs_inside_raw
 
     for session_dir in _sessions_above(report_path):
         try:
             config = load_session_config(session_dir / "session.yaml")
-        except DndAudioError:
-            # An unreadable `session.yaml` says nothing about where the report may go, and
-            # failing here would make an unrelated broken session block every archive
-            # command run anywhere beneath it. The roots of a session we cannot parse are
-            # unknown, not permissive — but the walk continues to any session above it.
-            continue
+        except DndAudioError as exc:
+            # **Refused, not skipped.** The first version of this guard wrote `continue`
+            # under a comment claiming unknown roots are "not permissive", which is exactly
+            # what continuing makes them: a session whose `session.yaml` does not parse has
+            # source roots this process cannot enumerate, and the report path is *inside*
+            # that session — so writing there might land in `raw/`. The only session that
+            # reaches this branch is one containing the report, so refusing blocks nothing
+            # unrelated. Found by M7a's third code review, in the fix for the second's P0.
+            message = (
+                f"the report would be written inside a session whose session.yaml cannot "
+                f"be read, so its source directories are unknown and nothing may be "
+                f"written under them (INV-01): {exc}"
+            )
+            raise DiscoveryError(message, code="output_inside_raw") from exc
         reject_outputs_inside_raw(
             session_dir, config, raw_roots(config), {"archive report": report_path}
         )

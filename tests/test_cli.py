@@ -226,6 +226,30 @@ class TestTheArchiveCommandsRunAndAreGuarded:
         assert result.exit_code == ExitCode.FATAL
         assert recording.read_bytes() == original
 
+    def test_an_unreadable_session_yaml_does_not_open_the_guard(
+        self, tmp_path: Path, fake_bucket: object
+    ) -> None:
+        """The guard's own fallback failed open, under a comment saying it did not.
+
+        `_reject_report_inside_raw` walked every session above the report path and wrote
+        `continue` when one would not parse — so corrupting a `session.yaml` was enough to
+        make `--report SESSION/raw/tx-a/DJI_01.WAV` overwrite the recording again. The only
+        session that reaches that branch is one *containing* the report, which is precisely
+        when its roots must be known. Found by M7a's third code review.
+        """
+        session = _tiny_session(tmp_path)
+        recording = session / "raw" / "tx-a" / "DJI_01.WAV"
+        original = recording.read_bytes()
+        (session / "session.yaml").write_text("{{ not: valid: yaml", encoding="utf-8")
+
+        result = runner.invoke(
+            app,
+            ["archive", "verify", "--session-id", "any", "--report", str(recording)],
+        )
+
+        assert result.exit_code == ExitCode.FATAL
+        assert recording.read_bytes() == original
+
     def test_restore_refuses_a_destination_inside_raw_through_the_command(
         self, tmp_path: Path, fake_bucket: object
     ) -> None:

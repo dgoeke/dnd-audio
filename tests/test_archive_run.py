@@ -24,6 +24,7 @@ from dnd_audio.archive.report import (
     VerificationState,
 )
 from dnd_audio.archive.runner import (
+    _RESTORE_STAGING_PREFIX,
     manifest_key,
     run_list,
     run_restore,
@@ -33,7 +34,7 @@ from dnd_audio.archive.runner import (
 )
 from dnd_audio.archive.sourceset import build_source_set
 from dnd_audio.config import load_session_config
-from dnd_audio.determinism import sha256_file
+from dnd_audio.determinism import sha256_bytes, sha256_file
 from dnd_audio.errors import ExitCode
 from dnd_audio.fixtures import FixtureTruth
 from dnd_audio.inspection.runner import run_inspect
@@ -727,6 +728,41 @@ class TestList:
         assert found == []
         assert "half-written" in " ".join(report.notes)
 
+    def test_a_large_unparseable_object_is_not_a_session(self, storage: FakeArchiveStorage) -> None:
+        """The size floor accepts any sufficiently large garbage.
+
+        `list` is read before an operator decides a recovery is possible, so "committed" has
+        to mean a manifest was parsed — not that an object of about the right length exists.
+        Found by M7a's third code review.
+        """
+        storage.objects[manifest_key("plausible-size")] = b"x" * 4096
+        found, report = run_list(storage=storage)
+        assert found == []
+        assert "plausible-size" in " ".join(report.notes)
+
+    def test_a_manifest_describing_another_session_is_not_listed(
+        self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path
+    ) -> None:
+        """A valid manifest at the wrong key names a session that was never archived."""
+        run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+        real = storage.objects[manifest_key(session_id_of(inspected))]
+        storage.objects[manifest_key("impostor")] = real
+
+        found, report = run_list(storage=storage)
+        assert found == [session_id_of(inspected)]
+        assert "impostor" in " ".join(report.notes)
+
+    def test_it_reports_the_identity_of_each_manifest(
+        self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path
+    ) -> None:
+        """The charter asks `list` for manifest identity, which needs the bytes."""
+        run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+        session_id = session_id_of(inspected)
+        digest = sha256_bytes(storage.objects[manifest_key(session_id)])
+
+        _, report = run_list(storage=storage)
+        assert digest[:12] in " ".join(report.notes)
+
     def test_a_real_manifest_is_still_listed(
         self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path
     ) -> None:
@@ -756,6 +792,72 @@ class TestVerify:
         notes = " ".join(run_verify(session_id_of(inspected), storage=storage).notes)
         assert "$0.01/GiB" in notes
         assert "waived" in notes
+
+    def test_another_sessions_manifest_at_this_key_is_refused(
+        self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path
+    ) -> None:
+        """A recovery reading correct bytes for the wrong session looks like a success.
+
+        Only schema validity was checked, so a valid manifest for session B placed at
+        session A's key made `verify A` and `restore A` operate on B — and every digest
+        matched, because they were B's digests. Found by M7a's third code review.
+        """
+        run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+        real = storage.objects[manifest_key(session_id_of(inspected))]
+        storage.objects[manifest_key("a-different-session")] = real
+
+        report = run_verify("a-different-session", storage=storage)
+        assert report.status is OperationStatus.FAILED
+        assert report.errors[0].code == "archive_manifest_session_mismatch"
+
+    def test_a_manifest_pointing_outside_its_own_prefix_is_refused(
+        self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path
+    ) -> None:
+        """The other half: the right session id, entries aimed somewhere else."""
+        import json
+
+        from dnd_audio.determinism import canonical_json
+
+        run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+        session_id = session_id_of(inspected)
+        document = json.loads(storage.objects[manifest_key(session_id)])
+        document["entries"][0]["object_key"] = "sessions/archive-v1/elsewhere/objects/x.zst"
+        storage.objects[manifest_key(session_id)] = canonical_json(document).encode("utf-8")
+
+        report = run_verify(session_id, storage=storage)
+        assert report.status is OperationStatus.FAILED
+        assert report.errors[0].code == "archive_manifest_foreign_object"
+
+    def test_bytes_after_the_frame_are_not_accepted(
+        self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path
+    ) -> None:
+        """An object that is a valid frame plus anything else is refused.
+
+        M7a's third code review argued this could pass: the decoder stops at the end of one
+        frame (`read_across_frames=False`), so the compressed digest would cover only the
+        bytes it pulled. Measured, it does not — libzstd reads ahead far enough to meet the
+        trailing bytes and rejects them as an unknown frame descriptor, so the refusal
+        arrives one layer lower than expected.
+
+        The readback drains to EOF anyway, and the assertion here is on the *property* —
+        refused, not accepted — rather than on which layer refuses. The drain costs one
+        `read` returning empty on every object this project actually writes, and it makes
+        "the whole object was downloaded and checked" true by construction instead of true
+        because of a decoder's buffering behaviour.
+        """
+        run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+        session_id = session_id_of(inspected)
+        stored = _manifest_from(storage, session_id)
+        target = stored.entries[0].object_key
+        storage.objects[target] = storage.objects[target] + b"appended after the frame"
+
+        report = run_verify(session_id, storage=storage)
+        assert report.status is not OperationStatus.COMPLETE
+        assert report.verification is not VerificationState.VERIFIED
+        assert any(
+            error.code in ("archive_object_conflict", "archive_frame_unreadable")
+            for error in report.errors
+        ), [error.code for error in report.errors]
 
     def test_a_corrupt_object_is_caught_and_named(
         self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path
@@ -982,7 +1084,14 @@ class TestRestoreRefusals:
         staged = tmp_path / "one.zst"
         fact = compress_file(source, staged)
 
-        key = f"sessions/archive-v1/x/objects/one.wav.{sha256_bytes(payload)}.zst"
+        # The canonical key for *this* session. The first version of this test invented one
+        # under a different session's prefix, which happened to work and would have codified
+        # a manifest pointing at another session's objects as acceptable. Caught by M7a's
+        # third code review, which found the redirection hole and this fixture blessing it.
+        key = (
+            f"sessions/archive-v1/{encode_component(session_id)}/objects/"
+            f"{encode_component('raw/tx-a/one.wav')}.{sha256_bytes(payload)}.zst"
+        )
         storage.objects[key] = staged.read_bytes()
         manifest = ArchiveManifest(
             session_id=session_id,
@@ -1078,6 +1187,40 @@ class TestRestoreIsTransactional:
         assert all(item.outcome is ArchiveObjectOutcome.SKIPPED for item in report.objects), [
             item.outcome for item in report.objects
         ]
+
+    def test_a_leftover_staging_tree_is_refused_rather_than_reused(
+        self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path, tmp_path: Path
+    ) -> None:
+        """Two restores of one session under one parent shared a staging tree.
+
+        The name derives from the session and the destination's parent, and the tree was
+        blindly `rmtree`-d at the start — so a concurrent restore could delete the other's
+        half-written files, or a track-scoped run could publish what a whole-session run had
+        put there. Refusing turns a corruption into an error, and makes a tree left by a
+        hard kill something the operator is told about. Found by M7a's third code review.
+        """
+        session_id = session_id_of(inspected)
+        run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+
+        destination = tmp_path / "recovered"
+        destination.mkdir()
+        # Whatever the staging name is, it is deterministic — so a first restore reveals it.
+        first = run_restore(session_id, destination, storage=storage)
+        assert first.status is OperationStatus.COMPLETE
+        staged_name = (
+            _RESTORE_STAGING_PREFIX
+            + sha256_bytes(encode_component(session_id).encode("ascii"))[:32]
+        )
+        (tmp_path / staged_name).mkdir()
+
+        second = tmp_path / "recovered-again"
+        second.mkdir()
+        report = run_restore(session_id, second, storage=storage)
+
+        assert report.status is OperationStatus.FAILED
+        assert report.errors[0].code == "archive_restore_in_progress"
+        assert list(second.iterdir()) == []
+        assert (tmp_path / staged_name).is_dir(), "the other run's tree must survive"
 
     def test_a_failed_restore_can_simply_be_retried(
         self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path, tmp_path: Path
@@ -1212,6 +1355,60 @@ class TestDiskExhaustion:
         assert list(destination.iterdir()) == []
         assert not list(tmp_path.glob(".dnd-audio-restore-*"))
 
+    def test_a_real_oserror_does_not_leak_the_absolute_path(
+        self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path, tmp_path: Path
+    ) -> None:
+        """A real `ENOSPC` names the file it could not write, and the file is absolute.
+
+        The destination messages were written carefully; this is the leak nobody writes.
+        `_as_error` passed `str(exc)` through, and the ENOSPC tests above inject an
+        exception with no `filename`, so they could not see it. Found by M7a's third review.
+        """
+        import dnd_audio.archive.runner as runner_module
+
+        doomed = inspected.session_dir / "work" / "archive" / "staged.zst"
+
+        def failing(*args: object, **kwargs: object) -> None:
+            raise OSError(errno.ENOSPC, "No space left on device", str(doomed))
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(runner_module, "compress_file", failing)
+            report = run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+
+        serialized = report.model_dump_json()
+        assert "No space left on device" in serialized, "the diagnosis must survive"
+        assert str(inspected.session_dir) not in serialized
+        assert "staged.zst" in serialized, "the actionable half — which file — must remain"
+
+    def test_a_failed_upload_names_the_object_that_failed_and_the_ones_skipped(
+        self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path
+    ) -> None:
+        """The report carried the successful prefix and nothing else.
+
+        So the object that actually failed appeared only in `errors`, and the ones never
+        attempted appeared nowhere — leaving the scope of a partial upload to be worked out
+        by subtracting two lists. Found by M7a's third code review.
+        """
+        config = load_session_config(inspected.session_dir / "session.yaml")
+        sources = build_source_set(inspected.session_dir, config)
+        from dnd_audio.archive.sourceset import object_key
+
+        storage.arm(
+            StorageFault(
+                key=object_key(config.session_id, sources.entries[1]),
+                operation="put",
+                kind="error",
+            )
+        )
+        report = run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+
+        by_outcome = {item.outcome for item in report.objects}
+        assert ArchiveObjectOutcome.FAILED in by_outcome
+        assert ArchiveObjectOutcome.SKIPPED in by_outcome
+        assert len(report.objects) == len(sources.entries), (
+            "every entry in scope must have an outcome, not just the ones that worked"
+        )
+
     def test_a_report_still_describes_the_failure(
         self,
         inspected: FixtureTruth,
@@ -1236,23 +1433,33 @@ def _manifest_from(storage: FakeArchiveStorage, session_id: str) -> ArchiveManif
 
 
 def _minimal_manifest_bytes(session_id: str) -> bytes:
-    """A committed manifest with one plausible entry, for listing tests."""
+    """A committed manifest with one plausible entry, for listing tests.
+
+    The object key is the **canonical** one for this session. It used to be the literal
+    `"k"`, which was harmless until a manifest was required to point at its own session's
+    prefix — and a fixture that hands out cross-session keys is how that requirement would
+    have been quietly weakened back out again.
+    """
     from dnd_audio.archive.codec import ARCHIVE_CODEC_V1
     from dnd_audio.determinism import canonical_json
 
+    path = encode_component("raw/tx-a/one.wav")
     document = ArchiveManifest(
         session_id=session_id,
         codec=ARCHIVE_CODEC_V1.describe(),
         entries=[
             ArchiveManifestEntry(
-                path=encode_component("raw/tx-a/one.wav"),
+                path=path,
                 path_text="raw/tx-a/one.wav",
                 track_id="tx-a",
                 size_bytes=1,
                 sha256="0" * 64,
                 compressed_size_bytes=1,
                 compressed_sha256="1" * 64,
-                object_key="k",
+                object_key=(
+                    f"sessions/archive-v1/{encode_component(session_id)}/objects/"
+                    f"{path}.{'0' * 64}.zst"
+                ),
             )
         ],
     )

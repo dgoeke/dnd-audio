@@ -196,8 +196,11 @@ Model downloads are allowed during an explicit setup/fetch step, but session aud
 must always be passed as local paths or arrays and must never be sent to a URL or API
 **by any processing or model path**. The `archive` commands added in M7a are the sole
 exception and are not a processing path: they upload byte-exact compressed copies of
-immutable source files to owner-controlled private storage and pass audio to no model,
-service, or third party. After models are installed, production processing must support
+immutable source files to a private bucket the owner controls, and pass audio to no model
+or service that reads, decodes, or derives anything from it. The storage provider is a
+third party operating that bucket — saying otherwise would be comfortable and untrue — and
+what the exception turns on is that it stores opaque compressed bytes and processes
+none of them. After models are installed, production processing must support
 Hugging Face offline mode. Keep model caches outside session directories and out of
 version control.
 

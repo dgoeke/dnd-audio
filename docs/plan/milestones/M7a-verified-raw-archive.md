@@ -300,14 +300,23 @@ end, so a failure leaves the destination untouched and the retry is just a retry
 **Then the verify phase, which had been skipped, was run — and it reopened the milestone.**
 See `docs/plan/reviews/M7a-code-20260804-2109.md`.
 
-- `./scripts/gate.sh` at the reopened HEAD — **8 checks, 2 646 passed, zero skips**, ~42 s.
+- `./scripts/gate.sh` at the reopened HEAD — **8 checks, 2 656 passed, zero skips**, ~46 s.
   (The number recorded above, 2 640, was never produced by this tree: the close commit's
   HEAD gives 2 629. That mismatch is what first suggested the final gate run had not been
   the one at HEAD.)
 - A second `./scripts/codex-review.sh code M7a main`, a fresh-context reviewer agent, and
   the verifier's own pass — **two P0, six P1/P2, two deferred, one rejected.**
-- Host smoke against the real Cold Storage bucket, re-run during verification —
-  **9 passed in 181 s**, including forced multipart and remote-only restore.
+- Host smoke against the real Cold Storage bucket, re-run twice during verification —
+  **9 passed in 181 s**, then 9 passed again after the `status` reordering, including
+  forced multipart and remote-only restore.
+
+  **It has not been run since the third review's fixes**, at the operator's instruction to
+  stop spending real uploads. That matters, because those fixes touch code the smoke is the
+  only executed proof of: `list` now downloads and parses each manifest, `_read_remote_manifest`
+  checks session ownership, the readback drains to EOF, and restore refuses a leftover staging
+  tree. All are covered against the fake. **Run `DND_AUDIO_ARCHIVE_PROFILE=… uv run pytest -m
+  host_smoke tests/test_archive_smoke.py` once before trusting this against a real session** —
+  it is the one completion-gate criterion whose proof predates the final code.
 - **Two more mutation checks**, both on the new CLI tests: deleting the report-path INV-01
   guard turns two red, and reverting the protected-roots wiring turns the third red. The
   retry fix was checked the same way — with the handle opened outside the thunk, the stored
@@ -346,6 +355,17 @@ works — and the finding that mattered was ours, not the provider's. See the no
   reads fixed-size chunks — bounded by inspection, and exercised for real by the host smoke —
   but that specific boundary has no executed proof over production code. The other four
   boundaries do.
+- **`multipart_part_bytes` may be configured up to 5 GB**, and a part is held in memory as
+  `bytes` so a retry can resend it. The default is 64 MiB and the ceiling is the provider's
+  single-PUT limit rather than anything this host can afford; on a UMA machine `systemd-oomd`
+  is watching. Worth lowering the configurable maximum to something a session can actually
+  survive. Raised by M7a's third code review alongside the point above.
+- **`upload` re-verifies the source set before the manifest PUT, not after it.** The third
+  review asked for one more check after the commit. Rejected on cost — `verify_unchanged`
+  re-walks and re-hashes the whole session, so closing a window the length of a 2 KB PUT
+  would double the hashing of every upload — but recorded because the charter's step 8 says
+  "before returning" and the implementation reads "before committing". If a cheap
+  incremental source check ever exists, this is where it goes.
 
 ### Notes for future implementors
 

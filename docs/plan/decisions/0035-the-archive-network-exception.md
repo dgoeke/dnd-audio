@@ -49,6 +49,16 @@ owner-controlled private cold-storage bucket, and may read them back.** Nothing 
 Not outputs, not transcripts, not reports — publication is M7b's and does not exist.
 Never invoked by `process`. Never on a processing path.
 
+**"Owner-controlled" means the bucket, not the infrastructure.** DigitalOcean operates the
+storage; it is a third party, and an earlier wording of INV-06 that contrasted this bucket
+with "a third-party service" was flattering and false. What the exception actually turns on
+is narrower and defensible: the destination stores opaque compressed bytes, decodes none of
+them, derives nothing from them, and returns them unchanged — which is why a full readback
+can prove the archive at all. The prohibition INV-06 exists to enforce is third-party
+*processing* of session audio, and that is untouched. Named here because a rule stated more
+broadly than it is true gets quietly ignored the first time it is inconvenient. Found by
+M7a's third code review.
+
 Every other command — `inspect`, `ingest`, `activity`, `mix`, `transcribe`, `render`,
 `process`, `doctor` — stays network-denied, **and that is proved behaviourally rather
 than asserted.** Each is invoked as a subprocess carrying a trap on its `PYTHONPATH`

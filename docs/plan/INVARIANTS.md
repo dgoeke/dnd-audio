@@ -102,7 +102,10 @@ archive` subcommand may send byte-exact compressed copies of a session's *immuta
 source files* to the configured owner-controlled private cold-storage bucket, and may
 read them back. That is off-site backup against disk loss. It is not the cloud-ASR
 prohibition this invariant exists to prevent: nothing at the far end processes the audio,
-the destination is the owner's own private bucket rather than a third-party service, and
+the destination is a private bucket the owner controls — DigitalOcean operates the storage,
+so this is not owner-*operated* infrastructure and the wording should not pretend otherwise;
+what the exception turns on is that nothing there reads, decodes, or derives anything from
+the audio, which is the prohibition INV-06 exists to enforce — and
 no output, transcript, or derived artifact is published by it — publication is M7b's and
 does not exist yet. The exception carries no deletion authority: the application exposes
 no `DeleteObject` operation and calls none, `AbortMultipartUpload` excepted.

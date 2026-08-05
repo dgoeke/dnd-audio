@@ -15,7 +15,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
   decisions.
 - **Branch:** `main`
 - **Last closed milestone:** M7a — verified private raw archive
-- **Gate status at HEAD:** passes, zero skips (8 checks, 2 646 tests); the same default suite
+- **Gate status at HEAD:** passes, zero skips (8 checks, 2 656 tests); the same default suite
   passes from `.venv-rocm` — **re-sync that environment after any dependency change**, which
   M7a's first attempt there proved by failing five ways on two missing packages.
 - **Blocked on:** **real recordings, and nothing else.** Every remaining open question that

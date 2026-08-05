@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 import shutil
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
@@ -49,6 +50,7 @@ from dnd_audio.archive import (
 )
 from dnd_audio.archive.codec import (
     ARCHIVE_CODEC_V1,
+    CHUNK_BYTES,
     compress_bound,
     compress_file,
     decompress_and_measure,
@@ -154,7 +156,14 @@ def run_upload(
         report and a nonzero exit, not an exception.
     """
     started = _now()
-    config = load_session_config(session_dir / "session.yaml")
+    # Inside the reporting boundary, like the lock. An unreadable `session.yaml` is an
+    # ordinary operator error — the wrong directory, a typo — and it raised straight out of
+    # here, so the command that INV-13 requires to leave a report left none. Found by M7a's
+    # third code review.
+    try:
+        config = load_session_config(session_dir / "session.yaml")
+    except Exception as exc:
+        return _failed(ArchiveOperation.UPLOAD, "(unknown)", exc, started, entries_in_scope=0)
     session_id = config.session_id
 
     sources: ArchiveSourceSet | None = None
@@ -252,21 +261,45 @@ def _upload_locked(
         shutil.rmtree(staging_root, ignore_errors=True)
         staging_root.mkdir(parents=True, exist_ok=True)
 
-        for entry in sources.entries:
-            staged = _compress_and_check(session_dir, entry, staging_root)
+        for position, entry in enumerate(sources.entries):
             try:
-                outcome = _publish(storage, session_id, entry, staged)
-                manifest_entries.append(_manifest_entry(session_id, entry, staged, document))
+                staged = _compress_and_check(session_dir, entry, staging_root)
+                try:
+                    outcome = _publish(storage, session_id, entry, staged)
+                    manifest_entries.append(_manifest_entry(session_id, entry, staged, document))
+                    results.append(
+                        ObjectResult(
+                            path=encode_component(entry.relative_path),
+                            outcome=outcome,
+                            size_bytes=entry.size_bytes,
+                            compressed_size_bytes=staged.compressed_size,
+                        )
+                    )
+                finally:
+                    staged.path.unlink(missing_ok=True)
+            except Exception as exc:
+                # The report used to carry the successful prefix and nothing else, so the
+                # object that actually failed appeared only in `errors` and the ones never
+                # attempted appeared nowhere — leaving an operator to work out the scope of
+                # a partial upload by subtracting two lists. The charter asks for per-object
+                # outcomes; these are the outcomes. Found by M7a's third code review.
                 results.append(
                     ObjectResult(
                         path=encode_component(entry.relative_path),
-                        outcome=outcome,
+                        outcome=ArchiveObjectOutcome.FAILED,
                         size_bytes=entry.size_bytes,
-                        compressed_size_bytes=staged.compressed_size,
+                        error=_as_error(exc, path=encode_component(entry.relative_path)),
                     )
                 )
-            finally:
-                staged.path.unlink(missing_ok=True)
+                results.extend(
+                    ObjectResult(
+                        path=encode_component(remaining.relative_path),
+                        outcome=ArchiveObjectOutcome.SKIPPED,
+                        size_bytes=remaining.size_bytes,
+                    )
+                    for remaining in sources.entries[position + 1 :]
+                )
+                raise
 
         # INV-01, before anything is committed. A source that moved during the upload means
         # the objects just written describe a set that no longer exists, and publishing a
@@ -280,11 +313,19 @@ def _upload_locked(
     except Exception as exc:
         _safe_verify(sources, config, results)
         shutil.rmtree(staging_root, ignore_errors=True)
+        # `partial` means objects reached the bucket, not merely that the report has rows.
+        # Once a failure also records the entry that failed and the ones never attempted,
+        # `results` is never empty — so keying off it would call a run that failed on its
+        # first file a partial success.
+        published = any(
+            item.outcome in (ArchiveObjectOutcome.UPLOADED, ArchiveObjectOutcome.ALREADY_PRESENT)
+            for item in results
+        )
         return ArchiveReport(
             operation=ArchiveOperation.UPLOAD,
-            status=OperationStatus.PARTIAL if results else OperationStatus.FAILED,
+            status=OperationStatus.PARTIAL if published else OperationStatus.FAILED,
             scope=ArchiveScope(session_id=session_id, entries_in_scope=len(sources.entries)),
-            verification=VerificationState.PENDING if results else VerificationState.ABSENT,
+            verification=VerificationState.PENDING if published else VerificationState.ABSENT,
             objects=results,
             errors=[_as_error(exc)],
             notes=[
@@ -403,7 +444,26 @@ def _read_back(
             return chunk
 
     with storage.open_object(key) as body:
-        restored = decompress_and_measure(_Tee(body), max_output_bytes=entry.size_bytes)
+        tee = _Tee(body)
+        restored = decompress_and_measure(tee, max_output_bytes=entry.size_bytes)
+        # **Drained to EOF, deliberately.** The decoder reads one frame and stops
+        # (`read_across_frames=False`), so without this the digest above covers only the
+        # bytes the decoder happened to pull — and an object made of a valid frame followed
+        # by anything at all could satisfy both hashes while part of it was never read.
+        # "The whole object was downloaded and checked" is the claim this function exists
+        # to make; it has to be true of the whole object. Found by M7a's third review.
+        trailing = 0
+        while chunk := tee.read(CHUNK_BYTES):
+            trailing += len(chunk)
+
+    if trailing:
+        message = (
+            f"the object stored for {entry.relative_path} has {trailing} byte(s) after its "
+            f"zstd frame. It decompresses correctly, so the archived audio is recoverable — "
+            f"but the stored object is not the object this archive wrote, and a "
+            f"content-addressed key that holds something else is a conflict, not a variant."
+        )
+        raise ArchiveError(message, code="archive_object_conflict")
 
     if restored.size_bytes != entry.size_bytes or restored.sha256 != entry.sha256:
         message = (
@@ -555,7 +615,10 @@ def run_status(session_dir: Path, *, storage: ArchiveStorage) -> ArchiveReport:
     `verified` (ADR-0039).
     """
     started = _now()
-    config = load_session_config(session_dir / "session.yaml")
+    try:
+        config = load_session_config(session_dir / "session.yaml")
+    except Exception as exc:
+        return _failed(ArchiveOperation.STATUS, "(unknown)", exc, started, entries_in_scope=0)
     session_id = config.session_id
 
     try:
@@ -687,15 +750,22 @@ def run_list(*, storage: ArchiveStorage) -> tuple[list[str], ArchiveReport]:
     Follows pagination to exhaustion. A partial listing reported as complete would make a
     session look absent during exactly the emergency this command exists for (OQ-028).
 
-    **A key is not a manifest.** A zero-byte or truncated object at the manifest path is
-    listed as *not* committed rather than as a session, because "committed" is what an
-    operator reads before deciding a recovery is possible. The contents are not downloaded
-    and parsed — that would make listing cost a retrieval per session, and `verify` is the
-    operation that reads bytes — so the report says plainly what was and was not checked.
+    **A key is not a manifest, and neither is a plausible size.** Each candidate is
+    downloaded, parsed, and checked to belong to the key it sits at, because "committed" is
+    what an operator reads before deciding a recovery is possible — and a size floor accepts
+    any sufficiently large garbage. The charter asks this command for "manifest identity",
+    which cannot be produced without reading the document, so the digest of each is reported.
+
+    The retrieval this costs is one manifest per session, billed at Cold Storage's 128 KiB
+    floor. An earlier version skipped it to avoid exactly that cost and called the objects
+    committed on the strength of their length; the trade was wrong, because this command
+    exists to be believed during a recovery. `verify` remains the expensive operation — it
+    downloads every *object* — and this one still reads nothing but the commit markers.
     """
     started = _now()
     session_ids: list[str] = []
     unreadable: list[str] = []
+    digests: dict[str, str] = {}
 
     try:
         for key in _iter_prefix(storage, f"{ARCHIVE_PREFIX}/"):
@@ -723,20 +793,43 @@ def run_list(*, storage: ArchiveStorage) -> tuple[list[str], ArchiveReport]:
             if head is None or head.size_bytes < _SMALLEST_POSSIBLE_MANIFEST_BYTES:
                 unreadable.append(session_id)
                 continue
+
+            # Read and parsed, not merely measured. `_read_remote_manifest` also checks the
+            # document names this session and points its entries at this session's prefix,
+            # so a listing cannot announce a session whose manifest belongs to another.
+            try:
+                found = _read_remote_manifest(storage, session_id)
+            except ArchiveError:
+                unreadable.append(session_id)
+                continue
+            if found is None:  # pragma: no cover - the head above already found it
+                unreadable.append(session_id)
+                continue
+            digests[session_id] = sha256_bytes(found[1])
             session_ids.append(session_id)
     except Exception as exc:
         return [], _failed(ArchiveOperation.LIST, "(all)", exc, started, entries_in_scope=0)
 
     notes = [
-        f"{len(session_ids)} committed session(s). Each has a manifest object; none has "
-        f"been read or verified by this operation — `archive verify --session-id ...` is "
-        f"what establishes that a session still restores."
+        f"{len(session_ids)} committed session(s), each with a manifest that was downloaded "
+        f"and parsed. No *object* was read, so nothing here says a session still restores — "
+        f"`archive verify --session-id ...` is what establishes that.",
+        *(
+            [
+                "manifest digests: "
+                + ", ".join(f"{name} {digests[name][:12]}" for name in sorted(session_ids))
+            ]
+            if session_ids
+            else []
+        ),
     ]
     if unreadable:
         notes.append(
             f"{len(unreadable)} key(s) under this project's prefix are not usable "
-            f"manifests (empty, or not written by this project): "
-            f"{', '.join(sorted(unreadable)[:5])}. They are not listed as sessions."
+            f"manifests (empty, truncated, unparseable, or describing a different "
+            f"session): {', '.join(sorted(unreadable)[:5])}. They are not listed as "
+            f"sessions, because an operator reads this before deciding a recovery is "
+            f"possible."
         )
 
     report = ArchiveReport(
@@ -851,8 +944,30 @@ def run_restore(
     staging = destination.parent / (
         _RESTORE_STAGING_PREFIX + sha256_bytes(encode_component(session_id).encode("ascii"))[:32]
     )
-    shutil.rmtree(staging, ignore_errors=True)
     results: list[ObjectResult] = []
+
+    # **Refused if it already exists, rather than removed.** The name is derived from the
+    # session and the destination's parent, so two concurrent restores of one session
+    # underneath one directory land on the same tree — and blindly `rmtree`-ing it meant
+    # each run could delete the other's half-written files, or a track-scoped restore could
+    # publish files a whole-session restore had put there. Refusing makes the collision an
+    # error rather than a corruption, and makes a leftover from a hard kill something an
+    # operator is told about instead of something silently reused. Found by M7a's third
+    # code review.
+    if staging.exists() or staging.is_symlink():
+        message = (
+            f"a restore of this session into this directory is already in progress, or one "
+            f"was killed partway and left {staging.name!r} behind. Refusing to reuse it: "
+            f"two restores sharing a staging tree can publish each other's files. If "
+            f"nothing else is running, remove that directory and retry."
+        )
+        return _failed(
+            ArchiveOperation.RESTORE,
+            session_id,
+            ArchiveError(message, code="archive_restore_in_progress"),
+            started,
+            entries_in_scope=len(selected),
+        )
 
     try:
         staging.mkdir(parents=True)
@@ -1154,13 +1269,51 @@ def _read_remote_manifest(
         while chunk := body.read(1 << 20):
             raw += chunk
     try:
-        return ArchiveManifest.model_validate_json(raw), raw
+        manifest = ArchiveManifest.model_validate_json(raw)
     except ValidationError as exc:
         message = (
             f"the committed manifest for {session_id!r} does not parse as an archive "
             f"manifest: {exc}. Refusing to act on it."
         )
         raise ArchiveError(message, code="archive_manifest_unreadable") from exc
+    _require_manifest_belongs_to(manifest, session_id)
+    return manifest, raw
+
+
+def _require_manifest_belongs_to(manifest: ArchiveManifest, session_id: str) -> None:
+    """The document at a session's key must actually be that session's manifest.
+
+    Schema validity was the only thing checked, so a valid manifest for session B placed at
+    session A's key made `verify A` and `restore A` operate on B's objects while reporting
+    A — and every digest matches, because they are B's digests. Recovery reading correct
+    bytes for the wrong session is worse than a failure: it looks like success.
+
+    Both halves are needed. The session id catches a whole document in the wrong place; the
+    key prefix catches a document that names the right session while pointing its entries
+    somewhere else. Keys are still not recomputed field by field — the entry's own digest is
+    what proves the bytes, and `_read_back` checks it — but they must live under this
+    session's own object prefix. Found by M7a's third code review.
+    """
+    if manifest.session_id != session_id:
+        message = (
+            f"the manifest stored at {session_id!r}'s key says it describes "
+            f"{manifest.session_id!r}. Refusing to restore or verify one session from "
+            f"another's record — every digest in it would match, and the recovery would "
+            f"look like a success."
+        )
+        raise ArchiveError(message, code="archive_manifest_session_mismatch")
+
+    prefix = f"{_session_prefix(session_id)}objects/"
+    stray = sorted(
+        entry.path for entry in manifest.entries if not entry.object_key.startswith(prefix)
+    )
+    if stray:
+        message = (
+            f"{len(stray)} entry/entries in {session_id!r}'s manifest name objects outside "
+            f"that session's own prefix, starting with {stray[0]!r}. A manifest may not "
+            f"redirect a recovery to another session's audio."
+        )
+        raise ArchiveError(message, code="archive_manifest_foreign_object")
 
 
 def _require_remote_manifest(
@@ -1373,9 +1526,30 @@ def _as_error(exc: BaseException, *, path: str | None = None) -> ArchiveReportEr
     code = getattr(exc, "code", None)
     return ArchiveReportError(
         code=str(code) if code else "archive_failed",
-        message=str(exc) or type(exc).__name__,
+        message=_without_absolute_paths(str(exc) or type(exc).__name__),
         path=path,
     )
+
+
+#: Any absolute POSIX path in an error message. Matched greedily enough to catch a filename
+#: with spaces up to the end of the segment, which is what an `OSError` carries.
+_ABSOLUTE_PATH = re.compile(r"(?<![\w/])/(?:[^\s'\"<>|]+)")
+
+
+def _without_absolute_paths(message: str) -> str:
+    """Reduce every absolute path in a message to its final component.
+
+    Report errors reach a durable file the completion gate requires to carry no local
+    machine identity, and an absolute path is a home directory and a username. The
+    destination messages were written carefully; the ones that leak are the ones nobody
+    writes — a real `ENOSPC` is `[Errno 28] No space left on device: '/home/…/tx-a/x.zst'`,
+    and `_as_error` passed it through verbatim. The ENOSPC tests inject an exception with
+    no filename, so they could not see it. Found by M7a's third code review.
+
+    The final component is kept because it is the actionable half: which *file* ran out of
+    room is worth knowing, and where the operator's home directory is is not.
+    """
+    return _ABSOLUTE_PATH.sub(lambda found: Path(found.group()).name or "/", message)
 
 
 def _failed(
