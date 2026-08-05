@@ -17,7 +17,7 @@ M0 Foundation
                                                                            └─ M8 Readiness ─┬─ M9 Transcript assembly ── M7a Verified raw archive ─┐
                                                                                              └─ M10 Acoustic marker ───────────────────────────────┤
                                                                                                                                                  └─ Live Session Zero
-                                                                                                                                                    └─ M11 Validate/tune ── M7b Publish/reclaim
+                                                                                                                                                    └─ M11 Validate/tune ── M7b Handoff/reclaim
 ```
 
 M8 sits between the MVP and live Session Zero. M7a was split out of the old M7 so the off-site
@@ -27,8 +27,9 @@ the dedicated short metadata capture and long clock-stability capture because th
 probe, jam capture,
 minimal acoustic capture, and six-transmitter/three-receiver marker bench already settled their
 structural questions. M11 starts after Session Zero and owns only measured real-play tuning or a
-genuine technical contingency. M7b then uses the accepted result for publication, retention,
-cache sizing, and any deletion-policy decision.
+genuine technical contingency. M7b then uses the accepted result for the output manifest,
+retention, cache sizing, and any deletion-policy decision; the wiki publisher that consumes that
+manifest lives outside this repository (ADR-0044).
 
 M5 depends only on M3, never on M4 or M6 — the mix must survive a transcription
 failure. M6a can start any time after M0; it is sequenced late only because
@@ -216,14 +217,17 @@ bench; live Session Zero uses it, and claps remain the fallback.
 detection, exact integer-sample lags, false-positive negatives, bounded streaming, unchanged
 pipeline identities, and the physical phone/DJI bench all pass.
 
-### M7b — Processed publishing and local reclamation (sketch)
+### M7b — Accepted-output handoff and local reclamation (sketch)
 
-After a real session is accepted, publish selected versioned outputs through a suitable
-delivery bucket, choose privacy and retention policy, prune reproducible caches, and decide
-whether a separately confirmed local-raw reclamation command is safe and worthwhile.
+After a real session is accepted, emit a manifest that durably identifies the run for an
+external publisher, choose retention policy, prune reproducible caches, and decide whether a
+separately confirmed local-raw reclamation command is safe and worthwhile.
 
 **Status: deliberately unplanned.** Raw archive format, upload, read-back integrity, and
-restore belong to M7a and must not be redesigned here.
+restore belong to M7a and must not be redesigned here. **Publishing belongs to neither**:
+ADR-0044 makes the owner's private Outline wiki the delivery surface and places the publisher in
+the wiki host's repository, so this project keeps no wiki credential and gains no publish
+command.
 
 **Gate:** provisional; see the charter. Any raw deletion requires a fresh full M7a restore
 verification, dry-run-first exact targeting, and an explicit INV-01 amendment.
@@ -288,3 +292,10 @@ Recorded so the reasoning is not lost:
    evidence already validates the hardware breadth and MVP clock decision. Live Session Zero
    now supplies ordinary-play tuning data, while only genuine technical contingencies survive
    into M11.
+10. **ADR-0044 moves publishing out of the project entirely.** M7b was drafted assuming this
+    repository would grow a publication provider adapter. The owner's Outline design puts the
+    MP3 in a private document attachment and the transcript in native document text, with the
+    publisher living in the wiki host's repository and holding its own credentials. M7b keeps
+    the output manifest, retention, cache reclamation, and the raw-deletion question, and loses
+    the delivery mechanism. It also fixes the final shape of the pipeline: raw to M7a's private
+    cold bucket, processed output to the wiki, sharing no credential and no command.

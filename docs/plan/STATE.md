@@ -84,6 +84,24 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
   in place and may justify only a traceable editorial/LLM view. No production default changes
   from the minimal corpus.
 
+  **The pipeline's final shape is now decided end to end (ADR-0044).** Raw transmitter files go
+  to M7a's private cold bucket, byte-exact and verified by full readback, and are never
+  published. Processed output goes to the owner's private Outline wiki as one document per
+  session: `session.mp3` as a private attachment behind a same-origin player, and the transcript
+  as native document text so wiki search indexes it, with a clickable timestamp per turn.
+  **The publisher lives in the wiki host's repository, not this one** — this project gains no
+  Outline client, no wiki credential, and no publish command, so the spec's "do not read from or
+  write to the campaign wiki" scope line stands unamended. M7b therefore loses publishing and
+  keeps the output manifest, retention, cache reclamation, and the raw-deletion question.
+
+  Three properties of this repository's output are now load-bearing for a consumer in another
+  repository, and were verified before adopting the design: `transcript.json` is schema version
+  1 with the fields it reads; the MP3 is CBR, so seeking stays accurate across a multi-hour
+  file; and transcript times share an origin with the mix, which **INV-14** now asserts rather
+  than leaving to construction. Eventually reading *from* the wiki — harvesting campaign proper
+  nouns into `glossary.txt` to bias ASR spelling — is expected but undecided; ADR-0044 records
+  the seam and the constraints it would have to respect.
+
   **Archival is now split at the authority boundary.** M7a may explicitly upload byte-exact
   zstd archives to an owner-controlled private cold bucket, but only through an archive
   command that fully downloads and restores every hash before committing its manifest. It has
@@ -176,7 +194,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | M8  | Real-session readiness     | closed      | `8ad15e3` |
 | M9  | Transcript assembly quality | closed      | `d3e2cbb` |
 | M7a | Verified private raw archive | closed      | `5bc24a3` |
-| M7b | Publishing and reclamation | sketch      | —         |
+| M7b | Handoff and reclamation    | sketch      | —         |
 | M10 | Acoustic sync marker       | closed      | `38a18c9` |
 | M11 | Session Zero validation and tuning | blocked | —       |
 
