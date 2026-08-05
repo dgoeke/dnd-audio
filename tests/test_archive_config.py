@@ -62,6 +62,46 @@ class TestLoading:
             load_archive_config(environment(ENDPOINT_URL="http://nyc3.digitaloceanspaces.com"))
         assert "https" in str(caught.value)
 
+    def test_a_virtual_hosted_endpoint_is_refused(self) -> None:
+        """The misconfiguration that succeeds at everything except being right.
+
+        DigitalOcean's control panel shows a bucket as
+        `<bucket>.<region>.digitaloceanspaces.com`, so it is the obvious value to paste —
+        and the bucket is also passed as a parameter, so boto3 addresses the request
+        path-style and the bucket name becomes part of every object key.
+
+        Nothing catches it downstream: put and head are wrong identically, so upload
+        succeeds, the remote readback succeeds, `verify` succeeds and `restore` succeeds,
+        against keys nobody intended. Only a listing shows it, which is how it was found
+        against the real bucket on 2026-08-04. Refused here rather than corrected, because
+        guessing what an operator meant would be a second place deciding where session
+        audio is stored.
+        """
+        with pytest.raises(ArchiveConfigError) as caught:
+            load_archive_config(
+                environment(ENDPOINT_URL="https://example-cold.sfo3.digitaloceanspaces.com")
+            )
+        message = str(caught.value)
+        assert "virtual-hosted" in message or "endpoint host begins with the bucket" in message
+        assert "https://sfo3.digitaloceanspaces.com" in message
+
+    def test_a_regional_endpoint_is_accepted(self) -> None:
+        config = load_archive_config(
+            environment(ENDPOINT_URL="https://sfo3.digitaloceanspaces.com", BUCKET="example-cold")
+        )
+        assert config.endpoint_url == "https://sfo3.digitaloceanspaces.com"
+
+    def test_a_bucket_name_merely_appearing_in_the_host_is_not_refused(self) -> None:
+        """Only a leading `<bucket>.` is the virtual-hosted shape.
+
+        A bucket called `sfo3` must not make its own regional endpoint unusable, and a
+        substring match would do exactly that.
+        """
+        config = load_archive_config(
+            environment(ENDPOINT_URL="https://sfo3.digitaloceanspaces.com", BUCKET="sfo3")
+        )
+        assert config.bucket == "sfo3"
+
     def test_a_trailing_slash_is_normalized_away(self) -> None:
         config = load_archive_config(
             environment(ENDPOINT_URL="https://nyc3.digitaloceanspaces.com/")

@@ -147,7 +147,27 @@ class SpacesStorage:
             arguments: dict[str, Any] = {"Bucket": self.bucket, "Prefix": prefix}
             if marker is not None:
                 arguments["Marker"] = marker
-            response = self._call(lambda: self.client.list_objects(**arguments))  # noqa: B023
+            try:
+                response = self._call(lambda: self.client.list_objects(**arguments))  # noqa: B023
+            except ArchiveError as exc:
+                # `NoSuchKey` from a *listing* is not an empty listing, and it is not the
+                # provider refusing to list either — Cold Storage lists fine. It is what
+                # DigitalOcean answers when the request addresses a bucket that is already
+                # in the endpoint host, which `ArchiveRuntimeConfig` now refuses at load.
+                # Kept as a diagnosis because a bucket configured before that check existed
+                # would otherwise produce a bare "object does not exist" from a listing,
+                # which names nothing an operator can act on (OQ-028).
+                if exc.code == "archive_object_missing":
+                    message = (
+                        f"the storage endpoint answered `NoSuchKey` to a listing of "
+                        f"{prefix!r}. That is what this provider returns when the bucket is "
+                        f"addressed twice — once in the endpoint host and once as a "
+                        f"parameter. Check that the configured endpoint is the regional "
+                        f"one, `https://<region>.digitaloceanspaces.com`, with no bucket in "
+                        f"it. Refusing rather than reporting an empty archive."
+                    )
+                    raise ArchiveError(message, code="archive_listing_failed") from exc
+                raise
 
             contents = response.get("Contents", [])
             for item in contents:

@@ -7,16 +7,17 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 
 ## Right now
 
-- **Current milestone:** H1 — hardware fixture (**not started**). The minimal acoustic
+- **Current milestone:** M10 — acoustic sync marker (**not started**), then H1. The minimal acoustic
   direction capture is complete enough to guide later event-first work but does not close or
   replace H1. Two pre-session software milestones are now chartered: **M7a** provides verified
   private raw backup, and **M10** provides a generated acoustic marker plus automatic detector.
   M7b deliberately retains the post-session publication, retention, cache, and deletion
   decisions.
 - **Branch:** `main`
-- **Last closed milestone:** M9 — transcript assembly quality
-- **Gate status at HEAD:** passes, zero skips (8 checks, 2 397 tests); the same default suite
-  passes from `.venv-rocm`.
+- **Last closed milestone:** M7a — verified private raw archive
+- **Gate status at HEAD:** passes, zero skips (8 checks, 2 640 tests); the same default suite
+  passes from `.venv-rocm` — **re-sync that environment after any dependency change**, which
+  M7a's first attempt there proved by failing five ways on two missing packages.
 - **Blocked on:** **real recordings, and nothing else.** Every remaining open question that
   blocks anything needs audio rather than code. The MVP's code path is complete: `inspect`,
   `ingest`, `activity`, `mix`, `transcribe` and `process` all run end to end, and
@@ -133,9 +134,9 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | M6b | Qwen adapter               | closed      | `07cebdb` |
 | M8  | Real-session readiness     | closed      | `8ad15e3` |
 | M9  | Transcript assembly quality | closed      | `d3e2cbb` |
+| M7a | Verified private raw archive | closed      | (this commit) |
 | H1  | Hardware fixture (2 min)   | not started | —         |
 | H2  | Drift soak / first session | not started | —         |
-| M7a | Verified private raw archive | not started | —         |
 | M7b | Publishing and reclamation | sketch      | —         |
 | M10 | Acoustic sync marker       | not started | —         |
 
@@ -299,13 +300,15 @@ writer that cannot lose a stage, and a test suite that is provably offline.
 
 ## Next smallest step
 
-**M7a, then M10 if time permits, then H1.** M9's transcript-assembly work is complete, and the
-minimal capture says the current jammed pipeline is sufficient to make Session Zero valuable.
-M7a first reduces the risk later software cannot fix: loss of the original recordings. M10 is
-smaller and improves jam/drift evidence, but H1 remains safe with claps if its phone/DJI bench
-does not finish. Read `docs/plan/milestones/M7a-verified-raw-archive.md`,
+**M10, then H1.** M7a is closed, so the risk later software cannot fix — loss of the original
+recordings — now has a verified answer. M10 is small and improves jam/drift evidence; H1
+remains safe with claps if its phone/DJI bench does not finish. Read
 `docs/plan/milestones/M10-acoustic-sync-marker.md`, then
-`docs/plan/milestones/H1-hardware-fixture.md`. (Claude Code: `/ms-start M7a`.)
+`docs/plan/milestones/H1-hardware-fixture.md`. (Claude Code: `/ms-start M10`.)
+
+**Archive the first real session as soon as it is inspected.** `dnd-audio archive upload
+<session>`, then `dnd-audio archive verify --session-id <id>` — the second is what turns the
+backup from a belief into a fact, and it is a full download by design.
 
 Nothing in H1 is a code task until the recordings exist. What the pipeline will do with them
 on arrival is already built: `inspect` names the strategy, the evidence and the assumption

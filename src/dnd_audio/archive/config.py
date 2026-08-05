@@ -32,7 +32,15 @@ from pathlib import Path
 from typing import Any, Final
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from dnd_audio.errors import DndAudioError
 
@@ -114,6 +122,45 @@ class ArchiveRuntimeConfig(BaseModel):
     max_retries: int = Field(default=5, ge=0, le=32)
     #: First backoff step, doubling. Injectable in tests so a retry test costs no seconds.
     retry_base_seconds: float = Field(default=0.5, gt=0.0, le=60.0)
+
+    @model_validator(mode="after")
+    def _endpoint_must_not_contain_the_bucket(self) -> ArchiveRuntimeConfig:
+        """Refuse a virtual-hosted endpoint, because the failure it causes is silent.
+
+        DigitalOcean's control panel shows a bucket's address as
+        `<bucket>.<region>.digitaloceanspaces.com`, so that is the obvious thing to paste
+        here — and it is wrong, because the bucket is *also* passed as a parameter. boto3
+        then addresses the request path-style against that host and **the bucket name
+        becomes part of every key**: objects land at `<bucket>/sessions/archive-v1/...`.
+
+        Nothing notices. `PutObject` and `HeadObject` are wrong in the same way, so an
+        upload succeeds, the readback succeeds, `verify` succeeds and `restore` succeeds —
+        every guarantee this milestone makes holds, against keys nobody intended. Only a
+        listing shows it, which is how it was found (2026-08-04, against the real bucket).
+
+        A silent wrong answer is exactly what this project refuses everywhere else, so the
+        endpoint is checked rather than corrected: guessing what the operator meant would
+        be a second place that decides where session audio is stored.
+        """
+        host = self.endpoint_url.split("://", 1)[-1].split("/", 1)[0]
+        remainder = host[len(self.bucket) + 1 :] if host.startswith(f"{self.bucket}.") else ""
+        # A leading `<bucket>.` alone is not enough to conclude anything: a bucket named
+        # `sfo3` would make `sfo3.digitaloceanspaces.com` — its own correct regional
+        # endpoint — unusable. The virtual-hosted shape leaves a *whole provider host*
+        # behind it (`sfo3.digitaloceanspaces.com`, three labels), where a regional one
+        # leaves only the domain (`digitaloceanspaces.com`, two). Caught by the test
+        # written for this validator, which is the only reason it is not still wrong.
+        if remainder and remainder.count(".") >= 2:
+            message = (
+                f"the endpoint host begins with the bucket name, so it is a "
+                f"virtual-hosted address. The bucket is passed separately, and this "
+                f"combination makes the bucket name part of every object key — an upload "
+                f"would succeed, verify, and restore, while storing everything one level "
+                f"deeper than intended. Use the **regional** endpoint instead: "
+                f"https://{remainder}"
+            )
+            raise ValueError(message)
+        return self
 
     @field_validator("endpoint_url")
     @classmethod

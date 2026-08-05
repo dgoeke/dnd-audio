@@ -394,6 +394,28 @@ class TestPagination:
         assert list(storage.list_keys("")) == ["a", "b", "c"]
         assert seen == [None, "b"]
 
+    def test_nosuchkey_from_a_listing_is_refused_not_reported_as_empty(
+        self, storage: SpacesStorage, client: RecordingClient
+    ) -> None:
+        """What a doubly-addressed bucket returns, and why it must never read as "empty".
+
+        Observed against the real bucket on 2026-08-04, when the configured endpoint
+        already contained the bucket name: every listing failed this way while
+        `HeadObject` on a key uploaded seconds earlier succeeded. The cause is now refused
+        at config load, but the diagnosis stays, because the first attempt at handling it
+        swallowed the error and returned no keys — which would have made `archive list`
+        report an empty archive with a complete one sitting in the bucket, during exactly
+        the emergency the command exists for.
+
+        A backup tool may say "I cannot tell you". It may never say "there is nothing
+        there" when it does not know (OQ-028).
+        """
+        client.errors["list_objects"] = [ProviderError("NoSuchKey", 404)]
+        with pytest.raises(ArchiveError) as caught:
+            list(storage.list_keys("nothing/here/"))
+        assert caught.value.code == "archive_listing_failed"
+        assert "regional" in str(caught.value)
+
     def test_a_truncated_listing_with_no_marker_is_refused(
         self, storage: SpacesStorage, client: RecordingClient
     ) -> None:
