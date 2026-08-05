@@ -1,0 +1,222 @@
+{
+  "$defs": {
+    "AnalysisStatus": {
+      "description": "The marker-analysis stage's outcome. One stage, because there is one.",
+      "enum": [
+        "complete",
+        "failed",
+        "skipped"
+      ],
+      "title": "AnalysisStatus",
+      "type": "string"
+    },
+    "MarkerReportError": {
+      "additionalProperties": false,
+      "description": "A failure a caller can branch on without parsing prose.",
+      "properties": {
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "MarkerReportError",
+      "type": "object"
+    },
+    "MarkerReportWarning": {
+      "additionalProperties": false,
+      "description": "Something an operator must read, which did not stop the measurement.",
+      "properties": {
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "MarkerReportWarning",
+      "type": "object"
+    },
+    "OverallStatus": {
+      "enum": [
+        "complete",
+        "partial",
+        "failed"
+      ],
+      "title": "OverallStatus",
+      "type": "string"
+    },
+    "ReportDeliverable": {
+      "additionalProperties": false,
+      "description": "A file this run produced, and its hash — every one except this report (ADR-0003).",
+      "properties": {
+        "relative_path": {
+          "minLength": 1,
+          "title": "Relative Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "relative_path",
+        "sha256",
+        "size_bytes"
+      ],
+      "title": "ReportDeliverable",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The structured record of one `marker analyze`.\n\nCarries a wall clock, so it is not byte-stable and is not required to be — the\ndeterministic artifact is `work/sync-marker-analysis.json`, and nothing downstream\nconsumes this one.",
+  "properties": {
+    "analysis_status": {
+      "$ref": "#/$defs/AnalysisStatus"
+    },
+    "deliverables": {
+      "items": {
+        "$ref": "#/$defs/ReportDeliverable"
+      },
+      "title": "Deliverables",
+      "type": "array"
+    },
+    "errors": {
+      "items": {
+        "$ref": "#/$defs/MarkerReportError"
+      },
+      "title": "Errors",
+      "type": "array"
+    },
+    "finished_at": {
+      "format": "date-time",
+      "title": "Finished At",
+      "type": "string"
+    },
+    "groups_formed": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Groups Formed",
+      "type": "integer"
+    },
+    "inconclusive": {
+      "default": false,
+      "title": "Inconclusive",
+      "type": "boolean"
+    },
+    "marker_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Marker Name"
+    },
+    "occurrences_found": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Occurrences Found",
+      "type": "integer"
+    },
+    "overall_status": {
+      "$ref": "#/$defs/OverallStatus"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "session_id": {
+      "minLength": 1,
+      "title": "Session Id",
+      "type": "string"
+    },
+    "skip_reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Skip Reason"
+    },
+    "started_at": {
+      "format": "date-time",
+      "title": "Started At",
+      "type": "string"
+    },
+    "warnings": {
+      "items": {
+        "$ref": "#/$defs/MarkerReportWarning"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "session_id",
+    "overall_status",
+    "analysis_status",
+    "started_at",
+    "finished_at"
+  ],
+  "title": "MarkerReport",
+  "type": "object"
+}

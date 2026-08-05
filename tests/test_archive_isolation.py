@@ -60,16 +60,30 @@ ARCHIVE_ENVIRONMENT = {
 #: construction — which is the failure this list exists to prevent. `tests/test_cli.py`
 #: asserts the full command surface, so a command added without appearing here is visible
 #: there.
+#: Each entry is the full argument vector, with `{session}` and `{output}` substituted in
+#: the child. Full vectors rather than bare names because `marker build` takes a destination
+#: rather than a session and has a subcommand — and a list that could only express
+#: single-word commands would have quietly excluded it, which is exactly the shape of
+#: omission this list exists to prevent.
 NETWORK_DENIED_COMMANDS = (
-    "inspect",
-    "ingest",
-    "activity",
-    "transcribe",
-    "render",
-    "mix",
-    "process",
-    "doctor",
+    ("inspect", "{session}"),
+    ("ingest", "{session}"),
+    ("activity", "{session}"),
+    ("transcribe", "{session}", "--fake-models"),
+    ("render", "{session}"),
+    ("mix", "{session}"),
+    ("process", "{session}", "--fake-models"),
+    ("doctor",),
+    ("marker", "build", "{output}", "--marker", "cand-a"),
+    # After `ingest` in this list, because it consumes that command's artifacts rather than
+    # producing them — the sweep runs them in order against one session.
+    ("marker", "analyze", "{session}", "--marker", "cand-a"),
 )
+
+
+def command_id(argv: tuple[str, ...]) -> str:
+    """A stable name for one entry, used in output markers and in test ids."""
+    return " ".join(part for part in argv if not part.startswith(("{", "--")))
 
 
 def cache_tree(session_dir: Path) -> dict[str, bytes]:
@@ -268,24 +282,22 @@ from typer.testing import CliRunner
 from dnd_audio.cli import app
 
 session = sys.argv[1]
+output_dir = sys.argv[2]
 runner = CliRunner()
 
-for command in %(commands)r:
-    arguments = [command]
-    if command != "doctor":
-        arguments.append(session)
-    if command in ("transcribe", "process"):
-        arguments.append("--fake-models")
-
+for name, argv in %(commands)r:
+    arguments = [
+        part.format(session=session, output=output_dir) for part in argv
+    ]
     result = runner.invoke(app, arguments)
     output = result.output or ""
     if result.exception is not None:
         output += repr(result.exception)
     if "NetworkReached" in output:
-        print("NETWORK:" + command)
+        print("NETWORK:" + name)
     if output.strip():
-        print("RAN:" + command)
-    print("DONE:" + command)
+        print("RAN:" + name)
+    print("DONE:" + name)
 """
 
 
@@ -293,9 +305,12 @@ def invoke_all(session_dir: Path, trap_dir: Path) -> subprocess.CompletedProcess
     """Run every network-denied command in one trapped child."""
     environment = dict(os.environ)
     environment["PYTHONPATH"] = str(trap_dir)
-    driver = _DRIVER % {"commands": list(NETWORK_DENIED_COMMANDS)}
+    driver = _DRIVER % {
+        "commands": [(command_id(argv), list(argv)) for argv in NETWORK_DENIED_COMMANDS]
+    }
+    output_dir = session_dir.parent / "marker-out"
     return subprocess.run(
-        [sys.executable, "-c", driver, str(session_dir)],
+        [sys.executable, "-c", driver, str(session_dir), str(output_dir)],
         capture_output=True,
         text=True,
         env=environment,
@@ -323,7 +338,10 @@ def command_sweep(
 class TestNoProcessingCommandTouchesTheNetwork:
     """INV-06, proved where the autouse socket fixture cannot reach."""
 
-    @pytest.mark.parametrize("command", NETWORK_DENIED_COMMANDS)
+    @pytest.mark.parametrize(
+        "command",
+        [command_id(argv) for argv in NETWORK_DENIED_COMMANDS],
+    )
     def test_the_command_runs_and_reaches_no_network(
         self, command: str, command_sweep: subprocess.CompletedProcess[str]
     ) -> None:
@@ -353,7 +371,7 @@ class TestNoProcessingCommandTouchesTheNetwork:
     def test_the_trap_can_actually_fire(
         self, canonical_fixture: FixtureTruth, trap_dir: Path
     ) -> None:
-        """Otherwise the eight assertions above are eight ways of proving nothing.
+        """Otherwise every assertion above is another way of proving nothing.
 
         M1's closeout records the shape: a check that is present, looks right, and verifies
         nothing. A trap that failed to install would make every test in this class pass.

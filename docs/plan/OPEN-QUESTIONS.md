@@ -1019,12 +1019,11 @@ consistent rate across all three kits; this capture violated that and nothing do
 degraded. Keep the rates consistent as hygiene, but no known behaviour depends on it.
 
 ## OQ-025 — Should the capture include a deliberate acoustic sync signal?
-**Assumption:** Yes for a robust automatic verifier; no as a replacement for jammed timecode.
+**Answer:** Yes for a robust automatic verifier; no as a replacement for jammed timecode.
 Jammed timecode places every file, including a restarted transmitter with no shared acoustic
 event. A generated marker can make jam failure and long-baseline drift cheaper and more
-precise to detect. **M10 now owns both generator and matched-filter detector.** Until its
-intended-phone/DJI bench passes, H1/H2 keep using the existing human-checkable three-clap
-pattern.
+precise to detect. **M10 owns the bench-validated generator and matched-filter detector.**
+H1/H2 may now use marker v1; the human-checkable three-clap pattern remains the fallback.
 **Why it matters:** The LTC jam is accurate — 17–30 ms cross-receiver, better than one frame
 (**OQ-023**) — but it is a tedious manual ritual at the start of every session: cable up
 A → B, SYNC, disconnect, A → C, SYNC, disconnect, and confirm three displays. An acoustic
@@ -1035,8 +1034,7 @@ and would need no cables. The question is whether it could **replace** the jam, 
 the 33 ms the jam already delivers; and whether a single anchor is sufficient given measured
 drift.
 **Needs:** M10's generator/detector and phone/DJI bench; no session required ·
-**Blocks:** M10 close only — the jam and claps work today · **Status:** **partially answered;
-M10 chartered**
+**Blocks:** none · **Status:** **answered** (M10 phone/DJI bench, 2026-08-05)
 
 **What the error budget says.** Cross-track error is 33.3 ms of fixed quantization
 (**OQ-024**) plus ~15–45 ms of drift over a long session (**OQ-006**) — call it 80 ms worst
@@ -1098,6 +1096,111 @@ reimplementing synthesis in JavaScript; this proves the digital assets equal but
 browser resampling, phone-speaker response, media volume, or room propagation. Keep claps until
 that complete path is bench-tested. Revisit replacing the jam only if H2 shows the ritual
 failing in practice, or if restarted/missing-anchor files are proven irrelevant.
+
+**M10's 2026-08-05 bench turned this entry's empirical questions into frozen constants.**
+The generator, standalone page, and matched-filter detector cite this entry or **OQ-029**
+where the physical path matters. The bench measured inter-chirp error, cross-track arrival
+spread, clipping, weak-signal reach, score and ambiguity margins, repeatability, and moved-phone
+sensitivity without fitting every limit to one room. **ADR-0042** records the selected waveform,
+the constants, and the independent margin for each.
+
+The causal half of this entry is settled as a decision rather than an assumption:
+**ADR-0040** separates timecode placement, acoustic verification, differential acoustic
+arrival, and fixed-endpoint recorder drift, and amends the spec, which had claimed
+unconditionally in two places that a changing lag *is* evidence of sample-clock drift.
+
+**One constant is off the list, measured 2026-08-05 without a bench.** The detector was run
+over every real DJI recording this project holds — 13.7 minutes, two captures, two voices
+overlapping deliberately, hand claps at both ends of one — and accepted **zero** sequences for
+all three candidates, with the strongest single-chirp correlation anywhere at 186 permille
+against a 550 threshold. The margin is wide enough that the bench may lower the score threshold
+substantially for reach at the farthest seat without reopening the question
+(`docs/fixtures/2026-08-05-marker-false-positive-sweep.md`, repeatable as
+`tests/test_marker_false_positives.py`). This bounds only the *false-positive* side; whether a
+phone-played marker is reliably **found** across a table is the opposite failure direction and
+remains entirely the bench's. Its practical effect is that the bench protocol no longer asks the
+operator to record speech and media, which is what makes a one-person bench feasible.
+
+**Answer completed 2026-08-05.** The intended phone at approximately 90% volume played all
+three candidates through six DJI transmitters. At the 100-permille diagnostic floor, every
+planned playback was found on all six tracks with no extra sequence, clipping, or weak-signal
+classification. Cand-b had the strongest worst-track fixed score (404 permille) and 0–1 sample
+opening repeatability, so ADR-0042 freezes it as v1 with a 300-permille production floor. The
+default v1 pass found exactly 24 track-occurrences (four plays × six tracks), all decisive.
+This answers the practical question: use the marker to automate jam QA and differential-
+arrival measurement, retain timecode for placement and restarted files, and retain claps as a
+fallback. Sanitized evidence: `docs/fixtures/2026-08-05-marker-phone-dji-bench.md`.
+
+## OQ-029 — Does a phone browser's playback of embedded 48 kHz PCM preserve the marker's internal timing?
+**Answer:** Yes on the intended phone/browser, to well inside the inter-chirp gap tolerance.
+M10's page hands the browser the CLI's exact 48 kHz PCM bytes, and the detector accepts a
+marker only when all three chirps arrive in order with gaps inside a configured tolerance.
+The answer is not that playback is sample-exact, but that the measured browser/media path was
+small and uniform enough that the gaps matched.
+**Why it matters:** Two mechanisms could break it and they fail differently. **Resampling** to
+a hardware rate that is not 48 kHz scales every gap by a constant factor — a 44.1 kHz device
+stretches a 200 ms gap by about 17 ms, which a fixed tolerance either absorbs or does not.
+**Dynamics processing or buffer scheduling** perturbs gaps non-uniformly, which no single
+tolerance handles cleanly and which would push the detector away from whole-sequence matching
+toward per-chirp matching with an independent gap check — the shape M10 chose partly as a
+hedge against exactly this. Set the tolerance too tight and the marker is undetectable on the
+one device it is played from; too loose and three unrelated transients become a sequence,
+which is the false positive the asymmetric gaps exist to prevent.
+**Evidence:** The bench repeatedly played each candidate from the intended phone at the
+intended volume and detected it on every DJI track. The analyzer's recorded inter-chirp gaps
+showed neither a constant duration ratio nor scheduling disruption; the physical answer below
+records the exact maximum and margin.
+**Needs:** M10's phone/DJI bench · **Blocks:** none · **Status:** **answered** (M10 phone/DJI
+bench, 2026-08-05)
+
+**Raised by M10's second plan review** (`reviews/M10-plan-20260805-0606.md`), which noted that
+the working plan promised an open-question citation for the gap tolerance and for nothing else,
+while every other detector constant encodes an assumption about the same physical path.
+
+**Measured synthetically 2026-08-05, and the named constant turned out to be the wrong one.**
+Time-stretching each candidate and detecting it (`tests/test_marker_detect.py::TestTimingPerturbation`):
+
+| stretch | cand-a | cand-b | cand-c | anchor error |
+| ---: | --- | --- | --- | --- |
+| 50–200 ppm | found | found | found | ≤ 2 samples |
+| 1 000 ppm | found | found | found | 8–14 samples |
+| 2 000 ppm | lost | lost | found | — |
+| 5 000 ppm | lost | lost | lost | — |
+
+Three things follow, and the third is the useful one:
+
+- **A real clock difference costs nothing.** Two independent crystals sit tens of ppm apart;
+  OQ-006 measured the transmitters' own at ≈1 ppm, bounded ±3. At 200 ppm the anchor is still
+  within two samples, and at 1 000 ppm the ~10-sample drift is an order of magnitude below the
+  1.5–9 ms of acoustic propagation spread this instrument can never resolve anyway (**OQ-025**).
+- **Browser resampling was the wrong worry.** Converting 48 kHz content for a 44.1 kHz device
+  is a *rate* conversion, not a speed change: the sound still lasts as long as it did. Only a
+  genuine clock disagreement stretches the marker, and that is ppm-scale. The 8.8% figure this
+  entry originally reasoned from does not describe anything that happens.
+- **`gap_tolerance_samples` is not what bounds this, despite the name.** At 2 000 ppm — where
+  detection fails — even the longest gap has moved 31 samples, two percent of the 1 440-sample
+  tolerance. What fails first is *per-chirp* correlation, because stretching a chirp detunes it
+  against its own template, and the loss scales with time-bandwidth product. cand-c survives
+  furthest precisely because its chirps are shortest. **So the constant this entry governs is
+  the chirp's duration and bandwidth — a property of the spec, not of the detector** — and that
+  is now what the bench has to weigh, against the opposite pressure that a longer chirp is what
+  reaches the farthest lav.
+
+**Physical answer, 2026-08-05.** Browser/phone playback preserved the sequence timing by an
+enormous margin. Across all 24 fixed-position cand-b track-occurrences, the largest absolute
+gap error was 29 samples (0.60 ms) against the 1440-sample tolerance. Most opening errors were
+0 or 1 sample; the closing play supplied the 29-sample maximum. This is neither the 8.8%
+duration error the original question feared nor evidence of nonuniform buffer scheduling.
+Cand-b's longer chirps survived the phone → room → lav → DJI path better than the shorter
+candidates: its worst fixed score was 404 permille and every planned play was found on every
+track. ADR-0042 therefore retains the structural 1440-sample gap bound, with 1411 samples of
+observed margin, rather than fitting it down to this one phone. See
+`docs/fixtures/2026-08-05-marker-phone-dji-bench.md`.
+
+The physical bench answered the remaining nonuniform-scheduling question: the maximum error
+was 29 samples and the residuals were small rather than a disrupted sequence. The analyzer's
+per-occurrence gap errors are retained so a materially different phone/browser path can be
+checked against the same claim.
 
 ## OQ-026 — Does a DJI receiver's timecode counter wrap, and with what period?
 **Assumption:** Yes, at 24 hours — `rasterize.SECONDS_PER_DAY` adds `86400 * sample_rate`

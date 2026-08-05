@@ -33,6 +33,9 @@ from dnd_audio.artifacts.timeline import Timeline
 from dnd_audio.artifacts.transcript import Transcript
 from dnd_audio.config import SessionConfig
 from dnd_audio.determinism import canonical_json, write_atomic
+from dnd_audio.marker.analysis import SyncMarkerAnalysis
+from dnd_audio.marker.manifest import MarkerManifest
+from dnd_audio.marker.report import MarkerReport
 
 __all__ = ["JSON_SCHEMA_DIALECT", "SCHEMA_DIRNAME", "schema_documents", "write_schemas"]
 
@@ -59,6 +62,14 @@ def schema_documents() -> dict[str, str]:
         # and is the only place the manifest's own hash can live (ADR-0003, ADR-0039).
         "archive-manifest.schema.json": _document(ArchiveManifest, mode="serialization"),
         "archive-report.schema.json": _document(ArchiveReport, mode="serialization"),
+        # M10's build manifest. Published last as the completeness marker for a WAV/page
+        # pair, and deliberately deterministic — no clock, no host, no absolute path — so
+        # two machines' manifests can be compared and a difference is a real one (ADR-0041).
+        "marker-manifest.schema.json": _document(MarkerManifest, mode="serialization"),
+        # The deterministic analysis, and the per-run report at the marker command's own
+        # boundary — the split ADR-0039 established for the archive, applied again.
+        "marker-analysis.schema.json": _document(SyncMarkerAnalysis, mode="serialization"),
+        "marker-report.schema.json": _document(MarkerReport, mode="serialization"),
     }
 
 

@@ -210,8 +210,8 @@ offline phone HTML player, and detect the complete marker automatically on every
 verifies the LTC jam and measures start/end differential acoustic arrival without changing the
 timeline; only fixed phone-and-lav geometry isolates recorder drift.
 
-**Status: chartered; not started.** It is optional for H1/H2 until its intended-phone/DJI bench
-passes; claps remain the fallback.
+**Status: closed 2026-08-05.** Cand-b is frozen as marker v1 after the intended-phone/six-DJI
+bench; H1/H2 may use it, and claps remain the fallback.
 
 **Gate:** CLI WAV and HTML-embedded WAV are byte-identical; offline page playback, matched-filter
 detection, exact integer-sample lags, false-positive negatives, bounded streaming, unchanged

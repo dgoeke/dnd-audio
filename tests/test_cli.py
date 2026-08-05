@@ -74,6 +74,18 @@ class TestCommandSurface:
         for name in ("upload", "status", "list", "verify", "restore"):
             assert name in result.output
 
+    def test_the_marker_command_group_is_registered(self) -> None:
+        """M10's commands, and the same cross-check the archive group carries.
+
+        `tests/test_archive_isolation.py` names every network-denied command as a full
+        argument vector; a command registered here and forgotten there is visible as a
+        difference between the two lists.
+        """
+        assert "marker" in runner.invoke(app, ["--help"]).output
+        result = runner.invoke(app, ["marker", "--help"])
+        assert result.exit_code == 0
+        assert "build" in result.output
+
     def test_the_archive_group_offers_no_delete_or_publish(self) -> None:
         """The operator surface matches the authority ADR-0035 grants, and no more.
 

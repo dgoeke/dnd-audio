@@ -1,0 +1,195 @@
+{
+  "$defs": {
+    "ChirpRecord": {
+      "additionalProperties": false,
+      "description": "One chirp, where it sits and what it sweeps.",
+      "properties": {
+        "end_hz": {
+          "exclusiveMinimum": 0,
+          "title": "End Hz",
+          "type": "integer"
+        },
+        "end_sample": {
+          "exclusiveMinimum": 0,
+          "title": "End Sample",
+          "type": "integer"
+        },
+        "fade_samples": {
+          "minimum": 0,
+          "title": "Fade Samples",
+          "type": "integer"
+        },
+        "start_hz": {
+          "exclusiveMinimum": 0,
+          "title": "Start Hz",
+          "type": "integer"
+        },
+        "start_sample": {
+          "minimum": 0,
+          "title": "Start Sample",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "start_hz",
+        "end_hz",
+        "start_sample",
+        "end_sample",
+        "fade_samples"
+      ],
+      "title": "ChirpRecord",
+      "type": "object"
+    },
+    "MarkerArtifact": {
+      "additionalProperties": false,
+      "description": "One published file, by name and content.\n\nThe filename is relative and carries no directory: the manifest sits beside what it\ndescribes, and an absolute path would name the machine that built it.",
+      "properties": {
+        "filename": {
+          "minLength": 1,
+          "title": "Filename",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "filename",
+        "size_bytes",
+        "sha256"
+      ],
+      "title": "MarkerArtifact",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The complete description of one `marker build`.",
+  "properties": {
+    "anchor_sample": {
+      "minimum": 0,
+      "title": "Anchor Sample",
+      "type": "integer"
+    },
+    "bits_per_sample": {
+      "exclusiveMinimum": 0,
+      "title": "Bits Per Sample",
+      "type": "integer"
+    },
+    "channels": {
+      "exclusiveMinimum": 0,
+      "title": "Channels",
+      "type": "integer"
+    },
+    "chirps": {
+      "items": {
+        "$ref": "#/$defs/ChirpRecord"
+      },
+      "minItems": 2,
+      "title": "Chirps",
+      "type": "array"
+    },
+    "gap_intervals": {
+      "items": {
+        "maxItems": 2,
+        "minItems": 2,
+        "prefixItems": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "integer"
+          }
+        ],
+        "type": "array"
+      },
+      "minItems": 1,
+      "title": "Gap Intervals",
+      "type": "array"
+    },
+    "lead_silence_samples": {
+      "minimum": 0,
+      "title": "Lead Silence Samples",
+      "type": "integer"
+    },
+    "marker_name": {
+      "minLength": 1,
+      "title": "Marker Name",
+      "type": "string"
+    },
+    "marker_semantics_version": {
+      "minimum": 1,
+      "title": "Marker Semantics Version",
+      "type": "integer"
+    },
+    "page": {
+      "$ref": "#/$defs/MarkerArtifact"
+    },
+    "peak_amplitude": {
+      "exclusiveMinimum": 0,
+      "title": "Peak Amplitude",
+      "type": "integer"
+    },
+    "rationale": {
+      "minLength": 1,
+      "title": "Rationale",
+      "type": "string"
+    },
+    "sample_format": {
+      "minLength": 1,
+      "title": "Sample Format",
+      "type": "string"
+    },
+    "sample_rate": {
+      "exclusiveMinimum": 0,
+      "title": "Sample Rate",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "total_samples": {
+      "exclusiveMinimum": 0,
+      "title": "Total Samples",
+      "type": "integer"
+    },
+    "trail_silence_samples": {
+      "minimum": 0,
+      "title": "Trail Silence Samples",
+      "type": "integer"
+    },
+    "wav": {
+      "$ref": "#/$defs/MarkerArtifact"
+    }
+  },
+  "required": [
+    "marker_name",
+    "marker_semantics_version",
+    "rationale",
+    "sample_rate",
+    "channels",
+    "bits_per_sample",
+    "sample_format",
+    "total_samples",
+    "anchor_sample",
+    "peak_amplitude",
+    "lead_silence_samples",
+    "trail_silence_samples",
+    "chirps",
+    "gap_intervals",
+    "wav",
+    "page"
+  ],
+  "title": "MarkerManifest",
+  "type": "object"
+}

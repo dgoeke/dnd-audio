@@ -553,3 +553,173 @@ class TestTheMixPathStreams:
         # describing a session that happened to be short.
         assert len(gains) > 100
         assert sum(journal.writes) > 100 * DEFAULT_MIX_WINDOW
+
+
+class TestTheMarkerAnalysisPathStreams:
+    """INV-07 over M10's composed path, where two things can accumulate rather than one.
+
+    The correlator is the obvious half and the easy one: fixed blocks with a template-length
+    carry, so the working set is a property of the block size rather than of how much audio
+    was asked for. Proving *that* alone is the trap M10's second plan review caught — the
+    analyzer also retains every accepted occurrence, and non-maximum suppression bounds
+    nearby candidates while saying nothing about the number of separated ones. A longer
+    *sparse* search passes a read-size assertion while those lists grow without limit.
+
+    So both halves are asserted: reads stay bounded and interleaved with work (M2's ordered
+    event log), and a **dense** input hits the versioned occurrence ceiling and fails rather
+    than truncating.
+    """
+
+    def test_correlation_happens_before_the_last_read(self) -> None:
+        """An implementation that buffered the search range would correlate once, at the end."""
+        from dnd_audio.marker.detect import detect_occurrences
+        from dnd_audio.marker.spec import MARKER_SPECS
+        from dnd_audio.marker.synth import marker_samples
+
+        spec = MARKER_SPECS["cand-a"]
+        journal = Journal()
+        marker = marker_samples(spec).astype(np.float32) / 32768.0
+        # Five minutes at 48 kHz, with the marker once near the start.
+        duration = 5 * 60 * 48_000
+        track = np.zeros(duration, dtype=np.float32)
+        track[100_000 : 100_000 + marker.size] = marker
+
+        class Watched:
+            def read(self, start: int, count: int, /) -> npt.NDArray[np.float32]:
+                journal.record("read", count)
+                window = np.zeros(count, dtype=np.float32)
+                low, high = max(0, start), min(duration, start + count)
+                if high > low:
+                    window[low - start : high - start] = track[low:high]
+                return window
+
+        import dnd_audio.marker.detect as detect_module
+
+        original = detect_module._normalized_scores
+
+        def watched_scores(
+            signal: npt.NDArray[np.float64], template: npt.NDArray[np.float64]
+        ) -> npt.NDArray[np.float64]:
+            journal.record("write", int(signal.size))
+            return original(signal, template)
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(detect_module, "_normalized_scores", watched_scores)
+            found = detect_occurrences(Watched(), spec, interval=(0, duration))
+
+        assert [item.anchor_sample for item in found] == [100_000 + spec.anchor_sample]
+        assert journal.first_write_index() < journal.last_read_index(), (
+            "every correlation happened after the last read, so the whole search range was "
+            "resident at once"
+        )
+
+    def test_the_largest_read_is_a_property_of_the_block_not_of_the_range(self) -> None:
+        """Ten times the audio, the same peak read."""
+        from dnd_audio.marker.detect import BLOCK_SAMPLES, detect_occurrences
+        from dnd_audio.marker.spec import MARKER_SPECS
+
+        spec = MARKER_SPECS["cand-a"]
+        longest = max(chirp.duration_samples for chirp in spec.chirps)
+
+        class Silent:
+            """Bound to its own journal, so the closure cannot capture a loop variable."""
+
+            def __init__(self, journal: Journal) -> None:
+                self.journal = journal
+
+            def read(self, start: int, count: int, /) -> npt.NDArray[np.float32]:
+                self.journal.record("read", count)
+                return np.zeros(count, dtype=np.float32)
+
+        peaks = []
+        for minutes in (1, 10):
+            duration = minutes * 60 * 48_000
+            journal = Journal()
+            detect_occurrences(Silent(journal), spec, interval=(0, duration))
+            peaks.append(max(journal.reads))
+            assert len(journal.reads) > minutes, "the range was not read in blocks at all"
+
+        assert peaks[0] == peaks[1]
+        assert peaks[0] <= BLOCK_SAMPLES + longest
+
+    def test_dense_occurrences_fail_rather_than_accumulating(self) -> None:
+        """The half a sparse long search cannot see (second plan review, P0-2).
+
+        The ceiling is what bounds the *retained* set, and it fails explicitly: a truncated
+        occurrence list is indistinguishable from a session that genuinely had that many.
+        """
+        from dnd_audio.marker.detect import (
+            DetectorThresholds,
+            OccurrenceCeilingError,
+            detect_occurrences,
+        )
+        from dnd_audio.marker.spec import MARKER_SPECS
+        from dnd_audio.marker.synth import marker_samples
+
+        spec = MARKER_SPECS["cand-a"]
+        marker = marker_samples(spec).astype(np.float32) / 32768.0
+        stride = marker.size + 20_000
+        count = 40
+        track = np.zeros(count * stride + 10_000, dtype=np.float32)
+        for index in range(count):
+            track[index * stride : index * stride + marker.size] = marker
+
+        class Dense:
+            last_read_end = 0
+
+            def read(self, start: int, n: int, /) -> npt.NDArray[np.float32]:
+                self.last_read_end = max(self.last_read_end, start + n)
+                window = np.zeros(n, dtype=np.float32)
+                low, high = max(0, start), min(track.size, start + n)
+                if high > low:
+                    window[low - start : high - start] = track[low:high]
+                return window
+
+        reader = Dense()
+        with pytest.raises(OccurrenceCeilingError):
+            detect_occurrences(
+                reader,
+                spec,
+                interval=(0, track.size),
+                thresholds=DetectorThresholds(max_occurrences_per_track=8),
+            )
+        assert reader.last_read_end < track.size, "the ceiling was checked only after the last read"
+
+    def test_dense_partial_candidates_also_fail_before_the_last_read(self) -> None:
+        """A ceiling on complete occurrences cannot bound a long series of isolated chirps."""
+        from dnd_audio.marker.detect import (
+            DetectorThresholds,
+            OccurrenceCeilingError,
+            detect_occurrences,
+        )
+        from dnd_audio.marker.spec import MARKER_SPECS
+        from dnd_audio.marker.synth import marker_templates
+
+        spec = MARKER_SPECS["v1"]
+        chirp = marker_templates(spec)[0].astype(np.float32) / 32768.0
+        stride = 20_000
+        count = 40
+        track = np.zeros(count * stride + 10_000, dtype=np.float32)
+        for index in range(count):
+            track[index * stride : index * stride + chirp.size] = chirp
+
+        class DensePartials:
+            last_read_end = 0
+
+            def read(self, start: int, n: int, /) -> npt.NDArray[np.float32]:
+                self.last_read_end = max(self.last_read_end, start + n)
+                window = np.zeros(n, dtype=np.float32)
+                low, high = max(0, start), min(track.size, start + n)
+                if high > low:
+                    window[low - start : high - start] = track[low:high]
+                return window
+
+        reader = DensePartials()
+        with pytest.raises(OccurrenceCeilingError):
+            detect_occurrences(
+                reader,
+                spec,
+                interval=(0, track.size),
+                thresholds=DetectorThresholds(max_peak_candidates_per_chirp=8),
+            )
+        assert reader.last_read_end < track.size, "candidate peaks accumulated to the final read"

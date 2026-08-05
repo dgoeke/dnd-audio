@@ -8,19 +8,19 @@
 
 Evidence for or against the MVP's no-drift-correction assumption, from either a
 ~4-hour soak fixture with synchronized transients near both ends or the first real
-session's start/end synchronized-marker measurements (three claps, or M10's generated marker
-after its standalone phone player and detector are bench-validated).
+session's start/end synchronized-marker measurements (three claps, or M10's bench-validated
+marker v1).
 
 ## Completion gate
 
 - [ ] A ~4-hour recording exists with a distinctive synchronized marker near the beginning and
       near the end, across all three kits — or the first real session provides the same. Use
-      the existing three-clap pattern unless M10 has closed its intended-phone/DJI bench; never
-      improvise an untested marker during the irreplaceable session. The start and end marker
+      M10 marker v1 from `dnd-audio marker build`, with the existing three-clap pattern as the
+      fallback; never improvise an untested marker during the irreplaceable session. The pair
       must use the same phone position, orientation, and media-volume step. In a fixed-
       transmitter soak, every compared lav must also remain fixed before lag change may be
       called recorder drift. A real session with moving wearers reports differential acoustic
-      arrival change as drift evidence with geometry unresolved.
+      arrival change with geometry unresolved, **not** recorder-drift evidence.
 - [ ] Differential marker lag measured near both ends for every track, the change between them
       recorded, and the source/receiver geometry classification stated rather than inferred.
 - [ ] **OQ-006** marked answered with the measured numbers.
