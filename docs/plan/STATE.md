@@ -373,5 +373,20 @@ default everywhere: on one fast unit file `-n 8` costs 0.7 s where `-n auto` cos
 1.8 s. Hence 8 rather than `auto` — the whole speedup at a quarter of the fixed cost,
 against mildly oversubscribing a 4-core machine.
 
-**Real DJI metadata has still not been validated.** Six milestones have now been built on
-assumptions H1 would settle. M6a is the first that neither needed nor touched them.
+**Real DJI metadata has been validated — for two receivers, one take, no speech.** This
+sentence used to read "has still not been validated", which was written at M6a's close and
+was already false the next day, when the 2026-08-03 jam capture landed four real Mic 3
+files in `samples/` and M8 was built on them. It survived two milestones because nothing
+re-reads the bottom of this file. **Not existence any more; breadth.**
+
+What real files settled: what the Mic 3 embeds (**OQ-001**), `TX01`/`TX02` uniqueness
+(**OQ-002**), `time_reference` present, midnight-relative and at the file rate
+(**OQ-004**), no DJI-private or iXML chunk carrying timing (**OQ-005**), the displayed
+timecode reaching `bext.time_reference` (**OQ-023**), the receiver's frame-rate setting
+**not** reaching the transmitter's file (**OQ-024**), and identical post-jam timecode
+across **two** receivers (**OQ-012**).
+
+What no file on this disk can settle, and H1 still owes: the sequence counter across a
+power cycle (**OQ-003**), `orig`/`edit` pairing (**OQ-007**), an exact PCM sample count
+from `ffprobe` (**OQ-011**), timecode zero against wall clock (**OQ-015**), the third
+receiver, six transmitters, and real speech at a real table.
