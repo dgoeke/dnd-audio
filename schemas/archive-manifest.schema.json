@@ -1,5 +1,76 @@
 {
   "$defs": {
+    "ArchiveInspectionIdentity": {
+      "additionalProperties": false,
+      "description": "The few container facts worth carrying into a manifest.\n\nDeliberately not the whole inspection record: no FFprobe sidecar, no RIFF inventory, no\ntiming evidence. Those belong to processing, are regenerable from the restored file,\nand would make the one small object this session is allowed to store into a large one\n(ADR-0038).",
+      "properties": {
+        "channels": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Channels"
+        },
+        "codec_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Codec Name"
+        },
+        "sample_count": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sample Count"
+        },
+        "sample_format": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sample Format"
+        },
+        "sample_rate": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sample Rate"
+        }
+      },
+      "title": "ArchiveInspectionIdentity",
+      "type": "object"
+    },
     "ArchiveManifestEntry": {
       "additionalProperties": false,
       "description": "One archived file: where it came from, what it is, and where its bytes are.",
@@ -13,6 +84,17 @@
           "minimum": 0,
           "title": "Compressed Size Bytes",
           "type": "integer"
+        },
+        "inspection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArchiveInspectionIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "object_key": {
           "minLength": 1,

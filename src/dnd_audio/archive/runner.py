@@ -38,7 +38,7 @@ import shutil
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 from pydantic import ValidationError
 
@@ -54,7 +54,11 @@ from dnd_audio.archive.codec import (
     decompress_and_measure,
 )
 from dnd_audio.archive.lock import single_writer
-from dnd_audio.archive.manifest import ArchiveManifest, ArchiveManifestEntry
+from dnd_audio.archive.manifest import (
+    ArchiveInspectionIdentity,
+    ArchiveManifest,
+    ArchiveManifestEntry,
+)
 from dnd_audio.archive.paths import decode_component, encode_component
 from dnd_audio.archive.report import (
     ArchiveObjectOutcome,
@@ -145,9 +149,11 @@ def run_upload(
     config = load_session_config(session_dir / "session.yaml")
     session_id = config.session_id
 
+    sources: ArchiveSourceSet | None = None
     try:
-        _require_current_manifest(session_dir, config)
+        document = _require_current_manifest(session_dir, config)
         sources = build_source_set(session_dir, config)
+        _require_nothing_vanished(document, sources)
         staging_root = session_dir / STAGING_DIRNAME
         reject_outputs_inside_raw(
             session_dir,
@@ -159,17 +165,46 @@ def run_upload(
             },
         )
     except Exception as exc:
-        return _failed(ArchiveOperation.UPLOAD, session_id, exc, started, entries_in_scope=0)
+        # INV-01 is re-verified here too. The source set exists by the time the output-path
+        # check runs, so a failure *after* it built one must still confirm nothing moved —
+        # the invariant is about every exit path, not about the successful one.
+        results: list[ObjectResult] = []
+        if sources is not None:
+            _safe_verify(sources, config, results)
+        return _failed(
+            ArchiveOperation.UPLOAD,
+            session_id,
+            exc,
+            started,
+            entries_in_scope=0 if sources is None else len(sources.entries),
+            objects=results,
+        )
 
-    with single_writer(session_id, directory=lock_dir):
-        return _upload_locked(
-            session_dir=session_dir,
-            config=config,
-            sources=sources,
-            storage=storage,
-            staging_root=staging_root,
-            started=started,
-            free_bytes=free_bytes,
+    # The lock is acquired **inside** the reporting boundary. Held outside it, contention
+    # raised out of this function and the caller wrote no report at all — so the one
+    # failure an operator is most likely to hit produced nothing to read (INV-13).
+    try:
+        with single_writer(session_id, directory=lock_dir):
+            return _upload_locked(
+                session_dir=session_dir,
+                config=config,
+                sources=sources,
+                document=document,
+                storage=storage,
+                staging_root=staging_root,
+                started=started,
+                free_bytes=free_bytes,
+            )
+    except Exception as exc:
+        held: list[ObjectResult] = []
+        _safe_verify(sources, config, held)
+        return _failed(
+            ArchiveOperation.UPLOAD,
+            session_id,
+            exc,
+            started,
+            entries_in_scope=len(sources.entries),
+            objects=held,
         )
 
 
@@ -178,6 +213,7 @@ def _upload_locked(
     session_dir: Path,
     config: SessionConfig,
     sources: ArchiveSourceSet,
+    document: dict[str, Any],
     storage: ArchiveStorage,
     staging_root: Path,
     started: dt.datetime,
@@ -190,10 +226,19 @@ def _upload_locked(
     try:
         _preflight_disk(sources, session_dir, free_bytes=free_bytes)
 
-        existing = _read_remote_manifest(storage, session_id)
-        if existing is not None:
+        committed = _read_remote_manifest(storage, session_id)
+        if committed is not None:
+            existing, payload = committed
+            # INV-01 before returning, on this path too. It reads no source bytes, but the
+            # invariant is a claim about every exit — and an early return that skipped it
+            # was exactly the gap M7a's code review found.
+            sources.verify_unchanged(config)
             return _resolve_existing_manifest(
-                existing=existing, sources=sources, session_id=session_id, started=started
+                existing=existing,
+                payload=payload,
+                sources=sources,
+                session_id=session_id,
+                started=started,
             )
 
         shutil.rmtree(staging_root, ignore_errors=True)
@@ -203,7 +248,7 @@ def _upload_locked(
             staged = _compress_and_check(session_dir, entry, staging_root)
             try:
                 outcome = _publish(storage, session_id, entry, staged)
-                manifest_entries.append(_manifest_entry(session_id, entry, staged))
+                manifest_entries.append(_manifest_entry(session_id, entry, staged, document))
                 results.append(
                     ObjectResult(
                         path=encode_component(entry.relative_path),
@@ -371,19 +416,50 @@ def _read_back(
         raise ArchiveError(message, code="archive_object_conflict")
 
 
+def _identity(manifest: ArchiveManifest) -> tuple[object, ...]:
+    """Everything about a manifest that is not derived from the compression itself.
+
+    The compressed size and digest are deliberately excluded and nothing is lost by it:
+    archive v1's recipe is frozen and single-threaded (ADR-0037), so identical source bytes
+    under an identical recorded recipe produce identical compressed bytes. Comparing them
+    would require re-compressing the whole session just to discover whether anything
+    changed.
+
+    **`track_id` is in here**, and its absence was a real defect: comparing only path, size
+    and digest meant that reassigning track ids between directories and re-inspecting
+    produced "already archived, identical content" while the committed manifest kept the
+    old attribution — and `--track` recovery then returned another speaker's audio. That is
+    an INV-11 violation reached through an equality check. Found by M7a's code review.
+    """
+    return (
+        manifest.session_id,
+        manifest.archive_version,
+        tuple(sorted(manifest.codec.items())),
+        tuple(
+            (
+                entry.path,
+                entry.path_text,
+                entry.track_id,
+                entry.size_bytes,
+                entry.sha256,
+                entry.object_key,
+            )
+            for entry in manifest.entries
+        ),
+    )
+
+
 def _resolve_existing_manifest(
     *,
     existing: ArchiveManifest,
+    payload: bytes,
     sources: ArchiveSourceSet,
     session_id: str,
     started: dt.datetime,
 ) -> ArchiveReport:
-    """Byte-equality is idempotent success; any difference is fatal (ADR-0038)."""
+    """Full-identity equality is idempotent success; any difference is fatal (ADR-0038)."""
     planned = _plan_manifest(session_id, sources, _entries_from_sources(session_id, sources))
-    same = {(e.path, e.sha256, e.size_bytes) for e in existing.entries} == {
-        (e.path, e.sha256, e.size_bytes) for e in planned.entries
-    }
-    payload = canonical_json(existing.model_dump(mode="json")).encode("utf-8")
+    same = _identity(existing) == _identity(planned)
 
     if same:
         return ArchiveReport(
@@ -440,12 +516,16 @@ def run_status(session_dir: Path, *, storage: ArchiveStorage) -> ArchiveReport:
 
     try:
         sources = build_source_set(session_dir, config)
-    except ArchiveError as exc:
+        committed = _read_remote_manifest(storage, session_id)
+        objects_present = (
+            False
+            if committed is not None
+            else any(True for _ in _iter_prefix(storage, _session_prefix(session_id)))
+        )
+    except Exception as exc:
         return _failed(ArchiveOperation.STATUS, session_id, exc, started, entries_in_scope=0)
 
-    remote = _read_remote_manifest(storage, session_id)
-    if remote is None:
-        objects_present = any(True for _ in _iter_prefix(storage, _session_prefix(session_id)))
+    if committed is None:
         state = VerificationState.PENDING if objects_present else VerificationState.ABSENT
         note = (
             "Objects exist but no manifest does, so an upload was interrupted before it "
@@ -463,27 +543,74 @@ def run_status(session_dir: Path, *, storage: ArchiveStorage) -> ArchiveReport:
             finished_at=_now(),
         )
 
-    planned = {(e.path, e.sha256, e.size_bytes) for e in _entries_from_sources(session_id, sources)}
-    committed = {(e.path, e.sha256, e.size_bytes) for e in remote.entries}
-    payload = canonical_json(remote.model_dump(mode="json")).encode("utf-8")
-    matches = planned == committed
+    remote, payload = committed
+    planned = _plan_manifest(session_id, sources, _entries_from_sources(session_id, sources))
+    matches = _identity(remote) == _identity(planned)
 
+    if not matches:
+        return ArchiveReport(
+            operation=ArchiveOperation.STATUS,
+            status=OperationStatus.COMPLETE,
+            scope=ArchiveScope(session_id=session_id, entries_in_scope=len(sources.entries)),
+            verification=VerificationState.DIVERGENT,
+            manifest_sha256=sha256_bytes(payload),
+            notes=[
+                "The committed manifest describes different content than this directory "
+                "holds. Neither was changed."
+            ],
+            started_at=started,
+            finished_at=_now(),
+        )
+
+    # The one place `previously_verified_at_commit` comes from. It is a claim about
+    # *history*, so its only honest source is the report the committing upload wrote — and
+    # that report exists locally, beside the session, which is exactly where this operation
+    # is standing. Absent one, `committed` is all that can be said (ADR-0039).
+    verified_at_commit = _upload_report_says_verified(session_dir)
     return ArchiveReport(
         operation=ArchiveOperation.STATUS,
         status=OperationStatus.COMPLETE,
         scope=ArchiveScope(session_id=session_id, entries_in_scope=len(sources.entries)),
-        verification=(VerificationState.COMMITTED if matches else VerificationState.DIVERGENT),
+        verification=(
+            VerificationState.PREVIOUSLY_VERIFIED_AT_COMMIT
+            if verified_at_commit
+            else VerificationState.COMMITTED
+        ),
         manifest_sha256=sha256_bytes(payload),
         notes=[
-            "A manifest exists and matches this directory's contents. That is not the same "
-            "as the stored bytes still being readable — only `archive verify` establishes "
-            "that, by downloading them."
-            if matches
-            else "The committed manifest describes different content than this directory "
-            "holds. Neither was changed."
+            "A manifest exists and matches this directory's contents."
+            + (
+                " The upload that committed it read every object back at the time — which "
+                "is history, not a statement about the bytes in the bucket today."
+                if verified_at_commit
+                else ""
+            )
+            + " Only `archive verify` establishes that the stored bytes still restore, by "
+            "downloading them."
         ],
         started_at=started,
         finished_at=_now(),
+    )
+
+
+def _upload_report_says_verified(session_dir: Path) -> bool:
+    """Whether the local upload report records a commit that read every object back.
+
+    Deliberately tolerant: a missing, unreadable, or unrecognized report simply means the
+    weaker answer. Treating a parse failure as "verified" would be the one direction that
+    matters, and treating it as an error would make `status` fail over an artifact it does
+    not need.
+    """
+    path = _report_path(session_dir, "upload")
+    try:
+        document = json.loads(path.read_bytes())
+    except (OSError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(document, dict)
+        and document.get("operation") == ArchiveOperation.UPLOAD.value
+        and document.get("verification") == VerificationState.VERIFIED.value
+        and document.get("status") == OperationStatus.COMPLETE.value
     )
 
 
@@ -491,30 +618,57 @@ def run_list(*, storage: ArchiveStorage) -> tuple[list[str], ArchiveReport]:
     """Every committed session id, discovered without a local session directory.
 
     Follows pagination to exhaustion. A partial listing reported as complete would make a
-    session look absent during exactly the emergency this command exists for.
+    session look absent during exactly the emergency this command exists for (OQ-028).
+
+    **A key is not a manifest.** A zero-byte or truncated object at the manifest path is
+    listed as *not* committed rather than as a session, because "committed" is what an
+    operator reads before deciding a recovery is possible. The contents are not downloaded
+    and parsed — that would make listing cost a retrieval per session, and `verify` is the
+    operation that reads bytes — so the report says plainly what was and was not checked.
     """
     started = _now()
     session_ids: list[str] = []
-    for key in _iter_prefix(storage, f"{ARCHIVE_PREFIX}/"):
-        if not key.endswith(f"/{ARCHIVE_MANIFEST_FILENAME}"):
-            continue
-        encoded = key[len(f"{ARCHIVE_PREFIX}/") :].split("/", 1)[0]
-        try:
-            session_ids.append(decode_component(encoded))
-        except ArchiveError:
-            # A key this project did not write. Reported rather than silently dropped: an
-            # unrecognizable key under our own prefix is worth a human knowing about.
-            session_ids.append(f"<unrecognized key: {encoded}>")
+    unreadable: list[str] = []
+
+    try:
+        for key in _iter_prefix(storage, f"{ARCHIVE_PREFIX}/"):
+            if not key.endswith(f"/{ARCHIVE_MANIFEST_FILENAME}"):
+                continue
+            encoded = key[len(f"{ARCHIVE_PREFIX}/") :].split("/", 1)[0]
+            try:
+                session_id = decode_component(encoded)
+            except ArchiveError:
+                # A key this project did not write. Reported rather than dropped: an
+                # unrecognizable key under our own prefix is worth a human knowing about.
+                unreadable.append(encoded)
+                continue
+
+            head = storage.head_object(key)
+            if head is None or head.size_bytes == 0:
+                unreadable.append(session_id)
+                continue
+            session_ids.append(session_id)
+    except Exception as exc:
+        return [], _failed(ArchiveOperation.LIST, "(all)", exc, started, entries_in_scope=0)
+
+    notes = [
+        f"{len(session_ids)} committed session(s). Each has a manifest object; none has "
+        f"been read or verified by this operation — `archive verify --session-id ...` is "
+        f"what establishes that a session still restores."
+    ]
+    if unreadable:
+        notes.append(
+            f"{len(unreadable)} key(s) under this project's prefix are not usable "
+            f"manifests (empty, or not written by this project): "
+            f"{', '.join(sorted(unreadable)[:5])}. They are not listed as sessions."
+        )
 
     report = ArchiveReport(
         operation=ArchiveOperation.LIST,
         status=OperationStatus.COMPLETE,
         scope=ArchiveScope(session_id="(all)", entries_in_scope=len(session_ids)),
-        verification=VerificationState.COMMITTED if session_ids else VerificationState.ABSENT,
-        notes=[
-            f"{len(session_ids)} committed session(s). Each has a manifest; none has been "
-            f"verified by this operation."
-        ],
+        verification=(VerificationState.COMMITTED if session_ids else VerificationState.ABSENT),
+        notes=notes,
         started_at=started,
         finished_at=_now(),
     )
@@ -531,9 +685,9 @@ def run_verify(
     """
     started = _now()
     try:
-        remote = _require_remote_manifest(storage, session_id)
+        remote, manifest_bytes = _require_remote_manifest(storage, session_id)
         selected = _select(remote, track_id)
-    except ArchiveError as exc:
+    except Exception as exc:
         return _failed(ArchiveOperation.VERIFY, session_id, exc, started, entries_in_scope=0)
 
     results: list[ObjectResult] = []
@@ -546,16 +700,16 @@ def run_verify(
                 _entry_for_readback(entry),
                 expected_compressed=entry.compressed_sha256,
             )
-        except ArchiveError as exc:
+        except Exception as exc:
             results.append(
                 ObjectResult(
                     path=entry.path,
                     outcome=ArchiveObjectOutcome.FAILED,
                     size_bytes=entry.size_bytes,
-                    error=ArchiveReportError(code=exc.code, message=str(exc), path=entry.path),
+                    error=_as_error(exc, path=entry.path),
                 )
             )
-            errors.append(ArchiveReportError(code=exc.code, message=str(exc), path=entry.path))
+            errors.append(_as_error(exc, path=entry.path))
             continue
         results.append(
             ObjectResult(
@@ -575,6 +729,7 @@ def run_verify(
             session_id=session_id, track_id=track_id, entries_in_scope=len(selected)
         ),
         verification=(VerificationState.VERIFIED if verified else VerificationState.DIVERGENT),
+        manifest_sha256=sha256_bytes(manifest_bytes),
         objects=results,
         errors=errors,
         notes=[_retrieval_cost_note(gibibytes), *_scope_note(track_id)],
@@ -600,11 +755,11 @@ def run_restore(
     """
     started = _now()
     try:
-        remote = _require_remote_manifest(storage, session_id)
+        remote, manifest_bytes = _require_remote_manifest(storage, session_id)
         selected = _select(remote, track_id)
         _check_destination(destination, protected_session_dirs)
         _preflight_restore(selected, destination, free_bytes=free_bytes)
-    except ArchiveError as exc:
+    except Exception as exc:
         return _failed(ArchiveOperation.RESTORE, session_id, exc, started, entries_in_scope=0)
 
     staging = destination.parent / f"{_RESTORE_STAGING_PREFIX}{encode_component(session_id)}"
@@ -652,6 +807,7 @@ def run_restore(
                 session_id=session_id, track_id=track_id, entries_in_scope=len(selected)
             ),
             verification=VerificationState.COMMITTED,
+            manifest_sha256=sha256_bytes(manifest_bytes),
             objects=results,
             errors=[_as_error(exc)],
             notes=[
@@ -673,6 +829,7 @@ def run_restore(
         # reading a restore report is never told the *archive* was verified when what was
         # checked is the copy now on this disk.
         verification=VerificationState.COMMITTED,
+        manifest_sha256=sha256_bytes(manifest_bytes),
         objects=results,
         notes=[
             "Every restored file was decompressed and matched its recorded digest.",
@@ -686,8 +843,12 @@ def run_restore(
 # --- shared helpers --------------------------------------------------------------------
 
 
-def _require_current_manifest(session_dir: Path, config: SessionConfig) -> None:
-    """The session must have been inspected, and inspected as it stands now."""
+def _require_current_manifest(session_dir: Path, config: SessionConfig) -> dict[str, Any]:
+    """The session must have been inspected, and inspected as it stands now.
+
+    Returns the parsed manifest so :func:`_require_nothing_vanished` can cross-check the
+    source set against it without reading the file twice.
+    """
     path = session_dir / MANIFEST_RELATIVE_PATH
     try:
         document = json.loads(path.read_bytes())
@@ -709,6 +870,41 @@ def _require_current_manifest(session_dir: Path, config: SessionConfig) -> None:
             f"`dnd-audio inspect` again before archiving."
         )
         raise ArchiveError(message, code="archive_manifest_stale")
+    if not isinstance(document, dict):  # pragma: no cover - schema-validated on write
+        message = f"{MANIFEST_RELATIVE_PATH} is not a manifest object"
+        raise ArchiveError(message, code="archive_manifest_absent")
+    return document
+
+
+def _require_nothing_vanished(document: dict[str, Any], sources: ArchiveSourceSet) -> None:
+    """Every file inspection recorded must still be in the source set.
+
+    The refusal in `build_source_set` catches a whole *root* going missing. This catches
+    the narrower and likelier case: one file deleted or renamed inside a root that is still
+    there, between inspection and archiving. Without it the upload commits a manifest
+    describing a session that has quietly lost a recording — and reports success, which is
+    the outcome that makes an operator confident it is safe to lose the local copy.
+
+    Uses inspection's inventory as the reference rather than a second traversal, because
+    the manifest is the only record of what was there *before*.
+    """
+    recorded: set[str] = set()
+    for track in document.get("tracks", []):
+        for source in track.get("sources", []):
+            recorded.add(str(source["relative_path"]))
+    for source in document.get("unassigned", []):
+        recorded.add(str(source["relative_path"]))
+
+    present = {entry.relative_path for entry in sources.entries}
+    missing = sorted(recorded - present)
+    if missing:
+        message = (
+            f"{len(missing)} file(s) that inspection recorded are no longer present: "
+            f"{', '.join(missing[:5])}{'…' if len(missing) > 5 else ''}. Nothing was "
+            f"archived. Archiving what remains would commit a manifest describing a "
+            f"session that has lost a recording, and report success while doing it."
+        )
+        raise ArchiveError(message, code="archive_source_vanished")
 
 
 def _preflight_disk(
@@ -771,12 +967,19 @@ def _check_destination(destination: Path, protected: Sequence[Path]) -> None:
                 )
                 raise ArchiveError(message, code="archive_destination_protected")
 
-    if destination.is_symlink():
-        message = (
-            "the restore destination is a symlink. Where it points decides what gets "
-            "written, and that is not visible from the command line."
-        )
-        raise ArchiveError(message, code="archive_symlink_refused")
+    # Every component, not only the leaf. A symlinked *parent* — `~/backups -> /mnt/other`
+    # — decides where a whole restored session lands just as completely as a symlinked
+    # destination does, and the leaf-only check accepted it. The same "at every component"
+    # rule the upload side applies (ADR-0036). Found by M7a's code review.
+    for component in (destination, *destination.parents):
+        if component.is_symlink():
+            shown = "the restore destination" if component == destination else str(component)
+            message = (
+                f"{shown} is a symlink. Where it points decides what gets written, and "
+                f"that is not visible from the command line — the archive refuses a link "
+                f"at every path component rather than following one. Give a real path."
+            )
+            raise ArchiveError(message, code="archive_symlink_refused")
     if not destination.is_dir():
         message = f"the restore destination {destination} does not exist or is not a directory"
         raise ArchiveError(message, code="archive_destination_unusable")
@@ -824,8 +1027,16 @@ def _iter_prefix(storage: ArchiveStorage, prefix: str) -> Iterator[str]:
     return storage.list_keys(prefix)
 
 
-def _read_remote_manifest(storage: ArchiveStorage, session_id: str) -> ArchiveManifest | None:
-    """Fetch and parse the committed manifest, or ``None`` if none exists."""
+def _read_remote_manifest(
+    storage: ArchiveStorage, session_id: str
+) -> tuple[ArchiveManifest, bytes] | None:
+    """Fetch and parse the committed manifest, with **the bytes that arrived**.
+
+    The bytes are returned rather than reserialized from the parsed model, because the
+    report records the manifest's digest and a reserialization identifies the model, not
+    the stored object. Those differ the moment the schema gains an optional field — and
+    the hash would then name something that is not in the bucket (ADR-0003, ADR-0039).
+    """
     key = manifest_key(session_id)
     if storage.head_object(key) is None:
         return None
@@ -834,7 +1045,7 @@ def _read_remote_manifest(storage: ArchiveStorage, session_id: str) -> ArchiveMa
         while chunk := body.read(1 << 20):
             raw += chunk
     try:
-        return ArchiveManifest.model_validate_json(raw)
+        return ArchiveManifest.model_validate_json(raw), raw
     except ValidationError as exc:
         message = (
             f"the committed manifest for {session_id!r} does not parse as an archive "
@@ -843,7 +1054,9 @@ def _read_remote_manifest(storage: ArchiveStorage, session_id: str) -> ArchiveMa
         raise ArchiveError(message, code="archive_manifest_unreadable") from exc
 
 
-def _require_remote_manifest(storage: ArchiveStorage, session_id: str) -> ArchiveManifest:
+def _require_remote_manifest(
+    storage: ArchiveStorage, session_id: str
+) -> tuple[ArchiveManifest, bytes]:
     found = _read_remote_manifest(storage, session_id)
     if found is None:
         message = (
@@ -892,7 +1105,49 @@ def _entries_from_sources(session_id: str, sources: ArchiveSourceSet) -> list[Ar
     ]
 
 
-def _manifest_entry(session_id: str, entry: ArchiveEntry, staged: _Staged) -> ArchiveManifestEntry:
+def _inspection_identity(
+    document: dict[str, Any], relative_path: str
+) -> ArchiveInspectionIdentity | None:
+    """The bounded container facts inspection recorded for one path, if any.
+
+    Read out of `manifest.json` rather than re-probed. The archive runs no FFprobe, and
+    deriving these from the bytes would be a second implementation of something M1 owns —
+    which is how two answers to "what format is this" end up in one project.
+    """
+    for track in document.get("tracks", []):
+        for source in track.get("sources", []):
+            if source.get("relative_path") == relative_path:
+                return _identity_from(source)
+    for source in document.get("unassigned", []):
+        if source.get("relative_path") == relative_path:
+            return _identity_from(source)
+    return None
+
+
+def _identity_from(source: dict[str, Any]) -> ArchiveInspectionIdentity | None:
+    """Copy the bounded subset, or nothing when the file was never probed.
+
+    A duplicate or an ignored `edit` is recorded and left alone by inspection, so it has no
+    container record — and absent is the honest answer rather than a set of nulls.
+    """
+    container = source.get("container")
+    if not isinstance(container, dict):
+        return None
+    return ArchiveInspectionIdentity(
+        codec_name=container.get("codec_name"),
+        sample_format=container.get("sample_format"),
+        sample_rate=container.get("sample_rate"),
+        channels=container.get("channels"),
+        sample_count=container.get("sample_count"),
+    )
+
+
+def _manifest_entry(
+    session_id: str,
+    entry: ArchiveEntry,
+    staged: _Staged,
+    document: dict[str, Any] | None = None,
+) -> ArchiveManifestEntry:
     return ArchiveManifestEntry(
         path=encode_component(entry.relative_path),
         path_text=_text_or_none(entry.relative_path),
@@ -902,6 +1157,9 @@ def _manifest_entry(session_id: str, entry: ArchiveEntry, staged: _Staged) -> Ar
         compressed_size_bytes=staged.compressed_size,
         compressed_sha256=staged.compressed_sha256,
         object_key=object_key(session_id, entry),
+        inspection=(
+            None if document is None else _inspection_identity(document, entry.relative_path)
+        ),
     )
 
 
@@ -989,9 +1247,19 @@ def _safe_verify(
         )
 
 
-def _as_error(exc: BaseException) -> ArchiveReportError:
+def _as_error(exc: BaseException, *, path: str | None = None) -> ArchiveReportError:
+    """Any exception as a structured error a caller can branch on (INV-13).
+
+    Reads `code` when the exception carries one and falls back to a generic code otherwise,
+    so an unexpected exception type still produces a *structured* failure rather than
+    escaping the operation and leaving no report at all.
+    """
     code = getattr(exc, "code", None)
-    return ArchiveReportError(code=str(code) if code else "archive_failed", message=str(exc))
+    return ArchiveReportError(
+        code=str(code) if code else "archive_failed",
+        message=str(exc) or type(exc).__name__,
+        path=path,
+    )
 
 
 def _failed(
@@ -1001,12 +1269,14 @@ def _failed(
     started: dt.datetime,
     *,
     entries_in_scope: int,
+    objects: list[ObjectResult] | None = None,
 ) -> ArchiveReport:
     return ArchiveReport(
         operation=operation,
         status=OperationStatus.FAILED,
         scope=ArchiveScope(session_id=session_id, entries_in_scope=entries_in_scope),
         verification=VerificationState.ABSENT,
+        objects=objects or [],
         errors=[_as_error(exc)],
         started_at=started,
         finished_at=_now(),

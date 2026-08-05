@@ -93,7 +93,8 @@ app = typer.Typer(
     name="dnd-audio",
     help=(
         "Local audio ingestion and transcription for long tabletop-RPG sessions. "
-        "Nothing here sends audio anywhere."
+        "Nothing here sends audio to anything that processes it; `archive` is the one "
+        "command group that sends anything at all, to your own private storage."
     ),
     no_args_is_help=True,
     add_completion=False,
@@ -577,6 +578,23 @@ def archive_restore(
     )
 
 
+def _sessions_above(destination: Path) -> list[Path]:
+    """Every session directory the restore destination sits inside.
+
+    Walks up looking for a `session.yaml`, because the CLI has no roster of sessions and a
+    destination inside one is the case INV-01 forbids. Returns a list so the runner can
+    resolve each one's configured source roots — a session directory is not itself
+    protected, only the source roots within it are, and `restore --to SESSION/recovered`
+    is a perfectly reasonable thing to want.
+    """
+    found: list[Path] = []
+    current = destination.resolve()
+    for candidate in (current, *current.parents):
+        if (candidate / "session.yaml").is_file():
+            found.append(candidate)
+    return found
+
+
 def _run_archive(
     operation: ArchiveOperation,
     *,
@@ -619,7 +637,19 @@ def _run_archive(
     else:
         assert session_id is not None
         assert destination is not None
-        result = run_restore(session_id, destination, storage=storage, track_id=track)
+        # **Protected roots must be resolved here**, not left empty. The runner refuses a
+        # destination inside a session's sources, and the CLI passing nothing made that
+        # refusal unreachable from the actual command — so `archive restore --to
+        # SESSION/raw/anywhere` would have written into protected sources (INV-01). The one
+        # test that appeared to prove otherwise passed the list by hand. Found by M7a's
+        # code review.
+        result = run_restore(
+            session_id,
+            destination,
+            storage=storage,
+            track_id=track,
+            protected_session_dirs=_sessions_above(destination),
+        )
 
     if report_path is None:
         report_path = (
@@ -627,6 +657,32 @@ def _run_archive(
             if session_dir is not None
             else default_report_dir() / f"archive-{operation.value}-report.json"
         )
+
+    # INV-01 outranks INV-13 when the report's own location is the violation, exactly as
+    # `inspect` has done since M1: a report is regenerable and a source directory written
+    # into is not. Reached through `work -> raw/tx-a`, which is the symlink M1's verify
+    # phase found. The runner checks its staging path; nothing was checking this one.
+    if session_dir is not None:
+        from dnd_audio.config import load_session_config
+        from dnd_audio.raw_guard import raw_roots, reject_outputs_inside_raw
+
+        try:
+            session_config = load_session_config(session_dir / "session.yaml")
+            reject_outputs_inside_raw(
+                session_dir,
+                session_config,
+                raw_roots(session_config),
+                {"archive report": report_path},
+            )
+        except DndAudioError as exc:
+            typer.secho(
+                f"  no report written: {report_path} would land inside the session's own "
+                f"sources, and nothing under them may be written to (INV-01)",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(code=ExitCode.FATAL) from exc
+
     report_path.parent.mkdir(parents=True, exist_ok=True)
     write_report(result, report_path)
 

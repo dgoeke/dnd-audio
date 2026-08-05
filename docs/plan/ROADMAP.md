@@ -194,8 +194,10 @@ Storage under a human-readable content-addressed key, read the complete object b
 both compressed and restored SHA-256 values, and support ergonomic whole-session/one-track
 status, verification, and restore.
 
-**Status: chartered; not started.** This is the explicit opt-in archive exception to INV-06.
-It never deletes or publishes, so INV-01 remains intact.
+**Status: closed.** The explicit opt-in archive exception to INV-06, narrowed in wording from
+"audio never leaves the machine" to "audio never reaches anything that processes it" across
+all four places that stated it — `AGENTS.md` twice and the spec twice. It never deletes or
+publishes, so INV-01 remains intact and unamended.
 
 **Gate:** full local and remote round trips reconstruct every original hash; manifest-last
 commit, retry, restore, redaction, bounded streaming, raw immutability, and offline default

@@ -8,6 +8,7 @@ gone and nobody remembers an object key.
 
 from __future__ import annotations
 
+import errno
 import shutil
 from pathlib import Path
 
@@ -312,21 +313,132 @@ class TestInterruptedUpload:
     def test_a_source_that_changes_mid_upload_stops_the_commit(
         self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path
     ) -> None:
-        """INV-01 is verified before the manifest, not only at the start."""
+        """INV-01 is verified **before the manifest**, and this test can prove it.
+
+        The first version of this completed an upload, mutated a file afterwards, and
+        asserted a failure — which it got, from existing-manifest divergence. It would have
+        passed with the pre-commit verification deleted entirely. Found by M7a's code
+        review, and it is the exact shape M1's closeout warns about.
+
+        The second version still did not. It mutated a file the loop had **not yet
+        reached**, so `_compress_and_check`'s own re-hash caught it and the test passed with
+        the pre-commit verification deleted — the same defect, one layer down. Verified by
+        deleting the call and watching it stay green.
+
+        This one mutates the **first** entry after it has already been compressed, uploaded
+        and read back. Nothing revisits it, so the only thing standing between that
+        mutation and a committed manifest is `sources.verify_unchanged(config)` before the
+        manifest PUT. Delete that call and this test fails.
+        """
         config = load_session_config(inspected.session_dir / "session.yaml")
         sources = build_source_set(inspected.session_dir, config)
-        from dnd_audio.archive.sourceset import object_key
+        victim = inspected.session_dir / sources.entries[0].relative_path
 
-        # Fail after the first object, then mutate a source so the pre-commit re-check has
-        # something to catch on the resumed run.
-        first_key = object_key(config.session_id, sources.entries[0])
-        run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
-        assert first_key in storage.objects
+        class MutatingStorage:
+            """Changes a source file the moment the second object is uploaded."""
 
-        target = inspected.session_dir / sources.entries[0].relative_path
-        target.write_bytes(target.read_bytes() + b"\x00")
+            def __init__(self, inner: FakeArchiveStorage) -> None:
+                self.inner = inner
+                self.puts = 0
+
+            def put_object(self, key: str, source: Path) -> None:
+                self.puts += 1
+                self.inner.put_object(key, source)
+                # After the *first* object is fully published, so the entry it belongs to
+                # is behind the loop and only the pre-commit check can still see it.
+                if self.puts == 1:
+                    victim.write_bytes(victim.read_bytes() + b"\x00")
+
+            def head_object(self, key: str):  # type: ignore[no-untyped-def]
+                return self.inner.head_object(key)
+
+            def open_object(self, key: str):  # type: ignore[no-untyped-def]
+                return self.inner.open_object(key)
+
+            def list_keys(self, prefix: str):  # type: ignore[no-untyped-def]
+                return self.inner.list_keys(prefix)
+
+        mutating = MutatingStorage(storage)
+        report = run_upload(inspected.session_dir, storage=mutating, lock_dir=lock_dir)
+
+        assert report.status is not OperationStatus.COMPLETE
+        assert manifest_key(config.session_id) not in storage.objects, (
+            "a manifest was committed describing a source that changed during the upload"
+        )
+        assert any(
+            "archive_sources_modified" in (error.code or "") for error in report.errors
+        ) or any(
+            "archive_sources_modified" in (item.error.code if item.error else "")
+            for item in report.objects
+        )
+
+
+class TestSourcesThatVanish:
+    """The worst failure a backup can have: committing successfully while incomplete."""
+
+    def test_a_missing_configured_root_is_refused(
+        self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path
+    ) -> None:
+        """An unmounted disk must not become a smaller archive reported as complete.
+
+        `build_source_set` used to `continue` past a root that was not there, so the upload
+        archived the tracks that remained and committed. Found by M7a's code review.
+        """
+        import shutil as _shutil
+
+        _shutil.rmtree(inspected.session_dir / "raw")
         report = run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
         assert report.status is OperationStatus.FAILED
+        assert report.errors[0].code == "archive_source_root_missing"
+        assert not storage.objects
+
+    def test_a_file_deleted_after_inspection_is_refused(
+        self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path
+    ) -> None:
+        """The narrower and likelier case: one recording gone, its directory still there."""
+        config = load_session_config(inspected.session_dir / "session.yaml")
+        sources = build_source_set(inspected.session_dir, config)
+        (inspected.session_dir / sources.entries[0].relative_path).unlink()
+
+        report = run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+        assert report.status is OperationStatus.FAILED
+        assert report.errors[0].code == "archive_source_vanished"
+        assert sources.entries[0].relative_path in report.errors[0].message
+        assert not storage.objects
+
+    def test_a_file_added_after_inspection_is_not_treated_as_a_loss(
+        self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path
+    ) -> None:
+        """Only *disappearance* is fatal here.
+
+        A file appearing after inspection is an ordinary thing an operator does — dropping
+        a notes file beside the recordings — and the archive should take it, not refuse the
+        session. The manifest cross-check is deliberately one-directional.
+        """
+        (inspected.session_dir / "raw" / "added-later.txt").write_text("ok\n", encoding="utf-8")
+        report = run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+        assert report.status is OperationStatus.COMPLETE
+        assert any("added-later" in item.path for item in report.objects)
+
+
+class TestLockFailuresStillReport:
+    def test_contention_produces_a_report_rather_than_an_exception(
+        self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path
+    ) -> None:
+        """INV-13: the failure an operator is most likely to hit must leave something to read.
+
+        The lock used to be acquired outside the reporting boundary, so contention raised
+        straight out of `run_upload` and the CLI wrote no report at all.
+        """
+        from dnd_audio.archive.lock import single_writer
+
+        config = load_session_config(inspected.session_dir / "session.yaml")
+        with single_writer(config.session_id, directory=lock_dir):
+            report = run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+
+        assert report.status is OperationStatus.FAILED
+        assert report.errors[0].code == "archive_upload_in_progress"
+        assert report.exit_code() is not ExitCode.OK
 
 
 class TestStatus:
@@ -346,8 +458,48 @@ class TestStatus:
         # And the note says so in words, because the operator deciding whether it is safe
         # to lose the local copy is reading prose, not an enum. That `status` structurally
         # *cannot* say `verified` is asserted in tests/test_archive_manifest.py.
-        assert "not the same as" in " ".join(report.notes)
         assert "archive verify" in " ".join(report.notes)
+
+    def test_it_reports_previously_verified_only_when_a_commit_report_says_so(
+        self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path
+    ) -> None:
+        """The state that was defined and never produced, until code review found it.
+
+        `previously_verified_at_commit` is a claim about history, so its only honest source
+        is the report the committing upload wrote — which lives beside the session, where
+        `status` is already standing. Absent one, `committed` is all that can be said.
+        """
+        from dnd_audio.archive.report import write_report
+        from dnd_audio.archive.runner import _report_path
+
+        upload = run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+        assert upload.verification is VerificationState.VERIFIED
+
+        # Before the upload's report is on disk, history is not available to be read.
+        assert (
+            run_status(inspected.session_dir, storage=storage).verification
+            is VerificationState.COMMITTED
+        )
+
+        write_report(upload, _report_path(inspected.session_dir, "upload"))
+        after = run_status(inspected.session_dir, storage=storage)
+        assert after.verification is VerificationState.PREVIOUSLY_VERIFIED_AT_COMMIT
+        assert "history" in " ".join(after.notes)
+
+    def test_an_unreadable_upload_report_yields_the_weaker_answer(
+        self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path
+    ) -> None:
+        """A corrupt report must never be read as evidence of verification."""
+        from dnd_audio.archive.runner import _report_path
+
+        run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+        path = _report_path(inspected.session_dir, "upload")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{ not json", encoding="utf-8")
+        assert (
+            run_status(inspected.session_dir, storage=storage).verification
+            is VerificationState.COMMITTED
+        )
 
     def test_objects_without_a_manifest_are_pending(
         self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path
@@ -684,6 +836,122 @@ class TestRestoreIsTransactional:
         report = run_restore(session_id, destination, storage=storage)
         assert report.status is OperationStatus.FAILED
         assert list(destination.iterdir()) == []
+
+
+class TestDiskExhaustion:
+    """ENOSPC at each phase, which the charter requires and the first pass omitted.
+
+    Preflight is tested separately and directly, at and just below its computed bound —
+    injecting ENOSPC proves *cleanup*, not that the arithmetic is right, and conflating the
+    two was one of the plan review's findings. These tests are the cleanup half.
+    """
+
+    def _no_space(self) -> OSError:
+        return OSError(errno.ENOSPC, "No space left on device")
+
+    def test_exhaustion_while_compressing_leaves_no_staging_and_no_commit(
+        self,
+        inspected: FixtureTruth,
+        storage: FakeArchiveStorage,
+        lock_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        config = load_session_config(inspected.session_dir / "session.yaml")
+        import dnd_audio.archive.runner as runner_module
+
+        def failing(*args: object, **kwargs: object) -> None:
+            raise self._no_space()
+
+        monkeypatch.setattr(runner_module, "compress_file", failing)
+        report = run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+
+        assert report.status is OperationStatus.FAILED
+        assert manifest_key(config.session_id) not in storage.objects
+        assert not (inspected.session_dir / "work" / "archive").exists()
+
+    def test_exhaustion_while_uploading_leaves_no_manifest(
+        self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path
+    ) -> None:
+        config = load_session_config(inspected.session_dir / "session.yaml")
+        sources = build_source_set(inspected.session_dir, config)
+        from dnd_audio.archive.sourceset import object_key
+
+        class Exhausted:
+            def __init__(self, inner: FakeArchiveStorage, doomed: str) -> None:
+                self.inner = inner
+                self.doomed = doomed
+
+            def put_object(self, key: str, source: Path) -> None:
+                if key == self.doomed:
+                    raise OSError(errno.ENOSPC, "No space left on device")
+                self.inner.put_object(key, source)
+
+            def head_object(self, key: str):  # type: ignore[no-untyped-def]
+                return self.inner.head_object(key)
+
+            def open_object(self, key: str):  # type: ignore[no-untyped-def]
+                return self.inner.open_object(key)
+
+            def list_keys(self, prefix: str):  # type: ignore[no-untyped-def]
+                return self.inner.list_keys(prefix)
+
+        exhausted = Exhausted(storage, object_key(config.session_id, sources.entries[1]))
+        report = run_upload(inspected.session_dir, storage=exhausted, lock_dir=lock_dir)
+
+        assert report.status is not OperationStatus.COMPLETE
+        assert manifest_key(config.session_id) not in storage.objects
+        assert not (inspected.session_dir / "work" / "archive").exists()
+
+    def test_exhaustion_while_restoring_leaves_the_destination_untouched(
+        self,
+        inspected: FixtureTruth,
+        storage: FakeArchiveStorage,
+        lock_dir: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The transactional restore's whole point, under the failure it exists for."""
+        session_id = session_id_of(inspected)
+        run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+
+        import dnd_audio.archive.runner as runner_module
+
+        real = runner_module.decompress_and_measure  # type: ignore[attr-defined]
+        state = {"calls": 0}
+
+        def failing(*args: object, **kwargs: object) -> object:
+            state["calls"] += 1
+            if state["calls"] == 3:
+                raise OSError(errno.ENOSPC, "No space left on device")
+            return real(*args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(runner_module, "decompress_and_measure", failing)
+
+        destination = tmp_path / "recovered"
+        destination.mkdir()
+        report = run_restore(session_id, destination, storage=storage)
+
+        assert report.status is OperationStatus.FAILED
+        assert list(destination.iterdir()) == []
+        assert not list(tmp_path.glob(".dnd-audio-restore-*"))
+
+    def test_a_report_still_describes_the_failure(
+        self,
+        inspected: FixtureTruth,
+        storage: FakeArchiveStorage,
+        lock_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """INV-13: running out of disk is exactly when an operator needs a report."""
+        import dnd_audio.archive.runner as runner_module
+
+        def failing(*args: object, **kwargs: object) -> None:
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        monkeypatch.setattr(runner_module, "compress_file", failing)
+        report = run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+        assert report.errors
+        assert report.exit_code() is not ExitCode.OK
 
 
 def _manifest_from(storage: FakeArchiveStorage, session_id: str) -> ArchiveManifest:

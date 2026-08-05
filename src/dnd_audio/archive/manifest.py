@@ -38,6 +38,7 @@ from dnd_audio.archive import ARCHIVE_VERSION
 __all__ = [
     "ARCHIVE_MANIFEST_SCHEMA_VERSION",
     "RESTORE_INSTRUCTIONS",
+    "ArchiveInspectionIdentity",
     "ArchiveManifest",
     "ArchiveManifestEntry",
 ]
@@ -69,6 +70,24 @@ RESTORE_INSTRUCTIONS: Final = (
 )
 
 
+class ArchiveInspectionIdentity(BaseModel):
+    """The few container facts worth carrying into a manifest.
+
+    Deliberately not the whole inspection record: no FFprobe sidecar, no RIFF inventory, no
+    timing evidence. Those belong to processing, are regenerable from the restored file,
+    and would make the one small object this session is allowed to store into a large one
+    (ADR-0038).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    codec_name: str | None = None
+    sample_format: str | None = None
+    sample_rate: int | None = Field(default=None, gt=0)
+    channels: int | None = Field(default=None, gt=0)
+    sample_count: int | None = Field(default=None, ge=0)
+
+
 class ArchiveManifestEntry(BaseModel):
     """One archived file: where it came from, what it is, and where its bytes are."""
 
@@ -89,6 +108,14 @@ class ArchiveManifestEntry(BaseModel):
     #: Immutable, and derivable from the fields above — recorded anyway so a recovery does
     #: not have to reimplement this project's key construction to find a byte.
     object_key: str = Field(min_length=1)
+    #: What inspection knew about this file, for the entries that have an entry at all.
+    #: **Bounded on purpose**: codec, sample format, rate, channels and sample count, and
+    #: nothing else. The charter asks for "bounded copied inspection identity" because the
+    #: whole `manifest.json` record would multiply this document's size across every source
+    #: for no recovery benefit — but a person holding only the bucket should be able to see
+    #: that an object is a 48 kHz 24-bit mono WAV without decoding it. Absent for files
+    #: inspection has no opinion about, which is most non-audio.
+    inspection: ArchiveInspectionIdentity | None = None
 
 
 class ArchiveManifest(BaseModel):

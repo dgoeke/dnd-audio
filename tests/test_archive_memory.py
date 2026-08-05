@@ -28,12 +28,13 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from dnd_audio.archive.codec import CHUNK_BYTES, compress_file, decompress_and_measure
 from dnd_audio.archive.fakes import FakeArchiveStorage
-from dnd_audio.archive.runner import run_restore, run_upload
+from dnd_audio.archive.runner import _RESTORE_STAGING_PREFIX, run_restore, run_upload
 from dnd_audio.archive.storage import ObjectHead
 from dnd_audio.config import load_session_config
 from dnd_audio.determinism import BinaryReader
@@ -77,7 +78,34 @@ class Journal:
         return min(seconds) < max(firsts)
 
 
-class WatchedReader:
+class _Delegating:
+    """Passes through the file protocol production actually uses.
+
+    Both wrappers below stand in for a real file handle, and production opens files with
+    `with path.open(...)`. Without `__enter__`/`__exit__` the instrumented run fails in a
+    way that looks like a defect in the code under test rather than in the instrument.
+    """
+
+    _inner: Any
+
+    def __enter__(self) -> Any:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        closer = getattr(self._inner, "close", None)
+        if closer is not None:
+            closer()
+
+    def flush(self) -> None:
+        flusher = getattr(self._inner, "flush", None)
+        if flusher is not None:
+            flusher()
+
+
+class WatchedReader(_Delegating):
     """Records every read, and fails loudly on an unbounded one."""
 
     def __init__(self, inner: BinaryReader, journal: Journal, phase: str) -> None:
@@ -92,22 +120,22 @@ class WatchedReader:
                 f"recording ends up in RAM (INV-07)."
             )
             raise AssertionError(message)
-        chunk = self._inner.read(size)
+        chunk: bytes = self._inner.read(size)
         self._journal.record(self._phase, "read", len(chunk))
         return chunk
 
 
-class WatchedWriter:
+class WatchedWriter(_Delegating):
     """Records every write."""
 
-    def __init__(self, inner: object, journal: Journal, phase: str) -> None:
+    def __init__(self, inner: Any, journal: Journal, phase: str) -> None:
         self._inner = inner
         self._journal = journal
         self._phase = phase
 
     def write(self, data: bytes) -> int:
         self._journal.record(self._phase, "write", len(data))
-        self._inner.write(data)  # type: ignore[attr-defined]
+        self._inner.write(data)
         return len(data)
 
 
@@ -149,30 +177,40 @@ def big_session(canonical_fixture: FixtureTruth) -> FixtureTruth:
 
 
 class TestCompressionBoundary:
-    def test_source_reads_interleave_with_compression_writes(self, tmp_path: Path) -> None:
-        """Nothing that reads a whole file before writing can satisfy this."""
+    def test_source_reads_interleave_with_compression_writes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Instruments the **real** `compress_file`, not a copy of its body.
+
+        The first version reimplemented the function's loop in the test. That proves the
+        loop the test wrote streams, and says nothing about the one production runs — the
+        compressor could buffer the entire source and this would have stayed green. Found
+        by M7a's code review. `Path.open` is patched instead, so the function under test is
+        genuinely the function that ships.
+        """
         source = tmp_path / "in.bin"
         source.write_bytes(bytes(range(256)) * (PAYLOAD_BYTES // 256))
         target = tmp_path / "out.zst"
-        compress_file(source, target)
 
-        # Replayed through instrumented handles rather than observed inside
-        # `compress_file`, which owns its own file objects. The loop below is that
-        # function's body; if the two ever diverge, the composed upload tests are what
-        # notice, because they instrument the real call.
         journal = Journal()
-        with source.open("rb") as raw, target.open("wb") as out:
-            writer = WatchedWriter(out, journal, "compress")
-            reader = WatchedReader(raw, journal, "compress")
-            import zstandard
+        real_open = Path.open
 
-            compressor = zstandard.ZstdCompressor(level=10, threads=0)
-            with compressor.stream_writer(writer, closefd=False) as sink:  # type: ignore[arg-type]
-                while chunk := reader.read(CHUNK_BYTES):
-                    sink.write(chunk)
+        def watched_open(self: Path, mode: str = "r", *args: Any, **kwargs: Any) -> Any:
+            handle = real_open(self, mode, *args, **kwargs)
+            if self == source:
+                return WatchedReader(handle, journal, "compress")
+            if self == target:
+                return WatchedWriter(handle, journal, "compress")
+            return handle
 
-        assert len(journal.of("compress", "read")) > 1
+        monkeypatch.setattr(Path, "open", watched_open)
+        compress_file(source, target)
+        monkeypatch.undo()
+
+        assert len(journal.of("compress", "read")) > 1, "the source was read in one gulp"
+        assert len(journal.of("compress", "write")) > 1
         assert journal.interleaves("compress", "read", "write")
+        assert all(size <= CHUNK_BYTES for size in journal.of("compress", "read"))
 
     def test_no_read_is_unbounded_during_compression(self, tmp_path: Path) -> None:
         source = tmp_path / "in.bin"
@@ -246,7 +284,7 @@ class TestComposedUploadAndRestore:
         assert all(size <= CHUNK_BYTES for size in journal.of("download", "read"))
 
     def test_restore_streams_at_every_boundary(
-        self, big_session: FixtureTruth, tmp_path: Path
+        self, big_session: FixtureTruth, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         journal = Journal()
         storage = WatchedStorage(FakeArchiveStorage(), journal)
@@ -256,11 +294,31 @@ class TestComposedUploadAndRestore:
         journal.events.clear()
         destination = tmp_path / "restored"
         destination.mkdir()
+
+        # The destination side, which the first version never observed — it asserted on
+        # remote reads and called that a restore boundary. A restore that buffered a whole
+        # object before writing it would have passed. Found by M7a's code review.
+        real_open = Path.open
+
+        def watched_open(self: Path, mode: str = "r", *args: Any, **kwargs: Any) -> Any:
+            handle = real_open(self, mode, *args, **kwargs)
+            if "w" in mode and _RESTORE_STAGING_PREFIX in str(self):
+                return WatchedWriter(handle, journal, "restore")
+            return handle
+
+        monkeypatch.setattr(Path, "open", watched_open)
         report = run_restore(config.session_id, destination, storage=storage)
+        monkeypatch.undo()
         assert report.status.value == "complete"
 
         assert len(journal.of("download", "read")) > 1
         assert all(size <= CHUNK_BYTES for size in journal.of("download", "read"))
+
+        assert len(journal.of("restore", "write")) > 1, (
+            "the restore wrote each file in one call, so it held a whole object in memory"
+        )
+        assert all(size <= CHUNK_BYTES for size in journal.of("restore", "write"))
+        assert journal.interleaves("restore", "write", "write")
 
     def test_no_boundary_ever_reads_without_a_size(
         self, big_session: FixtureTruth, tmp_path: Path

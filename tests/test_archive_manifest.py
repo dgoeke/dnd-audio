@@ -289,12 +289,29 @@ class TestSingleWriterLock:
         """A lock inside a source root would itself violate INV-01."""
         path = lock_path("session-1", directory=tmp_path)
         assert path.parent == tmp_path
-        assert path.name == "session-1.upload.lock"
+        assert path.name.endswith(".upload.lock")
+
+    def test_it_is_stable_for_a_session_and_distinct_between_them(self, tmp_path: Path) -> None:
+        assert lock_path("a", directory=tmp_path) == lock_path("a", directory=tmp_path)
+        assert lock_path("a", directory=tmp_path) != lock_path("b", directory=tmp_path)
 
     def test_a_session_id_with_a_slash_cannot_name_a_lock_elsewhere(self, tmp_path: Path) -> None:
         path = lock_path("a/b", directory=tmp_path)
         assert path.parent == tmp_path
         assert "/" not in path.name
+
+    def test_a_very_long_session_id_still_produces_a_usable_filename(self, tmp_path: Path) -> None:
+        """Named by digest, because an encoded long id blows past the 255-byte limit.
+
+        The upload-id record had the same defect against object keys, where it was worse:
+        multipart failed before its first part on exactly the long paths the key limit
+        permits. Found by M7a's code review.
+        """
+        path = lock_path("s" * 900, directory=tmp_path)
+        assert len(path.name.encode("utf-8")) < 255
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+        assert path.is_file()
 
     def test_it_is_held_and_released(self, tmp_path: Path) -> None:
         with single_writer("s", directory=tmp_path):

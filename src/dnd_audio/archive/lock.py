@@ -33,6 +33,7 @@ from pathlib import Path
 from dnd_audio.archive import ArchiveError
 from dnd_audio.archive.config import state_dir
 from dnd_audio.archive.paths import encode_component
+from dnd_audio.determinism import sha256_bytes
 
 __all__ = ["lock_path", "single_writer"]
 
@@ -40,11 +41,13 @@ __all__ = ["lock_path", "single_writer"]
 def lock_path(session_id: str, *, directory: Path | None = None) -> Path:
     """Where a session's upload lock lives.
 
-    Named by the **encoded** session id, so a session called `a/b` cannot name a lock in
-    another directory — the same reason object keys are encoded (ADR-0036).
+    Named by the session id's **digest**, so a session called `a/b` cannot name a lock in
+    another directory and a very long session id cannot produce a filename past the
+    255-byte component limit. The readable form is not needed: nothing reads these back,
+    and the digest is stable for a given session (M7a code review).
     """
     base = state_dir() if directory is None else directory
-    return base / f"{encode_component(session_id)}.upload.lock"
+    return base / f"{sha256_bytes(encode_component(session_id).encode('utf-8'))}.upload.lock"
 
 
 @contextmanager

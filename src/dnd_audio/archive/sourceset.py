@@ -160,13 +160,29 @@ def build_source_set(session_dir: Path, config: SessionConfig) -> ArchiveSourceS
     generated = {WORK_DIRNAME, OUTPUT_DIRNAME}
     found: list[ArchiveEntry] = []
 
+    _refuse_symlink(session_dir, session_dir)
+
     for root in roots:
         directory = session_dir if root == "." else session_dir / root
-        if not directory.exists():
-            continue
         _refuse_symlink(directory, session_dir)
+        if not directory.exists():
+            # **Not skipped.** A configured source root that is not there is an unmounted
+            # disk, a renamed directory, or a deletion — and continuing past it archives
+            # the tracks that remain and commits successfully, which is a confidently
+            # incomplete backup. That is the worst outcome this milestone has, because the
+            # operator is then told their session is safe. Found by M7a's code review.
+            message = (
+                f"the configured source root {root!r} does not exist. Nothing was "
+                f"archived: an absent source directory is an unmounted disk or a deletion, "
+                f"and archiving the rest of the session would report success while "
+                f"silently leaving a transmitter out. Restore or mount it, then re-run."
+            )
+            raise ArchiveError(message, code="archive_source_root_missing")
         if not directory.is_dir():
-            continue
+            message = (
+                f"the configured source root {root!r} is not a directory. Nothing was archived."
+            )
+            raise ArchiveError(message, code="archive_source_root_missing")
         _walk(
             directory,
             session_dir=session_dir,

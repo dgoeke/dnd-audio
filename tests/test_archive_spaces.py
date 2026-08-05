@@ -298,6 +298,53 @@ class TestMultipartBoundaries:
         assert record is not None
         assert not record.is_file()
 
+    def test_a_long_object_key_still_gets_a_usable_upload_record(
+        self, storage: SpacesStorage, client: RecordingClient, tmp_path: Path
+    ) -> None:
+        """The record is named by digest, because the encoded key is not a filename.
+
+        A valid 296-byte object key percent-encodes to a 313-character name, past the
+        255-byte component limit on every common filesystem — so multipart used to fail
+        before its first part on exactly the long paths the 1024-byte key limit permits.
+        Found by M7a's code review.
+        """
+        key = "sessions/archive-v1/s/objects/" + ("%C3%A9" * 60) + ".zst"
+        assert len(key) > 296
+        record = storage._upload_record(key)
+        assert record is not None
+        assert len(record.name.encode("utf-8")) < 255
+
+        path = tmp_path / "payload.bin"
+        path.write_bytes(b"h" * (MIN_MULTIPART_PART_BYTES * 2))
+        storage.put_object(key, path)
+        assert client.objects[key] == path.read_bytes()
+
+    def test_a_failed_abort_keeps_the_record_so_a_later_run_can_retry(
+        self, storage: SpacesStorage, client: RecordingClient, tmp_path: Path
+    ) -> None:
+        """Otherwise a billable multipart orphan is left that nothing knows the id of.
+
+        Deleting the record unconditionally after an abort — succeeded or not — was the
+        original behaviour, and it discarded the only local trace of the upload id.
+        """
+        big = tmp_path / "big.bin"
+        big.write_bytes(b"i" * (MIN_MULTIPART_PART_BYTES * 2))
+        client.errors["complete_multipart_upload"] = [ProviderError("InternalErrorFatal", 500)]
+        client.errors["abort_multipart_upload"] = [ProviderError("AccessDenied", 403)]
+
+        with pytest.raises(ArchiveError):
+            storage.put_object("orphan-key", big)
+
+        record = storage._upload_record("orphan-key")
+        assert record is not None
+        assert record.is_file(), "a failed abort must leave the upload id recoverable"
+
+        # And a later run finds it and tries again.
+        client.errors.clear()
+        storage.put_object("orphan-key", big)
+        assert "abort_multipart_upload" in client.operations
+        assert not record.is_file()
+
     def test_an_orphaned_upload_from_a_crashed_run_is_aborted_first(
         self, storage: SpacesStorage, client: RecordingClient, tmp_path: Path
     ) -> None:
@@ -465,14 +512,36 @@ class TestClientConstruction:
         )
         assert completed.stdout.strip() == "False"
 
-    def test_the_runtime_config_disables_the_sdks_own_retries(self) -> None:
-        """Two bounds would multiply into an attempt count nobody stated (ADR-0038).
+    def test_the_sdks_own_retries_are_disabled_in_the_resolved_client_config(self) -> None:
+        """Behaviour, not a source-text search — and the search was certifying a bug.
 
-        Asserted on the source rather than by constructing a client, because constructing
-        one is the thing the default suite must not do.
+        The first version asserted the literal `"max_attempts": 1` appeared in the module.
+        In botocore, `max_attempts` counts retries *after* the initial request, so that
+        setting permitted one SDK retry beneath every project-level attempt and the test
+        confirmed the mistake rather than the property. `total_max_attempts: 1` is
+        unambiguous. Found by M7a's code review.
+
+        Constructing a client opens no socket — boto3 resolves endpoints from bundled
+        data — so this can assert on what botocore actually resolved.
         """
-        source = Path("src/dnd_audio/archive/spaces.py").read_text(encoding="utf-8")
-        assert '"max_attempts": 1' in source
+        import boto3
+        from botocore.config import Config
+
+        from dnd_audio.archive.spaces import RETRY_CONFIG
+
+        assert RETRY_CONFIG["total_max_attempts"] == 1
+        assert "max_attempts" not in RETRY_CONFIG
+
+        client = boto3.client(
+            "s3",
+            endpoint_url="https://nyc3.digitaloceanspaces.com",
+            region_name="nyc3",
+            aws_access_key_id="id",
+            aws_secret_access_key="secret",
+            config=Config(retries=RETRY_CONFIG, signature_version="s3v4"),
+        )
+        resolved = client.meta.config.retries
+        assert resolved["total_max_attempts"] == 1
 
     def test_the_configured_thresholds_reach_the_storage(self, tmp_path: Path) -> None:
         config = ArchiveRuntimeConfig(

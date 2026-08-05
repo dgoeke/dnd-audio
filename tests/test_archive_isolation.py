@@ -210,9 +210,13 @@ class NetworkReached(RuntimeError):
 
 
 def _fail(*args, **kwargs):
+    # The marker is in the *message*, not only the class name. Several commands catch
+    # broad exceptions and fold them into a structured error in their report (INV-13), so
+    # the class name can be lost while the text survives — and the assertion would then
+    # miss a real breach.
     raise NetworkReached(
-        "this command constructed a socket or a storage client. Only `models fetch` "
-        "and `archive` may touch the network (INV-06)."
+        "NetworkReached: this command constructed a socket or a storage client. "
+        "Only `models fetch` and `archive` may touch the network (INV-06)."
     )
 
 
@@ -244,58 +248,106 @@ def trap_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return directory
 
 
-def invoke(command: str, session_dir: Path, trap_dir: Path) -> subprocess.CompletedProcess[str]:
-    """Run one CLI command in a child whose network access fails loudly."""
-    environment = dict(os.environ)
-    environment["PYTHONPATH"] = str(trap_dir)
-    # `-m dnd_audio`, not `-m dnd_audio.cli`. The latter imports the module, defines
-    # `main`, calls nothing and exits 0 — so the assertions below would run against a
-    # program that never executed. That is exactly how this proof passed unconditionally
-    # in its first draft; `test_the_command_actually_ran` is the guard.
-    arguments = [sys.executable, "-m", "dnd_audio", command]
+#: Runs every network-denied command inside **one** child interpreter, under the trap.
+#:
+#: One subprocess rather than eight. Each of these is a real pipeline run against the
+#: canonical fixture, and eight cold ones cost about four seconds of the suite's critical
+#: path; run in sequence in one process they share the session's caches, so the later and
+#: most expensive commands — `transcribe`, `mix`, `process` — are mostly warm.
+#:
+#: `CliRunner` is used rather than eight `subprocess` calls because the property under test
+#: is about the *process*: the trap is armed once at interpreter startup and covers every
+#: command that runs after it. What matters is that this is a child at all, since a
+#: subprocess is what escapes the autouse socket fixture (INV-05).
+_DRIVER = """
+import sys
+from pathlib import Path
+
+from typer.testing import CliRunner
+
+from dnd_audio.cli import app
+
+session = sys.argv[1]
+runner = CliRunner()
+
+for command in %(commands)r:
+    arguments = [command]
     if command != "doctor":
-        arguments.append(str(session_dir))
+        arguments.append(session)
     if command in ("transcribe", "process"):
         arguments.append("--fake-models")
+
+    result = runner.invoke(app, arguments)
+    output = result.output or ""
+    if result.exception is not None:
+        output += repr(result.exception)
+    if "NetworkReached" in output:
+        print("NETWORK:" + command)
+    if output.strip():
+        print("RAN:" + command)
+    print("DONE:" + command)
+"""
+
+
+def invoke_all(session_dir: Path, trap_dir: Path) -> subprocess.CompletedProcess[str]:
+    """Run every network-denied command in one trapped child."""
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = str(trap_dir)
+    driver = _DRIVER % {"commands": list(NETWORK_DENIED_COMMANDS)}
     return subprocess.run(
-        arguments,
+        [sys.executable, "-c", driver, str(session_dir)],
         capture_output=True,
         text=True,
         env=environment,
-        timeout=600,
+        timeout=900,
         check=False,
     )
+
+
+@pytest.fixture(scope="module")
+def command_sweep(
+    trap_dir: Path, tmp_path_factory: pytest.TempPathFactory
+) -> subprocess.CompletedProcess[str]:
+    """One trapped run of the whole command surface, shared by the assertions below.
+
+    Module-scoped, and it builds into its own `tmp_path_factory` directory for the reason
+    `conftest.py` records: each xdist worker then gets its own copy and nothing crosses a
+    process boundary.
+    """
+    from dnd_audio.fixtures import build_session, canonical_session
+
+    truth = build_session(canonical_session(), tmp_path_factory.mktemp("boundary"))
+    return invoke_all(truth.session_dir, trap_dir)
 
 
 class TestNoProcessingCommandTouchesTheNetwork:
     """INV-06, proved where the autouse socket fixture cannot reach."""
 
     @pytest.mark.parametrize("command", NETWORK_DENIED_COMMANDS)
-    def test_the_command_neither_opens_a_socket_nor_builds_a_client(
-        self, command: str, canonical_fixture: FixtureTruth, trap_dir: Path
+    def test_the_command_runs_and_reaches_no_network(
+        self, command: str, command_sweep: subprocess.CompletedProcess[str]
     ) -> None:
-        completed = invoke(command, canonical_fixture.session_dir, trap_dir)
-        combined = completed.stdout + completed.stderr
-        assert "NetworkReached" not in combined, (
+        """Two assertions per command, and both are load-bearing.
+
+        The network one is the point. "It produced output at all" is what stops the
+        network one being vacuous: the first draft of this invoked `python -m
+        dnd_audio.cli`, which has no `__main__` guard, so it imported the module, called
+        nothing, exited 0 — and every command passed a network check against a program
+        that never ran.
+        """
+        combined = command_sweep.stdout + command_sweep.stderr
+
+        assert f"DONE:{command}" in combined, (
+            f"`{command}` never completed in the trapped child, so nothing below is being "
+            f"checked.\n{combined}"
+        )
+        assert f"RAN:{command}" in combined, (
+            f"`{command}` produced no output at all, which means it did not reach its own "
+            f"code. The network assertion would then be checking nothing.\n{combined}"
+        )
+        assert f"NETWORK:{command}" not in combined, (
             f"`dnd-audio {command}` reached the network. Only `models fetch` and "
             f"`archive` may (INV-06, ADR-0035).\n{combined}"
-        )
-
-    @pytest.mark.parametrize("command", NETWORK_DENIED_COMMANDS)
-    def test_the_command_actually_ran(
-        self, command: str, canonical_fixture: FixtureTruth, trap_dir: Path
-    ) -> None:
-        """The guard without which every assertion above is vacuous.
-
-        A subprocess that does nothing produces no output, contains no "NetworkReached",
-        and passes the boundary test perfectly. This one insists each command actually
-        reached its own code — it printed something, or it failed for a reason of its own.
-        """
-        completed = invoke(command, canonical_fixture.session_dir, trap_dir)
-        combined = completed.stdout + completed.stderr
-        assert combined.strip(), (
-            f"`dnd-audio {command}` produced no output at all, which means it did not run. "
-            f"The network assertions in this class would then be checking nothing."
         )
 
     def test_the_trap_can_actually_fire(

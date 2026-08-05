@@ -52,9 +52,8 @@ from dnd_audio.archive.config import (
     ArchiveRuntimeConfig,
     state_dir,
 )
-from dnd_audio.archive.paths import encode_component
 from dnd_audio.archive.storage import ObjectHead
-from dnd_audio.determinism import BinaryReader, write_json_atomic
+from dnd_audio.determinism import BinaryReader, sha256_bytes, write_json_atomic
 
 __all__ = ["SpacesStorage", "build_storage", "is_slow_down"]
 
@@ -205,16 +204,18 @@ class SpacesStorage:
                     MultipartUpload={"Parts": parts},
                 )
             )
+            # Forgotten only on success. A record that outlives a *failed* abort is what
+            # lets the next run find and clean up the orphan.
+            self._forget_upload(key)
         except BaseException:
             # Abort rather than resume. A resumed multipart has to reproduce the same part
             # boundaries and carry forward every ETag, and getting that subtly wrong
             # produces an object that completes and is not the file — which the readback
             # would catch, at the cost of the whole transfer anyway. Re-uploading one
             # object is cheaper than being clever here.
-            self._abort(key, upload_id)
+            if self._abort(key, upload_id):
+                self._forget_upload(key)
             raise
-        finally:
-            self._forget_upload(key)
 
     def _part_sender(
         self, key: str, upload_id: str, number: int, chunk: bytes
@@ -239,12 +240,20 @@ class SpacesStorage:
 
         return send
 
-    def _abort(self, key: str, upload_id: str) -> None:
-        """The only destructive provider call this application makes (ADR-0035)."""
+    def _abort(self, key: str, upload_id: str) -> bool:
+        """The only destructive provider call this application makes (ADR-0035).
+
+        Returns whether it succeeded. Failure is swallowed rather than raised — this is
+        cleanup, and letting it mask the failure that *caused* the abort would hide the
+        diagnosis — but it is **reported**, because the caller must then keep the upload-id
+        record. Deleting the record after a failed abort orphans a billable multipart
+        upload whose id nothing can recover. Found by M7a's code review.
+        """
         try:
             self.client.abort_multipart_upload(Bucket=self.bucket, Key=key, UploadId=upload_id)
         except Exception:
-            return
+            return False
+        return True
 
     def _abort_orphaned(self, key: str) -> None:
         """Clean up after a previous run that was killed mid-upload."""
@@ -257,12 +266,22 @@ class SpacesStorage:
         except (OSError, json.JSONDecodeError, KeyError):
             path.unlink(missing_ok=True)
             return
-        self._abort(key, upload_id)
-        path.unlink(missing_ok=True)
+        if self._abort(key, upload_id):
+            path.unlink(missing_ok=True)
+        # Otherwise the record stays, so the *next* run tries again rather than leaving a
+        # billable orphan nothing knows the id of.
 
     def _upload_record(self, key: str) -> Path | None:
+        """Where one in-flight upload's id is remembered.
+
+        Named by the key's **digest**, not by the encoded key. Percent-encoding a valid
+        296-byte object key produces a 313-character filename, past the 255-byte component
+        limit on every common filesystem — so multipart would have failed before its first
+        part on exactly the long paths the key limit permits. The key itself is recorded
+        inside the file, where length does not matter. Found by M7a's code review.
+        """
         base = self.upload_state_dir or (state_dir() / _UPLOADS_DIRNAME)
-        return base / f"{encode_component(key)}.json"
+        return base / f"{sha256_bytes(key.encode('utf-8'))}.json"
 
     def _record_upload(self, key: str, upload_id: str) -> None:
         path = self._upload_record(key)
@@ -335,6 +354,17 @@ def _sanitize(exc: BaseException) -> str:
     )
 
 
+#: Botocore's retries, off. **`total_max_attempts`, not `max_attempts`** — in botocore
+#: `max_attempts` counts retries *after* the initial request, so the `{"max_attempts": 1}`
+#: this first shipped with allowed one SDK retry underneath every project-level attempt,
+#: quietly doubling both the request count and the delay. `total_max_attempts: 1` is
+#: unambiguous: one attempt, no retries. The single bound that remains is
+#: `ArchiveRuntimeConfig.max_retries` (ADR-0038). Found by M7a's code review, which also
+#: noted that the test asserting the old literal certified the bug rather than the
+#: behaviour — it now inspects a constructed client's resolved configuration.
+RETRY_CONFIG: Final = {"total_max_attempts": 1, "mode": "standard"}
+
+
 def build_storage(
     config: ArchiveRuntimeConfig, *, sleep: Callable[[float], None] = time.sleep
 ) -> SpacesStorage:
@@ -354,9 +384,7 @@ def build_storage(
         aws_access_key_id=config.access_key_id.get_secret_value(),
         aws_secret_access_key=config.secret_access_key.get_secret_value(),
         config=Config(
-            # One bound, and it is `ArchiveRuntimeConfig.max_retries`. Leaving botocore's
-            # default on would multiply the two into an attempt count nobody stated.
-            retries={"max_attempts": 1, "mode": "standard"},
+            retries=RETRY_CONFIG,
             signature_version="s3v4",
         ),
     )

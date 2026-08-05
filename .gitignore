@@ -20,6 +20,17 @@ samples/
 *token*
 !**/*token*.py
 
+# Archive credentials (M7a). The operator profile belongs outside this repository
+# entirely — `~/.config/dnd-audio/archive.yaml` is the suggested home — but this
+# repository is public and a Spaces secret key committed here is unrecoverable, so the
+# obvious filenames are ignored as a second line of defence rather than trusted not to
+# appear. See ADR-0035.
+archive.yaml
+archive.yml
+archive-profile*
+*.credentials
+credentials
+
 # Python
 __pycache__/
 *.py[cod]

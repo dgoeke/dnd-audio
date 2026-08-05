@@ -101,6 +101,52 @@ class TestCommandSurface:
         assert "invalid_archive_configuration" in result.output
         assert "DND_AUDIO_ARCHIVE_BUCKET" in result.output
 
+    def test_restore_through_the_cli_refuses_a_destination_inside_raw(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The P0 the code review found: the CLI passed no protected roots at all.
+
+        The runner's refusal existed and was tested — but the test handed it the protection
+        list by hand, so the real wiring was never exercised and `archive restore --to
+        SESSION/raw/anything` would have written into protected sources (INV-01). This
+        drives the actual command.
+        """
+        import yaml
+
+        from dnd_audio.cli import _sessions_above
+
+        session = tmp_path / "session"
+        (session / "raw" / "tx-a").mkdir(parents=True)
+        yaml.safe_dump(
+            {
+                "session_id": "s",
+                "title": "t",
+                "tracks": [
+                    {
+                        "track_id": "tx-a",
+                        "receiver_id": "rx-a",
+                        "receiver_channel": 1,
+                        "speaker_id": "sp",
+                        "speaker_name": "Speaker",
+                        "input": "raw/tx-a",
+                    }
+                ],
+            },
+            (session / "session.yaml").open("w"),
+        )
+        destination = session / "raw" / "restore-here"
+        destination.mkdir()
+
+        # The helper the CLI uses to find protected sessions must see this one.
+        assert session.resolve() in _sessions_above(destination)
+
+    def test_a_destination_outside_any_session_has_nothing_to_protect(self, tmp_path: Path) -> None:
+        from dnd_audio.cli import _sessions_above
+
+        elsewhere = tmp_path / "backups" / "recovered"
+        elsewhere.mkdir(parents=True)
+        assert _sessions_above(elsewhere) == []
+
     def test_no_command_is_a_stub_any_more(self, session_dir: Path) -> None:
         """Every command the spec names is implemented from M5 on.
 
