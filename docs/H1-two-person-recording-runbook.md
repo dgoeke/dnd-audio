@@ -79,8 +79,9 @@ Do not begin the main take if any of these are true:
 - A label, receiver/channel assignment, battery level, storage check, or recording format is
   unknown.
 - The three receiver displays do not agree after the jam.
-- The ten-second jam-check files do not confirm the shared clap at the timecode-predicted
-  position across all three receiver groups.
+- The ten-second jam-check files do not confirm the shared acoustic landmark—the default clap,
+  or M10 marker only after its bench gate—at the timecode-predicted position across all three
+  receiver groups.
 - Any transmitter fails to show its recording indicator.
 - A take was copied under `raw/` and someone proposes renaming, normalizing, trimming, or
   rewriting it.
@@ -163,7 +164,9 @@ This take proves that the visible jam reached files before the main fixture is r
 2. Start internal recording on `tx-a` through `tx-f`, approximately two seconds apart, and log
    each wall-clock start time. Confirm every recording indicator.
 3. After all six are recording, Person One says, “H1 jam check,” waits one second, and makes
-   **one sharp hand clap** at the middle of the table. Do not clap beside a lav.
+   **one sharp hand clap** at the middle of the table. Do not clap beside a lav. If and only if
+   M10 has closed its intended-phone/DJI bench, play its canonical marker once from the fixed
+   central phone position instead and analyze it with `dnd-audio marker analyze`.
 4. Wait at least five seconds, then stop all six transmitters without powering them off.
 5. Copy the check take from every transmitter to a temporary verification session, preserving
    filenames exactly. At minimum the check must include one transmitter from each receiver;
@@ -227,9 +230,10 @@ human voice, pause target, and whether the delivery was clean, late, or repeated
    **“H1 main fixture. Two human voices, six transmitters, three receivers. Main take one.”**
 2. [One second of silence.]
 3. Make a distinctive **three-clap pattern**: clap, short pause, clap, longer pause, clap.
-   If the OQ-025 generated marker and its matched-filter detector have both landed and passed
-   their bench test before H1, play that same prepared three-chirp WAV from the center of the
-   table instead. Do not substitute an ad-hoc tone, and do not skip the LTC jam.
+   If M10 has closed its intended-phone/DJI bench, use its standalone offline HTML player to
+   play the canonical marker from the center of the table instead. Use the bench-tested phone,
+   orientation, and media-volume step. Do not substitute an ad-hoc tone, and do not skip the
+   LTC jam.
 4. [Two seconds of silence.]
 
 ### B. Six solo/direct-source rounds
@@ -307,7 +311,9 @@ two-speaker ground truth; do not repair it in the log.
 1. Confirm the post-power-cycle `tx-f` line has been recorded.
 2. Person One says: **“H1 end landmark.”**
 3. Make the same distinctive three-clap pattern used at the start, or replay the exact same
-   bench-validated OQ-025 marker from the same central table position if it was used there.
+   bench-validated M10 marker from the same central position, phone orientation, and media-
+   volume step if it was used there. A moved phone invalidates even differential comparison;
+   because lavs move during H1, do not label the remaining change pure recorder drift.
 4. Leave five seconds of room tone.
 5. Stop all transmitters one at a time, logging order and wall-clock time.
 6. Before powering down receivers, film and log all three displays in the “after main take”
@@ -319,7 +325,7 @@ Fill one row for every scripted event and every repeat:
 
 | event | elapsed start | elapsed end | human voice(s) | intended direct track(s) | target gap | actual delivery notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| start three-clap | | | Person One | all observe | pattern | |
+| start marker (three-clap or approved M10) | | | Person One | all observe | pattern | |
 | `tx-a` solo | | | Person One | `tx-a` | clean 1 s | |
 | `tx-b` solo | | | Person Two | `tx-b` | clean 1 s | |
 | `tx-c` solo | | | Person One | `tx-c` | clean 1 s | |
@@ -334,7 +340,7 @@ Fill one row for every scripted event and every repeat:
 | simultaneous `Okay` | | | both | `tx-a` + `tx-e` | simultaneous | |
 | different-word overlap | | | both | `tx-a` + `tx-e` | simultaneous | |
 | `tx-f` after restart | | | Person Two | `tx-f` | clean 1 s | |
-| end three-clap | | | Person One | all observe | pattern | |
+| end marker (same type/position) | | | Person One | all observe | pattern | |
 
 ## Phase 6 — transfer without mutating raw audio
 
@@ -489,7 +495,7 @@ comparison.
 | OQ-015 display zero vs wall clock | receiver display table filmed beside zoned wall clock |
 | OQ-017 real-table bleed | six direct-source rounds, distributed observers, and two real voices |
 | OQ-018 duplicate/overlap/presentation | exact `Okay`, different words, and 250/330/500 ms controls |
-| OQ-023/OQ-025 per-session jam check | ten-second preflight take with shared clap and `sync_qa` |
+| OQ-023/OQ-025 per-session jam check | ten-second preflight with shared clap/`sync_qa`, or closed M10 marker/analyzer |
 | OQ-027 leading-word recovery | six hard onsets, clean/quick handoff, and fixed-response 0/20/100 comparison |
 
 ## Evidence to retain and evidence safe to commit
@@ -530,7 +536,9 @@ weights, or tokens. A tiny audio excerpt still requires explicit owner approval.
 - [ ] Two different human voices said exact `Okay` simultaneously.
 - [ ] The same two voices spoke different sentences simultaneously.
 - [ ] `tx-f` was fully power-cycled and recorded before and after.
-- [ ] Distinctive three-clap patterns exist near the start and end.
+- [ ] Matching start/end landmarks exist: distinctive three-clap patterns, or the closed M10
+      marker from the same phone position/orientation/volume. Any drift claim also records
+      whether every compared lav remained fixed.
 - [ ] Complete filenames, surprising displays, repeats, mistakes, and deviations were logged.
 - [ ] Every file was copied unchanged, directory listings retained, and raw hashes recorded.
 - [ ] `inspect`, `ingest`, and baseline `process` completed without modifying raw files.

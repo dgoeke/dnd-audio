@@ -8,18 +8,21 @@
 
 Evidence for or against the MVP's no-drift-correction assumption, from either a
 ~4-hour soak fixture with synchronized transients near both ends or the first real
-session's start/end synchronized-marker measurements (three claps, or the OQ-025 generated
-chirp after its generator and detector are bench-validated).
+session's start/end synchronized-marker measurements (three claps, or M10's generated marker
+after its standalone phone player and detector are bench-validated).
 
 ## Completion gate
 
 - [ ] A ~4-hour recording exists with a distinctive synchronized marker near the beginning and
       near the end, across all three kits — or the first real session provides the same. Use
-      the existing three-clap pattern unless the complete OQ-025 chirp generator/detector has
-      already passed its separate bench gate; never improvise an untested marker during the
-      irreplaceable session.
-- [ ] Differential marker lag measured near both ends for every track, and the change
-      between them recorded.
+      the existing three-clap pattern unless M10 has closed its intended-phone/DJI bench; never
+      improvise an untested marker during the irreplaceable session. The start and end marker
+      must use the same phone position, orientation, and media-volume step. In a fixed-
+      transmitter soak, every compared lav must also remain fixed before lag change may be
+      called recorder drift. A real session with moving wearers reports differential acoustic
+      arrival change as drift evidence with geometry unresolved.
+- [ ] Differential marker lag measured near both ends for every track, the change between them
+      recorded, and the source/receiver geometry classification stated rather than inferred.
 - [ ] **OQ-006** marked answered with the measured numbers.
 - [ ] The warning threshold is configured from that measurement and documented,
       rather than guessed.
@@ -65,6 +68,8 @@ chirp after its generator and detector are bench-validated).
 - Implementing automatic affine drift correction. Explicitly post-MVP.
 - Retuning the automixer — that is a separate pass once real-session diagnostics
   exist.
+- Implementing or tuning the generated marker/detector. That is M10; H2 consumes the frozen
+  instrument or falls back to claps.
 
 ## What M2 already provides (read before starting)
 

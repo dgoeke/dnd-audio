@@ -9,9 +9,10 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 
 - **Current milestone:** H1 — hardware fixture (**not started**). The minimal acoustic
   direction capture is complete enough to guide later event-first work but does not close or
-  replace H1. The immediate pre-session software candidate is now **M7a**, a fully chartered
-  verified private raw archive; M7b deliberately retains the post-session publication,
-  retention, cache, and deletion decisions.
+  replace H1. Two pre-session software milestones are now chartered: **M7a** provides verified
+  private raw backup, and **M10** provides a generated acoustic marker plus automatic detector.
+  M7b deliberately retains the post-session publication, retention, cache, and deletion
+  decisions.
 - **Branch:** `main`
 - **Last closed milestone:** M9 — transcript assembly quality
 - **Gate status at HEAD:** passes, zero skips (8 checks, 2 397 tests); the same default suite
@@ -81,6 +82,14 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
   public delivery, retention, cache reclamation, or the INV-01 exception local deletion would
   require. A four-file zstd trial saved 30.4% and restored every original SHA-256 exactly.
 
+  **The acoustic marker now has a software owner.** M10 builds one canonical PCM WAV and a
+  standalone offline phone page that embeds those exact bytes, then detects the full chirp
+  sequence at integer-sample positions. It remains jam QA, never timeline authority. Exact
+  digital identity is testable; phone resampling, speaker response, room propagation, volume,
+  and both phone/lav position require a short no-assistant hardware bench. A normal session can
+  report differential arrival; only a fixed-transmitter soak isolates drift. Until the bench
+  passes, H1/H2 use claps.
+
   **The jam/timing result remains strong.** Two receivers started 5.28 s apart and their
   independently written references agree on that offset to 17–30 ms, inside one 30 fps frame
   (**OQ-023**). Relative sample-clock drift measured ≈1 ppm, bounded ±3 ppm over 30 s
@@ -128,6 +137,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | H2  | Drift soak / first session | not started | —         |
 | M7a | Verified private raw archive | not started | —         |
 | M7b | Publishing and reclamation | sketch      | —         |
+| M10 | Acoustic sync marker       | not started | —         |
 
 **Closed at** is the milestone's close commit, and it is recorded by a small follow-up
 commit — a commit cannot contain its own hash (the same limit ADR-0003 names for the report).
@@ -289,13 +299,13 @@ writer that cannot lose a stage, and a test suite that is provably offline.
 
 ## Next smallest step
 
-**M7a — verified private raw archive, then H1.** M9's transcript-assembly work is complete,
-and the minimal capture says the current jammed pipeline is sufficient to make Session Zero
-valuable. Implementing M7a first reduces the one risk later pipeline improvements cannot fix:
-loss of the original recordings. Its charter is
-`docs/plan/milestones/M7a-verified-raw-archive.md`. After that, read
-`docs/plan/milestones/H1-hardware-fixture.md`; its recording recipe calls out the receiver
-display observations that cannot be recovered afterwards. (Claude Code: `/ms-start M7a`.)
+**M7a, then M10 if time permits, then H1.** M9's transcript-assembly work is complete, and the
+minimal capture says the current jammed pipeline is sufficient to make Session Zero valuable.
+M7a first reduces the risk later software cannot fix: loss of the original recordings. M10 is
+smaller and improves jam/drift evidence, but H1 remains safe with claps if its phone/DJI bench
+does not finish. Read `docs/plan/milestones/M7a-verified-raw-archive.md`,
+`docs/plan/milestones/M10-acoustic-sync-marker.md`, then
+`docs/plan/milestones/H1-hardware-fixture.md`. (Claude Code: `/ms-start M7a`.)
 
 Nothing in H1 is a code task until the recordings exist. What the pipeline will do with them
 on arrival is already built: `inspect` names the strategy, the evidence and the assumption

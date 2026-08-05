@@ -14,18 +14,22 @@ M0 Foundation
  └─ M1 Inspection ──┬─ M2 Timeline ── M3 Activity ─┬─ M4 Fake transcript ─┐
                     │                              └─ M5 Automix ─────────┤
                     │                                                     │
-                    └─ H1 Hardware fixture (parallel; unblocks itself)     │
+                    └─ H1 Hardware fixture ── H2 Drift soak / first session ────────────────┐
                                                                           │
                               M6a ROCm env ── M6b Qwen adapter ────────────┴─ MVP
                                                             │                 │
-                                                            │                 └─ M8 Readiness ── M9 Transcript assembly ── M7a Verified raw archive
-                                                            └─ H2 Drift soak / first session ──────────────────────────────────────└─ M7b Publish/reclaim
+                                                            │                 └─ M8 Readiness ─┬─ M9 Transcript assembly ── M7a Verified raw archive
+                                                            │                                  └─ M10 Acoustic marker (optional H1/H2 instrument)
+                                                            └──────────────────────────────────────────────────────────────────────┴─ M7b Publish/reclaim
 ```
 
 M8 sits between the MVP and the first real session. M7a was split out of the old M7 so the
 off-site copy exists **before** that irreplaceable recording; it needs an inspected session,
 not an accepted transcript. M7b still waits until a real session has been processed and
 validated because publishing, retention, cache sizing, and deletion policy need real evidence.
+M10 is a pre-session instrument but not an H1/H2 dependency: after its phone/DJI bench passes,
+its generated chirp replaces claps as acoustic QA; until then the existing clap procedure keeps
+both hardware milestones runnable.
 
 M5 depends only on M3, never on M4 or M6 — the mix must survive a transcription
 failure. M6a can start any time after M0; it is sequenced late only because
@@ -197,6 +201,20 @@ It never deletes or publishes, so INV-01 remains intact.
 commit, retry, restore, redaction, bounded streaming, raw immutability, and offline default
 tests all fail closed under corruption.
 
+### M10 — Acoustic synchronization marker
+
+Build one canonical 48 kHz PCM marker through the CLI, embed those exact bytes in a standalone
+offline phone HTML player, and detect the complete marker automatically on every track. It
+verifies the LTC jam and measures start/end differential acoustic arrival without changing the
+timeline; only fixed phone-and-lav geometry isolates recorder drift.
+
+**Status: chartered; not started.** It is optional for H1/H2 until its intended-phone/DJI bench
+passes; claps remain the fallback.
+
+**Gate:** CLI WAV and HTML-embedded WAV are byte-identical; offline page playback, matched-filter
+detection, exact integer-sample lags, false-positive negatives, bounded streaming, unchanged
+pipeline identities, and the physical phone/DJI bench all pass.
+
 ### M7b — Processed publishing and local reclamation (sketch)
 
 After a real session is accepted, publish selected versioned outputs through a suitable
@@ -266,3 +284,7 @@ Recorded so the reasoning is not lost:
    an inspected session; publication, cache sizing, retention, and deletion need a processed
    real session and materially different authority. M7a is therefore a narrow INV-06
    exception with no deletion, while INV-01 remains untouched until M7b can justify one.
+8. **M10 gives OQ-025 an owner without hiding it in H1/H2.** A generated marker and detector
+   are software semantics, while H1/H2 are evidence captures. The standalone phone page embeds
+   the CLI's exact WAV rather than maintaining a second JavaScript synthesizer; physical phone
+   output still requires a bench before the runbook authorizes it.

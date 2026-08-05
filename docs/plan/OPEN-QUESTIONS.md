@@ -1022,8 +1022,9 @@ degraded. Keep the rates consistent as hygiene, but no known behaviour depends o
 **Assumption:** Yes for a robust automatic verifier; no as a replacement for jammed timecode.
 Jammed timecode places every file, including a restarted transmitter with no shared acoustic
 event. A generated marker can make jam failure and long-baseline drift cheaper and more
-precise to detect. Until both its generator and matched-filter detector land and pass a bench
-test, H1/H2 keep using the existing human-checkable three-clap pattern.
+precise to detect. **M10 now owns both generator and matched-filter detector.** Until its
+intended-phone/DJI bench passes, H1/H2 keep using the existing human-checkable three-clap
+pattern.
 **Why it matters:** The LTC jam is accurate — 17–30 ms cross-receiver, better than one frame
 (**OQ-023**) — but it is a tedious manual ritual at the start of every session: cable up
 A → B, SYNC, disconnect, A → C, SYNC, disconnect, and confirm three displays. An acoustic
@@ -1033,8 +1034,9 @@ and would need no cables. The question is whether it could **replace** the jam, 
 **Evidence:** Measured alignment accuracy achievable from an acoustic signal alone, against
 the 33 ms the jam already delivers; and whether a single anchor is sufficient given measured
 drift.
-**Needs:** a separately chartered generator/detector bench test; no session required ·
-**Blocks:** nothing — the jam and claps work today · **Status:** **partially answered**
+**Needs:** M10's generator/detector and phone/DJI bench; no session required ·
+**Blocks:** M10 close only — the jam and claps work today · **Status:** **partially answered;
+M10 chartered**
 
 **What the error budget says.** Cross-track error is 33.3 ms of fixed quantization
 (**OQ-024**) plus ~15–45 ms of drift over a long session (**OQ-006**) — call it 80 ms worst
@@ -1082,16 +1084,20 @@ identification. That proves a shared room sound is precise enough for verificati
 claps varied in shape and level and still required manual picking. It does not remove the
 acoustic-arrival geometry floor or place a restarted file that missed the sound.
 
-**Recommendation as of 2026-08-04: keep the jam and build the verifier as a small, separate
-software milestone before H2 if time permits.** Generate a deterministic 48 kHz PCM marker:
+**Recommendation as of 2026-08-04: keep the jam and implement M10 before H2 if time permits.**
+Generate a deterministic 48 kHz PCM marker:
 three 500 Hz → 8 kHz linear chirps with a smooth amplitude envelope and asymmetric gaps, at a
 conservative level. Play the prepared WAV from one fixed central table position near both
 session ends. Add a matched-filter detector that reports each track's peak, confidence,
-geometry-relative lag, and start-to-end lag change. The generator alone is not useful enough:
+geometry-relative lag, and start-to-end lag change. Call that change recorder drift only when
+both the phone and every compared lav stayed fixed; a real session with moving wearers leaves a
+geometry confound and reports differential arrival instead. The generator alone is not useful enough:
 the detector and synthetic delayed/noisy/reverberant regression tests are what turn the sound
-into evidence. Keep claps until that complete path is bench-tested. Revisit replacing the jam
-only if H2 shows the ritual failing in practice, or if restarted/missing-anchor files are
-proven irrelevant.
+into evidence. M10's standalone phone HTML embeds the CLI-generated WAV bytes rather than
+reimplementing synthesis in JavaScript; this proves the digital assets equal but cannot bypass
+browser resampling, phone-speaker response, media volume, or room propagation. Keep claps until
+that complete path is bench-tested. Revisit replacing the jam only if H2 shows the ritual
+failing in practice, or if restarted/missing-anchor files are proven irrelevant.
 
 ## OQ-026 — Does a DJI receiver's timecode counter wrap, and with what period?
 **Assumption:** Yes, at 24 hours — `rasterize.SECONDS_PER_DAY` adds `86400 * sample_rate`
