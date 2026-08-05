@@ -198,3 +198,18 @@ produced **other than the report itself** — a file cannot contain the hash of 
 own final bytes (ADR-0003). It is written atomically even on partial failure.
 Partial success never exits zero.
 _Owner: M0 (report skeleton), every milestone thereafter._
+
+**INV-14 — The mix and the transcript share one time origin.**
+The mix's first sample is session sample zero and its span is the timeline's
+session span, so a `start_s` in `transcript.json` addresses the same instant in
+`session.mp3`. No lead-in, trim, head silence, or offset may appear on one side
+and not the other. Two differences are permitted and bounded: the public
+serialization boundary quantizes to whole milliseconds (INV-04), and MP3 encoder
+delay is a property of the format at roughly 12–26 ms. Nothing else.
+
+This held by construction from M5 onward and is stated because an external
+consumer now depends on it — ADR-0044's wiki player seeks the MP3 from transcript
+timestamps, so an offset introduced on either side would silently mislabel every
+published turn by a constant while both artifacts stayed internally valid and
+every existing test kept passing.
+_Owner: M5 (rendering), asserted for M7b's consumer._
