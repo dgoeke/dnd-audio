@@ -64,10 +64,14 @@ and phone positions as much as waveforms.
 On the project machine:
 
 ```bash
-dnd-audio marker build ./bench-markers --marker cand-a
-dnd-audio marker build ./bench-markers --marker cand-b
-dnd-audio marker build ./bench-markers --marker cand-c
+dnd-audio marker build ./bench-markers/cand-a --marker cand-a
+dnd-audio marker build ./bench-markers/cand-b --marker cand-b
+dnd-audio marker build ./bench-markers/cand-c --marker cand-c
 ```
+
+One directory each, because the manifest is named `marker-manifest.json` and describes the pair
+beside it — three builds into one directory would leave one manifest describing one candidate
+and two orphaned pairs.
 
 `--marker` is hidden from `--help` on purpose: this charter's non-goals exclude a public
 candidate-management interface, and after v1 is frozen the discoverable command is
@@ -81,12 +85,12 @@ describes.
 Do **not** build into a directory under any session's `raw/`. The command refuses, and a refusal
 is a clean stop, not a problem to work around.
 
-Three files per candidate land in `./bench-markers`:
+Three files per candidate:
 
 ```text
-dnd-audio-sync-marker-cand-a.wav     the canonical bytes
-dnd-audio-sync-marker-cand-a.html    the standalone player, with those exact bytes inside it
-marker-manifest.json                 rewritten by each build; it describes the last one
+bench-markers/cand-a/dnd-audio-sync-marker-cand-a.wav     the canonical bytes
+bench-markers/cand-a/dnd-audio-sync-marker-cand-a.html    the standalone player, with those exact bytes inside it
+bench-markers/cand-a/marker-manifest.json                 published last, as the completeness marker
 ```
 
 ## Step 2 — get the pages onto the phone
