@@ -12,6 +12,7 @@ INV-01 is about what a pipeline stage does, and these fixtures are the recording
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 from pathlib import Path
 from typing import Final
@@ -33,12 +34,21 @@ from dnd_audio.marker.analysis import (
     OccurrenceGroup,
     SyncMarkerAnalysis,
 )
-from dnd_audio.marker.detect import DetectorThresholds
+from dnd_audio.marker.detect import DetectorThresholds, MarkerOccurrence
 from dnd_audio.marker.eventlog import EventLogError, load_event_log
 from dnd_audio.marker.inputs import read_session_artifacts
+from dnd_audio.marker.report import (
+    AnalysisStatus,
+    MarkerReport,
+    MarkerReportError,
+    OverallStatus,
+    ReportDeliverable,
+)
 from dnd_audio.marker.runner import (
     _Accumulator,
+    _associate,
     _compare_arrival,
+    _usable,
     marker_analyze_outputs,
     run_marker_analyze,
 )
@@ -53,7 +63,7 @@ SPEC: Final = MARKER_SPECS["cand-a"]
 
 #: Session samples the marker is injected at. Both sit inside every track's recorded extent
 #: on the canonical fixture, and neither is a multiple of the detector's block size.
-FIRST: Final = 190_000
+FIRST: Final = 175_000
 SECOND: Final = 400_000
 
 #: Per-track acoustic delay, in samples. Deliberately unequal and deliberately small — a
@@ -114,9 +124,9 @@ class TestItFindsWhatWasPlaced:
         assert result.exit_code is ExitCode.OK
         analysis = analysis_of(marked_session)
         anchors = {item.track_id: item.anchor_sample for item in analysis.occurrences}
+        assert set(anchors) == set(DELAYS)
         for track_id, delay in DELAYS.items():
-            if track_id in anchors:
-                assert anchors[track_id] == FIRST + SPEC.anchor_sample + delay
+            assert anchors[track_id] == FIRST + SPEC.anchor_sample + delay
 
     def test_every_relative_lag_is_the_delay_that_was_injected(self, marked_session: Path) -> None:
         """The measurement the whole instrument exists for, against known ground truth."""
@@ -175,11 +185,44 @@ class TestItFindsWhatWasPlaced:
             path.write_bytes(raw[: source.data_offset] + audio.astype("<f4").tobytes() + raw[end:])
         run_ingest(truth.session_dir)
 
-        run_marker_analyze(truth.session_dir, marker=SPEC.name)
+        result = run_marker_analyze(truth.session_dir, marker=SPEC.name)
         analysis = analysis_of(truth.session_dir)
         outcomes = {m.track_id: m.outcome for m in analysis.groups[0].members}
         assert outcomes["tx-e"] is DetectionOutcome.MISSING
         assert outcomes["tx-f"] is DetectionOutcome.MISSING
+        assert result.report.inconclusive is True
+
+    def test_weak_occurrences_are_reported_but_do_not_make_a_conclusive_group(
+        self, marked_session: Path
+    ) -> None:
+        result = run_marker_analyze(
+            marked_session,
+            marker=SPEC.name,
+            thresholds=DetectorThresholds(weak_signal_rms_permille=1000),
+        )
+        analysis = analysis_of(marked_session)
+        assert analysis.occurrences
+        assert all(item.weak for item in analysis.occurrences)
+        assert analysis.groups == []
+        assert result.report.inconclusive is True
+
+    def test_clipped_occurrences_are_kept_distinct_and_inconclusive(self, tmp_path: Path) -> None:
+        truth = build_session(canonical_session(), tmp_path / "session")
+        inject(truth, [FIRST], gain=4.0)
+        run_ingest(truth.session_dir)
+        result = run_marker_analyze(truth.session_dir, marker=SPEC.name)
+        analysis = analysis_of(truth.session_dir)
+        assert analysis.occurrences
+        assert all(item.clipped for item in analysis.occurrences)
+        assert analysis.groups == []
+        assert result.report.inconclusive is True
+
+    def test_within_timecode_quantum_disagreement_stays_healthy(self, marked_session: Path) -> None:
+        """M8's quantization floor still outranks the marker's sample precision."""
+        run_marker_analyze(marked_session, marker=SPEC.name)
+        comparisons = analysis_of(marked_session).timecode
+        assert comparisons
+        assert all(not item.beyond_quantum for item in comparisons)
 
     def test_a_marker_at_the_very_end_of_the_recording_is_still_found(self, tmp_path: Path) -> None:
         """The bench's closing block lands here, so it is not a hypothetical edge.
@@ -327,14 +370,31 @@ class TestStaleInputsAreRefusedComponentByComponent:
         result = run_marker_analyze(marked_session, marker=SPEC.name)
         assert [error.code for error in result.report.errors] == ["timeline_unreadable"]
 
+    def test_a_source_changed_after_ingest_is_stale_even_when_stable_during_analysis(
+        self, marked_session: Path
+    ) -> None:
+        """The entry/exit guard alone cannot catch a pre-existing raw mutation."""
+        source = next((marked_session / "raw").rglob("*.wav"))
+        payload = bytearray(source.read_bytes())
+        payload[-1] ^= 1
+        source.write_bytes(payload)
+        result = run_marker_analyze(marked_session, marker=SPEC.name)
+        assert [error.code for error in result.report.errors] == ["manifest_stale_source"]
+
     def test_validation_reads_and_writes_nothing(self, marked_session: Path) -> None:
         """It must not run inspection, which writes `work/ffprobe/` on a cold sidecar."""
         from dnd_audio.config import load_session_config
+        from dnd_audio.raw_guard import raw_roots, snapshot
 
+        config = load_session_config(marked_session / "session.yaml")
         before = {
             path: path.read_bytes() for path in sorted(marked_session.rglob("*")) if path.is_file()
         }
-        read_session_artifacts(marked_session, load_session_config(marked_session / "session.yaml"))
+        read_session_artifacts(
+            marked_session,
+            config,
+            current_sources=snapshot(marked_session, raw_roots(config)),
+        )
         after = {
             path: path.read_bytes() for path in sorted(marked_session.rglob("*")) if path.is_file()
         }
@@ -400,6 +460,7 @@ class TestNothingElseMoves:
             "detector_semantics_version",
             "event_log_schema_version",
             "event_log_sha256",
+            "manifest_schema_version",
             "manifest_sha256",
             "marker_analysis_semantics_version",
             "marker_name",
@@ -430,6 +491,44 @@ class TestNothingElseMoves:
         identity = analysis_of(marked_session).identity
         bumped = identity.model_copy(update={attribute: getattr(identity, attribute) + 1})
         assert bumped.digest() != identity.digest()
+
+    @pytest.mark.parametrize("attribute", ["manifest_schema_version", "timeline_schema_version"])
+    def test_each_consumed_artifact_schema_moves_the_identity(
+        self, marked_session: Path, attribute: str
+    ) -> None:
+        run_marker_analyze(marked_session, marker=SPEC.name)
+        identity = analysis_of(marked_session).identity
+        bumped = identity.model_copy(update={attribute: getattr(identity, attribute) + 1})
+        assert bumped.digest() != identity.digest()
+
+
+def test_a_locally_ambiguous_occurrence_is_not_usable_for_grouping() -> None:
+    """The detector's ambiguity bit must prevent a precise-looking lag downstream."""
+    occurrence = MarkerOccurrence(
+        anchor_sample=100_000,
+        score_permille=600,
+        hits=(),
+        gap_errors_samples=(),
+        runner_up_permille=551,
+        ambiguous=True,
+    )
+    assert _usable(occurrence) is False
+
+
+def test_a_locally_ambiguous_occurrence_becomes_an_ambiguous_group_member() -> None:
+    """No precise-looking lag may survive the detector-to-analyzer boundary."""
+    clean = MarkerOccurrence(100_000, 600, (), ())
+    ambiguous = MarkerOccurrence(100_048, 600, (), (), runner_up_permille=551, ambiguous=True)
+    members = _associate(
+        100_000,
+        {"tx-a": [clean], "tx-b": [ambiguous]},
+        "tx-a",
+        settings=DetectorThresholds(),
+        used={},
+    )
+    by_track = {member.track_id: member for member in members}
+    assert by_track["tx-b"].outcome is DetectionOutcome.AMBIGUOUS
+    assert by_track["tx-b"].relative_lag_samples is None
 
 
 class TestTheEventLog:
@@ -469,18 +568,34 @@ class TestTheEventLog:
         return truth.session_dir
 
     def test_roles_come_from_the_log(self, two_marker_session: Path, tmp_path: Path) -> None:
-        log = self.write_log(tmp_path / "events.yaml", geometry="table-1", session_id="session-01")
+        log = self.write_log(tmp_path / "events.yaml", geometry="table-1", session_id="2026-08-15")
         run_marker_analyze(two_marker_session, marker=SPEC.name, event_log=log)
         analysis = analysis_of(two_marker_session)
         roles = {group.role for group in analysis.groups if group.role}
         assert roles <= {"start", "end"}
         assert all(group.role_source == "event_log" for group in analysis.groups if group.role)
 
+    def test_event_log_schema_and_digest_are_identity_components(
+        self, two_marker_session: Path, tmp_path: Path
+    ) -> None:
+        log = self.write_log(tmp_path / "events.yaml", geometry="table-1", session_id="2026-08-15")
+        run_marker_analyze(two_marker_session, marker=SPEC.name, event_log=log)
+        identity = analysis_of(two_marker_session).identity
+        assert identity.event_log_schema_version == 1
+        assert identity.event_log_sha256 is not None
+        assert (
+            identity.model_copy(update={"event_log_schema_version": 2}).digest()
+            != identity.digest()
+        )
+        assert (
+            identity.model_copy(update={"event_log_sha256": "0" * 64}).digest() != identity.digest()
+        )
+
     def test_without_a_geometry_id_a_change_is_differential_arrival_not_drift(
         self, two_marker_session: Path, tmp_path: Path
     ) -> None:
         """ADR-0040's central rule. A moved wearer is not a drifting clock."""
-        log = self.write_log(tmp_path / "events.yaml", geometry=None, session_id="session-01")
+        log = self.write_log(tmp_path / "events.yaml", geometry=None, session_id="2026-08-15")
         run_marker_analyze(two_marker_session, marker=SPEC.name, event_log=log)
         analysis = analysis_of(two_marker_session)
         for comparison in analysis.arrival:
@@ -525,7 +640,7 @@ class TestTheEventLog:
             yaml.safe_dump(
                 {
                     "schema_version": 1,
-                    "session_id": "session-01",
+                    "session_id": "2026-08-15",
                     "events": [
                         {
                             "role": "start",
@@ -541,6 +656,74 @@ class TestTheEventLog:
         )
         result = run_marker_analyze(two_marker_session, marker=SPEC.name, event_log=path)
         assert any(w.code == "marker_event_log_names_no_occurrence" for w in result.report.warnings)
+
+    def test_an_event_log_for_another_session_is_refused(
+        self, two_marker_session: Path, tmp_path: Path
+    ) -> None:
+        log = self.write_log(tmp_path / "events.yaml", geometry="table-1", session_id="other")
+        result = run_marker_analyze(two_marker_session, marker=SPEC.name, event_log=log)
+        assert result.exit_code is ExitCode.FATAL
+        assert [error.code for error in result.report.errors] == ["event_log_session_mismatch"]
+
+    def test_overlapping_logged_roles_leave_the_occurrence_unassigned(
+        self, marked_session: Path, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "events.yaml"
+        path.write_text(
+            yaml.safe_dump(
+                {
+                    "schema_version": 1,
+                    "session_id": "2026-08-15",
+                    "events": [
+                        {
+                            "role": role,
+                            "marker_name": SPEC.name,
+                            "start_ms": 3_000,
+                            "end_ms": 5_000,
+                            "playback_order": order,
+                            "geometry_id": "fixed",
+                        }
+                        for order, role in enumerate(("start", "end"))
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = run_marker_analyze(marked_session, marker=SPEC.name, event_log=path)
+        analysis = analysis_of(marked_session)
+        assert all(group.role is None for group in analysis.groups)
+        assert analysis.arrival == []
+        assert any(w.code == "marker_event_overlap" for w in result.report.warnings)
+
+    def test_multiple_same_role_groups_do_not_silently_choose_a_pair(self) -> None:
+        def group(index: int, role: str) -> OccurrenceGroup:
+            return OccurrenceGroup(
+                group_index=index,
+                reference_anchor_sample=100_000 + 100_000 * index,
+                role=role,
+                role_source="event_log",
+                geometry_id="fixed",
+                members=[
+                    GroupMember(
+                        track_id="tx-a",
+                        outcome=DetectionOutcome.DETECTED,
+                        anchor_sample=100_000 + 100_000 * index,
+                        relative_lag_samples=index,
+                        score_permille=600,
+                    )
+                ],
+            )
+
+        accumulator = _Accumulator()
+        comparisons = _compare_arrival(
+            [group(0, "start"), group(1, "start"), group(2, "end")],
+            settings=DetectorThresholds(),
+            accumulator=accumulator,
+        )
+        assert comparisons == []
+        assert [warning.code for warning in accumulator.warnings] == [
+            "marker_arrival_pair_ambiguous"
+        ]
 
     def test_two_starts_with_different_geometry_are_refused_at_load(self, tmp_path: Path) -> None:
         path = tmp_path / "events.yaml"
@@ -656,6 +839,39 @@ class TestTheCommandAndItsReport:
             ANALYSIS_RELATIVE_PATH
         ]
 
+    def test_the_report_model_represents_an_explained_skip(self) -> None:
+        now = dt.datetime(2026, 8, 5, tzinfo=dt.UTC)
+        report = MarkerReport(
+            session_id="session-01",
+            marker_name="v1",
+            overall_status=OverallStatus.COMPLETE,
+            analysis_status=AnalysisStatus.SKIPPED,
+            skip_reason="caller explicitly declined marker analysis",
+            started_at=now,
+            finished_at=now,
+        )
+        assert report.exit_code() is ExitCode.OK
+
+    def test_a_failed_stage_with_a_published_deliverable_is_partial_and_nonzero(self) -> None:
+        now = dt.datetime(2026, 8, 5, tzinfo=dt.UTC)
+        report = MarkerReport(
+            session_id="session-01",
+            marker_name="v1",
+            overall_status=OverallStatus.PARTIAL,
+            analysis_status=AnalysisStatus.FAILED,
+            errors=[MarkerReportError(code="late_failure", message="failed after publication")],
+            deliverables=[
+                ReportDeliverable(
+                    relative_path=ANALYSIS_RELATIVE_PATH,
+                    sha256="0" * 64,
+                    size_bytes=1,
+                )
+            ],
+            started_at=now,
+            finished_at=now,
+        )
+        assert report.exit_code() is ExitCode.PARTIAL
+
     def test_an_unknown_reference_track_fails_with_a_report(self, marked_session: Path) -> None:
         result = run_marker_analyze(marked_session, marker=SPEC.name, reference_track="tx-zzz")
         assert result.exit_code is ExitCode.FATAL
@@ -702,7 +918,7 @@ class TestSearchedIntervals:
             yaml.safe_dump(
                 {
                     "schema_version": 1,
-                    "session_id": "session-01",
+                    "session_id": "2026-08-15",
                     "events": [
                         {
                             "role": "start",
@@ -785,7 +1001,7 @@ class TestTheDefaultWindowsAreBounded:
             yaml.safe_dump(
                 {
                     "schema_version": 1,
-                    "session_id": "session-01",
+                    "session_id": "2026-08-15",
                     "events": [
                         {
                             "role": "start",

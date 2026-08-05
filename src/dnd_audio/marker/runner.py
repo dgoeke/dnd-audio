@@ -58,8 +58,13 @@ from dnd_audio.marker.analysis import (
     SyncMarkerAnalysis,
     TimecodeComparison,
 )
-from dnd_audio.marker.detect import DetectorThresholds, MarkerOccurrence, detect_occurrences
-from dnd_audio.marker.eventlog import MarkerEventLog, load_event_log
+from dnd_audio.marker.detect import (
+    DetectorThresholds,
+    MarkerOccurrence,
+    OccurrenceCeilingError,
+    detect_occurrences,
+)
+from dnd_audio.marker.eventlog import MarkerEvent, MarkerEventLog, load_event_log
 from dnd_audio.marker.inputs import SessionArtifacts, read_session_artifacts
 from dnd_audio.marker.report import (
     AnalysisStatus,
@@ -184,10 +189,10 @@ def _usable(item: MarkerOccurrence) -> bool:
 def _choose_reference(configured: str | None, detections: dict[str, list[MarkerOccurrence]]) -> str:
     """Which track anchors every group.
 
-    Configured wins. Otherwise the track with the **most** accepted occurrences — most
-    likely the one nearest the phone, and therefore the one whose detections are sharpest —
-    tie-broken lexically so the answer never depends on dictionary order. Stated here rather
-    than left implicit because the reference decides the sign of every lag in the analysis.
+    Configured wins. Otherwise choose the track with the **most usable occurrences**, which
+    maximizes the number of reference-anchored groups the available evidence can form; ties
+    are lexical so dictionary order never decides a lag sign. This is a deterministic grouping
+    policy, not an inference about which transmitter was physically nearest the phone.
     """
     if configured is not None:
         return configured
@@ -256,14 +261,10 @@ def _assign_roles(
         )
         return assigned
 
-    claimed: set[int] = set()
+    proposed: dict[int, list[MarkerEvent]] = {}
     for event in events:
         start, end = event.interval_samples(MARKER_SAMPLE_RATE)
-        inside = [
-            index
-            for index, (anchor, _) in enumerate(groups)
-            if start <= anchor < end and index not in claimed
-        ]
+        inside = [index for index, (anchor, _) in enumerate(groups) if start <= anchor < end]
         if not inside:
             accumulator.warn(
                 "marker_event_without_occurrence",
@@ -279,8 +280,18 @@ def _assign_roles(
                 f"decidable. All are reported and none is labelled.",
             )
             continue
-        index = inside[0]
-        claimed.add(index)
+        proposed.setdefault(inside[0], []).append(event)
+
+    for index, claimants in proposed.items():
+        if len(claimants) > 1:
+            accumulator.warn(
+                "marker_event_overlap",
+                f"one accepted occurrence is claimed by {len(claimants)} logged events "
+                f"({', '.join(event.role.value for event in claimants)}). It remains "
+                f"unassigned rather than letting playback order choose its role.",
+            )
+            continue
+        event = claimants[0]
         assigned[index] = (event.role.value, "event_log", event.geometry_id)
     return assigned
 
@@ -369,10 +380,17 @@ def _compare_arrival(
     geometry ID — the operator's written assertion that the phone and every transmitter
     stayed put. Otherwise it is differential acoustic arrival, and says why.
     """
-    start = next((group for group in groups if group.role == "start"), None)
-    end = next((group for group in groups if group.role == "end"), None)
-    if start is None or end is None:
+    starts = [group for group in groups if group.role == "start"]
+    ends = [group for group in groups if group.role == "end"]
+    if len(starts) != 1 or len(ends) != 1:
+        if starts or ends:
+            accumulator.warn(
+                "marker_arrival_pair_ambiguous",
+                f"differential arrival needs exactly one start and one end group; found "
+                f"{len(starts)} start and {len(ends)} end. No pair was selected.",
+            )
         return []
+    start, end = starts[0], ends[0]
 
     fixed = (
         start.geometry_id is not None
@@ -528,8 +546,15 @@ def run_marker_analyze(
 
     try:
         spec = resolve(marker)
-        artifacts = read_session_artifacts(session_dir, config)
+        artifacts = read_session_artifacts(session_dir, config, current_sources=before)
         log = load_event_log(event_log) if event_log is not None else None
+        if log is not None and log.session_id != config.session_id:
+            message = (
+                f"the marker event log names session {log.session_id!r}, but session.yaml "
+                f"names {config.session_id!r}. A log from another take cannot assign roles "
+                f"or fixed-geometry evidence here."
+            )
+            raise DndAudioError(message, code="event_log_session_mismatch")
         analysis = _analyze(
             session_dir,
             config,
@@ -628,9 +653,17 @@ def _analyze(
         found: list[MarkerOccurrence] = []
         with TrackReader(session_dir, track, duration) as reader:
             for interval in intervals:
-                found.extend(
-                    detect_occurrences(reader, spec, interval=interval, thresholds=settings)
+                interval_found = detect_occurrences(
+                    reader, spec, interval=interval, thresholds=settings
                 )
+                if len(found) + len(interval_found) > settings.max_occurrences_per_track:
+                    message = (
+                        f"track {track.track_id} accepted more than "
+                        f"{settings.max_occurrences_per_track} occurrences across the "
+                        f"canonical searched interval set. Nothing was truncated."
+                    )
+                    raise OccurrenceCeilingError(message)
+                found.extend(interval_found)
         detections[track.track_id] = sorted(found, key=lambda item: item.anchor_sample)
 
     if not detections:
@@ -695,6 +728,7 @@ def _analyze(
         marker_analysis_semantics_version=MARKER_ANALYSIS_SEMANTICS_VERSION,
         marker_name=spec.name,
         marker_wav_sha256=sha256_bytes(marker_wav_bytes(spec)),
+        manifest_schema_version=artifacts.manifest.schema_version,
         timeline_schema_version=timeline.schema_version,
         event_log_schema_version=log.schema_version if log is not None else None,
         event_log_sha256=log.digest() if log is not None else None,

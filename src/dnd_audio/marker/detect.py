@@ -17,11 +17,10 @@ strong isolated chirp is never a detection.
 
 **Bounded memory, and it is not only the correlator.** Blocks are fixed size with a
 template-length carry, so the correlation working set is independent of the searched range
-(INV-07). Accumulated *occurrences* are the other half, and the obvious streaming proof misses
-them: non-maximum suppression bounds nearby candidates and says nothing about the number of
-separated ones. So there is an explicit ceiling, and reaching it **fails** — this project does
-not truncate silently, and a truncated occurrence list is indistinguishable from a session that
-genuinely had that many (ADR-0041).
+(INV-07). Both retained per-chirp peaks and assembled occurrences have explicit ceilings,
+checked after every block rather than after the search. Reaching either **fails** — this project
+does not truncate silently, and a truncated occurrence list is indistinguishable from a session
+that genuinely had that many (ADR-0041, ADR-0042).
 
 **Scores are integer permille and every comparison happens there.** The correlation itself is
 floating point, but it is quantized once, at the boundary, and no threshold or tie-break ever
@@ -188,6 +187,10 @@ class DetectorThresholds:
     #: plausible bench take (three plays at each end, plus two moved-phone diagnostics) and
     #: far below anything that threatens memory.
     max_occurrences_per_track: int = 32
+    #: Retained candidate peaks per chirp. Eight times the occurrence ceiling leaves room for
+    #: local reflections and incomplete sequences while bounding dense non-marker audio before
+    #: it can accumulate over a long search (ADR-0042).
+    max_peak_candidates_per_chirp: int = 256
 
     def __post_init__(self) -> None:
         if self.min_sequence_score_permille < self.min_chirp_score_permille:
@@ -211,6 +214,7 @@ class DetectorThresholds:
             ("sequence_nms_radius_samples", self.sequence_nms_radius_samples),
             ("association_lag_samples", self.association_lag_samples),
             ("max_occurrences_per_track", self.max_occurrences_per_track),
+            ("max_peak_candidates_per_chirp", self.max_peak_candidates_per_chirp),
             ("material_arrival_change_samples", self.material_arrival_change_samples),
         ):
             if value <= 0:
@@ -229,6 +233,7 @@ class DetectorThresholds:
             "clipping_ratio_permille": self.clipping_ratio_permille,
             "gap_tolerance_samples": self.gap_tolerance_samples,
             "max_occurrences_per_track": self.max_occurrences_per_track,
+            "max_peak_candidates_per_chirp": self.max_peak_candidates_per_chirp,
             "material_arrival_change_samples": self.material_arrival_change_samples,
             "min_chirp_score_permille": self.min_chirp_score_permille,
             "min_runner_up_separation_permille": self.min_runner_up_separation_permille,
@@ -382,6 +387,8 @@ def _assemble(
             measured - expected
             for measured, expected in zip(measured_gaps, canonical_gaps, strict=True)
         )
+        if any(abs(error) > thresholds.gap_tolerance_samples for error in errors):
+            continue
         score = min(hit.score_permille for hit in hits)
         if score < thresholds.min_sequence_score_permille:
             continue
@@ -458,7 +465,9 @@ def detect_occurrences(
         )
         raise ValueError(message)
 
-    per_chirp: list[list[tuple[int, int]]] = [[] for _ in templates]
+    # Dictionaries deduplicate the overlap-save carry immediately; unlike a list, their
+    # retained size has a checked bound throughout the scan.
+    per_chirp: list[dict[int, int]] = [{} for _ in templates]
     position = start
     # Overlap-save: each block carries the previous block's tail so a template straddling the
     # seam is still matched. Without the carry, an occurrence landing on a block boundary
@@ -473,24 +482,42 @@ def detect_occurrences(
             break
         for index, template in enumerate(templates):
             scores = _normalized_scores(segment, template)
-            per_chirp[index].extend(
-                _peaks(
-                    scores,
-                    minimum=settings.min_chirp_score_permille,
-                    radius=settings.nms_radius_samples,
-                    offset=read_from,
+            for sample, score in _peaks(
+                scores,
+                minimum=settings.min_chirp_score_permille,
+                radius=settings.nms_radius_samples,
+                offset=read_from,
+            ):
+                per_chirp[index][sample] = max(per_chirp[index].get(sample, 0), score)
+            if len(per_chirp[index]) > settings.max_peak_candidates_per_chirp:
+                message = (
+                    f"chirp {index} retained {len(per_chirp[index])} candidate peaks in "
+                    f"[{start}, {stop}), above the configured ceiling of "
+                    f"{settings.max_peak_candidates_per_chirp}. Nothing was truncated: "
+                    f"the threshold is admitting dense audio as marker-shaped."
                 )
+                raise OccurrenceCeilingError(message)
+
+        # Fail while streaming, not after the final read. This is the load-bearing half of
+        # INV-07: fixed-size correlation blocks alone do not bound retained candidates.
+        current = [
+            sorted(peaks.items(), key=lambda item: (-item[1], item[0])) for peaks in per_chirp
+        ]
+        current_kept = _suppress_sequences(
+            _assemble(spec, current, settings), radius=settings.sequence_nms_radius_samples
+        )
+        if len(current_kept) > settings.max_occurrences_per_track:
+            message = (
+                f"{len(current_kept)} marker occurrences were accepted before sample {stop}, "
+                f"above the configured ceiling of {settings.max_occurrences_per_track}. "
+                f"Nothing was truncated."
             )
+            raise OccurrenceCeilingError(message)
         position = stop
 
-    # Blocks overlap by `carry`, so a peak in the overlap is found twice — once per block,
-    # at the same absolute position. Deduplicate on position, keeping the higher score.
-    deduplicated: list[list[tuple[int, int]]] = []
-    for peaks in per_chirp:
-        best: dict[int, int] = {}
-        for sample, score in peaks:
-            best[sample] = max(best.get(sample, 0), score)
-        deduplicated.append(sorted(best.items(), key=lambda item: (-item[1], item[0])))
+    deduplicated = [
+        sorted(peaks.items(), key=lambda item: (-item[1], item[0])) for peaks in per_chirp
+    ]
 
     assembled = _assemble(spec, deduplicated, settings)
     kept = _suppress_sequences(assembled, radius=settings.sequence_nms_radius_samples)

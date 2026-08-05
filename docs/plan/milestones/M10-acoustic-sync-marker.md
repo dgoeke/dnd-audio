@@ -1,6 +1,6 @@
 # M10 — Acoustic synchronization marker
 
-**Status:** not started
+**Status:** closed 2026-08-05
 **Depends on:** M2 and M8 (closed), plus a short operator bench recording on the intended
 phone/browser and DJI hardware
 **Spec sections:** Milestone 2 synchronization QA; Tests and acceptance criteria item 15;
@@ -439,9 +439,9 @@ than implying a software proof that will not exist.
    the phone's dynamics processing warps playback, a whole-template correlation stops
    compressing while per-chirp filters plus a gap tolerance degrade gracefully.
 
-   Fixed-size overlap-save blocks with template-length carry, online normalization over a
-   bounded ring, and online non-maximum suppression, so the *correlation* working set is
-   independent of session length and of requested search length.
+   Fixed-size overlap-save blocks with template-length carry, online normalization, and
+   bounded retained peak maps, so the correlation and candidate working sets are independent
+   of session length and requested search length.
 
    **That is not the whole bound, and the first draft claimed it was.** NMS bounds *nearby*
    candidates; it does nothing about the number of *separated* accepted occurrences, and the
@@ -449,11 +449,12 @@ than implying a software proof that will not exist.
    that are then serialized. Over a long or adversarial range those grow with the search
    range — an INV-07 breach on the composed path, and one the proposed proof would have
    passed straight through, because a tenfold longer *sparse* search keeps the arrays equal
-   while the lists grow. So: a **versioned occurrence ceiling that fails explicitly**, names
-   itself in the report, and never truncates — this project does not do silent caps — and a
-   memory regression built on **dense** accepted candidates rather than sparse ones. Disk
-   spooling was the reviewer's other option and is machinery for a command whose default is
-   two 120-second windows.
+   while the lists grow. The final implementation therefore has **two versioned ceilings**:
+   retained per-chirp candidates and complete occurrences. Both fail explicitly during the
+   scan, never truncate, and have dense regressions proving failure before the last read.
+   The occurrence count is also enforced across disjoint searched intervals. Disk spooling
+   was the reviewer's other option and is machinery for a command whose default is two
+   120-second windows.
 
    Every threshold here is empirical and cites its open question until the bench resolves it:
    the bounded cross-track association lag, the clipping and weak-signal thresholds, the
@@ -701,7 +702,7 @@ naming precisely what was unlabelled and why.
 | 5 | All occurrences in the canonical searched set; one-to-one groups and unmatched detections; exact lags and source coordinates; missing/weak/clipped/ambiguous kept distinct; repeats, a missed event, moved-position diagnostics and overlapping windows cannot silently change the chosen pair | `test_marker_analyze.py` — one class per outcome, each on a fixture built from **independent** ground truth (the generator places the marker at a declared sample; the assertion is that exact integer, never a value the detector produced) | A |
 | 6 | The marker report satisfies INV-13 for complete/inconclusive/failed/skipped/partial; ordinary failures write it atomically and exit correctly; an unsafe resolved path writes nothing under `raw/` | `test_marker_analyze.py::TestTheReport` driven **through the CLI**, including `--report SESSION/raw/tx-a/<a real recording>` **and `marker build SESSION/raw/tx-a`**; in both the file's bytes are asserted unchanged and no directory is created | A |
 | 7 | Synthetic regressions: exact delays, stream seams, gain/EQ, reverberation, noise, clipping, truncation, reversed/partial, duplicate peaks, speech/music negatives, sample-rate/time-scale perturbation; M8's within-quantum offset stays healthy; material fixed-geometry change warns | `test_marker_detect.py`, parametrized over **every** candidate spec | A |
-| 8 | Fixed memory independent of session and search length, proven over the composed path | `test_memory.py::TestTheMarkerAnalysisPathStreams` — one ordered event log over reads, correlation blocks and the write; a block produced before the last read; and, because a sparse long search passes that while occurrence lists grow, a **dense**-accepted-candidate case asserting the versioned occurrence ceiling fails explicitly rather than truncating or accumulating | A |
+| 8 | Fixed memory independent of session and search length, proven over the composed path | `test_memory.py::TestTheMarkerAnalysisPathStreams` — bounded reads and progress before the last read; a dense complete-marker input hits the occurrence ceiling before the last read; and dense isolated chirps hit the separate peak-candidate ceiling before incomplete candidates can accumulate | A + code review |
 | 9 | Outputs declared before cleanup; resolved paths under sources refused; every source snapshotted; verified after the last read and before publication; in the central INV-01 matrix | `tests/test_raw_guard.py::{TestCleanupNeverWritesIntoRaw,TestEveryComposedRunVerifiesItsSources}` with `marker-analyze` added to `COMPOSED`; plus a mid-run source mutation; plus `marker build`'s own destination guard, which is **not** covered by `COMPOSED` because it takes no session (see step A4) | A |
 | 10 | Marker semantics invalidate only their own artifacts; no `SessionConfig` field; stale timelines refused | `test_marker_analyze.py::TestIdentity` — vary **each** identity component (marker, detector *and* analysis semantics versions, event-log digest, every consumed schema version) and assert the analysis identity moves, while `manifest.json`, `timeline.json`, `activity.json` bytes and every existing cache key do not (the `archive/config.py` regression's shape: compare **cache keys**, not output bytes); `test_config.py` asserts no marker field on `SessionConfig`; each staleness component refused with its own code and its own test; and the whole pre-existing `work/`/`output/`/cache tree asserted byte-identical after a run | A |
 | 11 | Raw hashes match before and after; nothing generated is committed | The bench's own before/after hashes; `.gitignore` and a test that the repository contains no `.wav`/`.html` marker artifact | bench |
@@ -747,13 +748,13 @@ service worker or PWA; no committed audio binaries; and no browser dependency (A
 
 ## Completion gate
 
-- [ ] The spec, ADR, OQ-025, H1/H2 charters, and operator runbook agree that marker v1 verifies
+- [x] The spec, ADR, OQ-025, H1/H2 charters, and operator runbook agree that marker v1 verifies
       the jam, always reports differential acoustic arrival, and calls it recorder-drift
       evidence only with fixed phone **and lav** geometry; it never replaces timecode or
       corrects a track.
-- [ ] `marker build` produces byte-stable WAV, standalone HTML, and manifest artifacts; the WAV
+- [x] `marker build` produces byte-stable WAV, standalone HTML, and manifest artifacts; the WAV
       extracted from HTML is byte-identical and has the same frozen SHA-256 as the CLI WAV.
-- [ ] The HTML works offline on the intended phone/browser with one user-initiated playback at a
+- [x] The HTML works offline on the intended phone/browser with one user-initiated playback at a
       time, no external resource/network API, clear marker identity/state, and no independent
       waveform synthesis.
       **Amended 2026-08-05** (A3, and the second plan review's finding 4, which was right that
@@ -769,7 +770,7 @@ service worker or PWA; no committed audio binaries; and no browser dependency (A
       The opt-in headless-browser smoke is **deferred** — nothing in the flake provides a
       browser, and the phone bench is strictly stronger evidence for every claim it would
       have made.
-- [ ] The bench recording detects every fixed-position marker decisively on all intended DJI
+- [x] The bench recording detects every fixed-position marker decisively on all intended DJI
       tracks without clipping the nearest or losing the farthest, and ordinary speech/media
       supplies no accepted false marker sequence.
       **Amended 2026-08-05** (A4): the second clause is discharged **without the bench**, over
@@ -780,44 +781,44 @@ service worker or PWA; no committed audio binaries; and no browser dependency (A
       untouched and remains entirely the bench's: not inventing a marker from speech and
       reliably finding one across a table are opposite failure directions, and a detector that
       accepted nothing at all would satisfy the second clause perfectly.
-- [ ] `marker analyze` reports all occurrences inside the canonical searched interval set,
+- [x] `marker analyze` reports all occurrences inside the canonical searched interval set,
       reference-anchored one-to-one groups and unmatched detections, exact integer-sample lags
       and source coordinates, and distinct missing/weak/clipped/ambiguous outcomes. Repeated
       events, one missed event, moved-position diagnostics, and overlapping windows cannot
       silently change the chosen start/end pair.
-- [ ] The separate marker report satisfies INV-13 for complete, inconclusive, failed, skipped,
+- [x] The separate marker report satisfies INV-13 for complete, inconclusive, failed, skipped,
       and partial outcomes; ordinary failures write it atomically and exit correctly, while an
       unsafe resolved report path writes nothing under `raw/`.
-- [ ] Synthetic CPU/offline regressions cover exact delays, stream seams, gain/EQ, reverberation,
+- [x] Synthetic CPU/offline regressions cover exact delays, stream seams, gain/EQ, reverberation,
       noise, moderate clipping, truncation, reversed/partial patterns, duplicate peaks,
       deterministic speech/music negatives, and sample-rate/time-scale perturbation with
       independent ground truth. M8's within-quantum offset stays healthy and material fixed-
       geometry lag change emits a drift warning.
-- [ ] Fixed-size overlap-save processing has maximum memory independent of session/search length,
+- [x] Fixed-size overlap-save processing has maximum memory independent of session/search length,
       proven over the composed analyzer path by observing processing/publication progress before
       the last read. **Amended 2026-08-05:** that proof alone is insufficient and passes while
       retained occurrence, group and unmatched-detection lists grow with the search range
-      (second plan review, P0-2). The bound also requires a **versioned occurrence ceiling that
-      fails explicitly rather than truncating**, demonstrated on a *dense*-accepted-candidate
-      input rather than a longer sparse one.
-- [ ] `marker analyze` declares every prospective output before cleanup, rejects resolved paths
+      (second plan review, P0-2). The bound also requires **versioned peak-candidate and
+      occurrence ceilings that fail explicitly rather than truncating**, demonstrated on both
+      dense complete markers and dense isolated chirps, with failure before the final read.
+- [x] `marker analyze` declares every prospective output before cleanup, rejects resolved paths
       under sources, snapshots every configured source, verifies after the last read and before
       publication, and joins the central INV-01 composed-command regression matrix.
-- [ ] **`marker build` refuses a destination resolving under any enclosing session's configured
+- [x] **`marker build` refuses a destination resolving under any enclosing session's configured
       source roots**, before it creates a directory, writes a candidate, or unlinks a prior
       manifest — proved by driving the real command at a real recording's directory and
       asserting that recording's bytes are unchanged. **Added 2026-08-05** (second plan review,
       P0-1): the command takes an arbitrary destination and no session argument, so it is
       outside the composed-command matrix and INV-01 would otherwise be unguarded there. Same
       shape as the P0 M7a's second code review found.
-- [ ] Marker build/analyze semantics invalidate only their own deterministic artifacts; existing
+- [x] Marker build/analyze semantics invalidate only their own deterministic artifacts; existing
       session config hashes, inspection/timeline/activity/mix/transcript artifacts, and every ASR
       cache identity remain unchanged. Marker invocation/event-log data is not a
       `SessionConfig` field, and stale timelines are refused rather than trusted or silently
       rebuilt.
-- [ ] Raw hashes match before and after the bench and analysis; no generated WAV/HTML, recording,
+- [x] Raw hashes match before and after the bench and analysis; no generated WAV/HTML, recording,
       browser artifact, or device-specific private path is committed.
-- [ ] The default suite remains offline/CPU/model-free with zero skips, the hardware bench is
+- [x] The default suite remains offline/CPU/model-free with zero skips, the hardware bench is
       separately recorded, and independent plan/code reviews are fixed or explicitly
       dispositioned before close. **Amended 2026-08-05:** the local-browser bench is deferred
       with its reason — see the amended criterion 3 — so this criterion no longer requires a
@@ -828,9 +829,11 @@ service worker or PWA; no committed audio binaries; and no browser dependency (A
 ## Known risks and open questions
 
 - Mobile browsers and audio hardware may resample or process PCM differently. Exact embedded
-  bytes prevent implementation drift; only the physical bench establishes usable acoustics.
-- Phone speaker output below 500 Hz and near 8 kHz varies. The provisional band is a candidate,
-  not a default justified by theory alone.
+  bytes prevent implementation drift; the intended phone/browser bench established v1's usable
+  acoustics, but a materially different playback device remains a new physical path.
+- Phone speaker and lav response varies by band. The bench selected v1's 800 Hz → 6 kHz band
+  from three deliberately different candidates; that evidence is specific to the tested class
+  of phone/DJI path rather than a universal loudspeaker claim.
 - Moving the phone **or any compared lav** between start and end aliases propagation change into
   apparent drift. Normal sessions with moving wearers therefore provide differential-arrival
   evidence; a fixed-transmitter soak provides the clean clock-drift measurement.
@@ -838,3 +841,114 @@ service worker or PWA; no committed audio binaries; and no browser dependency (A
   step reliably. Operator setup and bench evidence remain part of the instrument.
 - A marker obvious enough to detect is audible and briefly interrupts the room. H1/H2 should
   place it before play begins and after play ends, not inside conversational content.
+
+---
+
+## Closeout
+
+### What works end to end
+
+`dnd-audio marker build OUTPUT_DIRECTORY` now builds frozen marker v1 by default: mono 48 kHz
+signed 16-bit PCM, three 250 ms rising chirps from 800 Hz to 6 kHz, asymmetric 200/320 ms gaps,
+and byte-identical standalone HTML payload. The canonical WAV is 141,164 bytes with SHA-256
+`70355baad6bb72b38e0b606cddbbaa3428c11429bec74cd127aa6f8935ecdf6f`.
+
+`dnd-audio marker analyze SESSION` validates the existing manifest/timeline and current source
+bytes, scans bounded default end windows, detects complete sequences, groups six-track arrivals,
+maps anchors back to source coordinates, compares acoustic arrival with timecode placement, and
+writes a deterministic analysis plus an INV-13 report. It never moves a sample. Without an
+event log, repeats remain explicitly unassigned; with one, session identity and unambiguous
+one-to-one role assignment are required before fixed geometry can license a drift claim.
+
+The intended-phone/DJI bench selected cand-b. At approximately 90% phone volume, all four
+fixed-position plays reached all six tracks. The 24 v1 occurrences scored 404–634 permille,
+had a 29-sample maximum gap error, and produced no local runner-up, ambiguity, clipping, weak
+signal, or extra event. Opening arrivals repeated within 0–1 sample. False-positive evidence
+remains zero accepted sequences across 13.7 minutes of real DJI speech at a 100-permille floor.
+The raw source hashes recorded in the fixture note matched before analysis, after the first
+Phase-B pass, and after final verification.
+
+### Tests and commands run, with results
+
+- Phase-B diagnostic scoring at 100 permille — cand-a 36, cand-b 24, cand-c 24 expected
+  track-occurrences; no extra sequence, clipping, or weak outcome.
+- Final public v1 analysis after code review — **24 occurrences, four six-track groups**, weakest
+  score 404, maximum gap error 29, zero runner-up/ambiguous/clipped/weak; expected
+  `marker_roles_unassigned` warning under amendment A5.
+- Focused detector/analyzer/memory suite after review — **252 passed**.
+- Real-DJI false-positive host smoke after detector v3 — **8 passed**.
+- `./scripts/codex-review.sh code M10 main` — two P0, six P1, and three P2 findings; all accepted
+  and fixed, with dispositions in `../reviews/M10-code-20260805-1314.md`.
+- Nine deliberate production mutations — every load-bearing proof failed, then each mutation
+  was restored; exact mutations are listed in the distilled code review.
+- `./scripts/gate.sh` — **8 checks, 3,111 passed, zero skips; gate passed**.
+- `nix run .#fhs -- -c 'UV_PROJECT_ENVIRONMENT=.venv-rocm … pytest -m
+  "not host_smoke and not allow_network" -q'` — **3,111 passed** from `.venv-rocm`.
+
+### Decisions made (→ ADRs)
+
+- **ADR-0040** separates timecode placement, acoustic verification, differential acoustic
+  arrival, and recorder drift. Only asserted fixed phone-and-lav geometry licenses the last.
+- **ADR-0041** fixes deterministic build/analyze artifacts, integer score/lag semantics,
+  event-log matching, identity, and publication boundaries.
+- **ADR-0042** freezes cand-b as v1, its WAV hash, and every detector threshold with measured
+  margin rather than fitting constants to one take.
+
+Detector semantics are v3: unclaimed same-chirp alternatives define ambiguity; actual
+consecutive gaps are enforced; and peak-candidate plus occurrence ceilings fail during the
+stream. Analysis semantics are v2 and analysis schema is v3 after the independent review's
+source-validation, event-role, conclusive-status, and identity repairs.
+
+### Assumptions made and open questions answered
+
+- **OQ-025 answered.** Use v1 as automatic jam verification and differential-arrival
+  measurement, never as timecode replacement. Retain the three-clap fallback.
+- **OQ-029 answered for the intended phone/browser path.** The maximum fixed v1 gap error was
+  29 samples (0.60 ms), leaving 1,411 samples against the structural tolerance; no disrupted
+  or nonuniform sequence appeared.
+- The 17-sample fixed-position change over about 11.8 minutes is a repeatability observation,
+  not H2's four-hour drift answer. OQ-006 therefore remains owned by H2.
+
+### Notes for future implementors
+
+Do not reconstruct bench roles with an event log that never existed. Amendment A5 makes the
+spoken slates and fixed block order the record; `marker_roles_unassigned` is the correct output.
+For H1/H2, an actual event log is valuable because it can assert occurrence roles and geometry,
+but it must name the session and cannot resolve overlapping claims by playback order.
+
+Keep the two memory ceilings distinct. Complete occurrences are not the only retained state:
+a long input can contain many isolated marker-like chirps that never assemble. Both ceiling
+checks must remain inside the block loop, and the occurrence limit must remain global across
+the canonical interval set.
+
+Marker v1 is immutable. A different phone class, firmware response, or materially better
+waveform earns a new public marker version and hash; it does not edit v1. Generated WAV, HTML,
+manifests, browser state, layout images, and all audio remain operator-local outputs.
+
+### Deviations from this charter, and why
+
+- Amendment A4 replaced the planned in-take speech/media block with a stronger pre-bench sweep
+  over 13.7 minutes of existing real DJI material. The positive bench therefore contains only
+  marker blocks.
+- Amendment A5 removed the event log from this one continuous take. Roles and differential
+  arrival were scored arithmetically from the spoken-slated block order, without fabricating
+  stronger geometry evidence.
+- The bench exposed a runner-up shape defect, and the code review exposed unbounded candidate
+  retention plus unenforced consecutive gaps. These required detector/analysis semantic and
+  schema revisions rather than constant tuning. The final physical re-baseline was unchanged.
+- The optional headless-browser smoke remains deferred under amendment A3; the intended-phone
+  bench directly proved playback, UI reset, and download behaviour on the actual target path.
+
+### Downstream charters updated
+
+- **H1** and its operator runbook offer marker v1 as the preferred generated alternative to
+  three claps while retaining the LTC jam and the clap fallback.
+- **H2** uses v1 for the long-baseline pair, requires fixed phone and transmitter/lav geometry
+  before calling a change recorder drift, and otherwise reports differential arrival only.
+- The product spec, OQ-025, OQ-029, and `STATE.md` carry the same boundaries and canonical hash.
+
+### Next smallest step
+
+Record and process **H1**. Build v1 before the room is occupied, use the bench-tested phone at
+the documented approximately 90% volume if practical, keep its position/orientation fixed for
+the chosen pair, and use the three-clap pattern if the prepared phone path is unavailable.

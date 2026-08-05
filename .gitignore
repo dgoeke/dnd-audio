@@ -63,3 +63,4 @@ docs/plan/reviews/*.raw.md
 
 # Scratch
 .scratch/
+/bench-markers/

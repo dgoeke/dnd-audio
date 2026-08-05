@@ -26,7 +26,7 @@ on all six tracks at approximately 90% phone volume, with no clipping, weak sign
 or extra occurrence. The real-DJI negative sweep accepted no sequence at a 100-permille floor.
 
 The human-readable v1 recipe is mono 48 kHz signed 16-bit PCM; three 250 ms linear rising
-chirps from 800 Hz to 6 kHz; 25 ms raised-cosine fades; asymmetric 200 ms then 320 ms gaps;
+chirps from 800 Hz to 6 kHz; 10 ms raised-cosine fades; asymmetric 200 ms then 320 ms gaps;
 100 ms leading and trailing silence; and 0.5 full-scale peak amplitude. The frozen anchor is
 sample **4800**, the first sample of the first chirp. The canonical WAV is 141,164 bytes and
 has SHA-256:
@@ -50,7 +50,8 @@ margin, not copies of one bench's extrema:
 | clipping ratio | 10‰ at ≥0.99 full scale | No bench occurrence crossed it at approximately 90% phone volume; it classifies score trust, not acceptance |
 | weak RMS | 1‰ full scale | No bench occurrence crossed it; below this is effectively no usable signal |
 | material fixed-geometry change | 48 samples (1 ms) | Bench repeat maximum 17, leaving 31; 1 ms is below the 1600-sample timecode quantum yet above measured acoustic repeat noise |
-| occurrence ceiling | 32 per track | Eight were planned at most and six occurred; 32 is operational headroom while remaining a hard memory bound |
+| occurrence ceiling | 32 per track | Eight were planned at most and six occurred; 32 is operational headroom and is checked while each interval is scanned and across the canonical interval set |
+| peak-candidate ceiling | 256 per chirp/track interval | Eight times the occurrence ceiling leaves room for reflections and incomplete sequences while bounding dense non-marker peaks before the final read |
 
 Three chirps remain required by the waveform and sequence assembler. The fixed-position
 closing lag changed by 13–17 samples relative to the opening median over about 11.8 minutes.
@@ -62,6 +63,17 @@ legitimate repeats look like ambiguity. Detector semantics v2 compares only uncl
 same-chirp alternatives local to the occurrence, after every accepted occurrence is excluded;
 analysis schema v2 records the resulting `ambiguous` fact. Sequence-level NMS is separate so
 a coherent room echo remains one event without erasing a distinct chirp-level competitor.
+
+The independent code review then found two further shape defects in that first repair. The
+occurrence ceiling was checked only after all per-chirp peaks had accumulated, and the
+assembler constrained each chirp against the first anchor without enforcing the *consecutive*
+gap errors it reported. Detector semantics v3 checks both peak-candidate and occurrence
+ceilings after every fixed-size block, enforces the 1440-sample limit on each actual gap, and
+applies the 32-occurrence ceiling across the full interval set. Analysis semantics v2 also
+refuses overlapping logged roles, a log naming another session, and an arbitrary first pair
+when multiple start/end groups exist. Analysis schema v3 adds the consumed manifest schema
+version to identity. The re-baselined default v1 pass was unchanged: 24 occurrences, four
+groups, weakest score 404, maximum gap error 29, and no ambiguity, clipping, or weak signal.
 
 A future marker change takes a **new** semantic version and a new versioned filename. It does
 not silently replace v1, and v1's frozen hash stays in this document as history.

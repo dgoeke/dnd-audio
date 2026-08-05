@@ -40,6 +40,11 @@
           "default": null,
           "title": "Event Log Sha256"
         },
+        "manifest_schema_version": {
+          "minimum": 1,
+          "title": "Manifest Schema Version",
+          "type": "integer"
+        },
         "manifest_sha256": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Manifest Sha256",
@@ -121,6 +126,7 @@
         "marker_analysis_semantics_version",
         "marker_name",
         "marker_wav_sha256",
+        "manifest_schema_version",
         "timeline_schema_version",
         "config_hash",
         "manifest_sha256",
@@ -518,8 +524,8 @@
       "type": "array"
     },
     "schema_version": {
-      "const": 2,
-      "default": 2,
+      "const": 3,
+      "default": 3,
       "title": "Schema Version",
       "type": "integer"
     },

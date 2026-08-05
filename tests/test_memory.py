@@ -665,17 +665,61 @@ class TestTheMarkerAnalysisPathStreams:
             track[index * stride : index * stride + marker.size] = marker
 
         class Dense:
+            last_read_end = 0
+
             def read(self, start: int, n: int, /) -> npt.NDArray[np.float32]:
+                self.last_read_end = max(self.last_read_end, start + n)
                 window = np.zeros(n, dtype=np.float32)
                 low, high = max(0, start), min(track.size, start + n)
                 if high > low:
                     window[low - start : high - start] = track[low:high]
                 return window
 
+        reader = Dense()
         with pytest.raises(OccurrenceCeilingError):
             detect_occurrences(
-                Dense(),
+                reader,
                 spec,
                 interval=(0, track.size),
                 thresholds=DetectorThresholds(max_occurrences_per_track=8),
             )
+        assert reader.last_read_end < track.size, "the ceiling was checked only after the last read"
+
+    def test_dense_partial_candidates_also_fail_before_the_last_read(self) -> None:
+        """A ceiling on complete occurrences cannot bound a long series of isolated chirps."""
+        from dnd_audio.marker.detect import (
+            DetectorThresholds,
+            OccurrenceCeilingError,
+            detect_occurrences,
+        )
+        from dnd_audio.marker.spec import MARKER_SPECS
+        from dnd_audio.marker.synth import marker_templates
+
+        spec = MARKER_SPECS["v1"]
+        chirp = marker_templates(spec)[0].astype(np.float32) / 32768.0
+        stride = 20_000
+        count = 40
+        track = np.zeros(count * stride + 10_000, dtype=np.float32)
+        for index in range(count):
+            track[index * stride : index * stride + chirp.size] = chirp
+
+        class DensePartials:
+            last_read_end = 0
+
+            def read(self, start: int, n: int, /) -> npt.NDArray[np.float32]:
+                self.last_read_end = max(self.last_read_end, start + n)
+                window = np.zeros(n, dtype=np.float32)
+                low, high = max(0, start), min(track.size, start + n)
+                if high > low:
+                    window[low - start : high - start] = track[low:high]
+                return window
+
+        reader = DensePartials()
+        with pytest.raises(OccurrenceCeilingError):
+            detect_occurrences(
+                reader,
+                spec,
+                interval=(0, track.size),
+                thresholds=DetectorThresholds(max_peak_candidates_per_chirp=8),
+            )
+        assert reader.last_read_end < track.size, "candidate peaks accumulated to the final read"

@@ -1097,16 +1097,12 @@ browser resampling, phone-speaker response, media volume, or room propagation. K
 that complete path is bench-tested. Revisit replacing the jam only if H2 shows the ritual
 failing in practice, or if restarted/missing-anchor files are proven irrelevant.
 
-**M10 started 2026-08-05, and this entry now owns a list of constants rather than a
-question.** The generator, the standalone page and the matched-filter detector are being
-built; what remains unmeasured is every empirical number in them, and each cites this entry or
-**OQ-029** from the code until the bench resolves it: the inter-chirp gap tolerance, the
-bounded cross-track association lag, the clipping and weak-signal thresholds, the score and
-ambiguity thresholds in permille, the non-maximum-suppression radius against reverberation and
-repeated plays, the "material" differential-arrival change threshold, and whether any
-candidate's band survives the phone → room → lav → DJI path at the farthest seat without
-clipping the nearest. **ADR-0042** is the record that freezes them, and it is deliberately
-unfilled until the bench has run.
+**M10's 2026-08-05 bench turned this entry's empirical questions into frozen constants.**
+The generator, standalone page, and matched-filter detector cite this entry or **OQ-029**
+where the physical path matters. The bench measured inter-chirp error, cross-track arrival
+spread, clipping, weak-signal reach, score and ambiguity margins, repeatability, and moved-phone
+sensitivity without fitting every limit to one room. **ADR-0042** records the selected waveform,
+the constants, and the independent margin for each.
 
 The causal half of this entry is settled as a decision rather than an assumption:
 **ADR-0040** separates timecode placement, acoustic verification, differential acoustic
@@ -1136,11 +1132,11 @@ arrival measurement, retain timecode for placement and restarted files, and reta
 fallback. Sanitized evidence: `docs/fixtures/2026-08-05-marker-phone-dji-bench.md`.
 
 ## OQ-029 — Does a phone browser's playback of embedded 48 kHz PCM preserve the marker's internal timing?
-**Assumption:** Yes, to well inside the inter-chirp gap tolerance. M10's page hands the
-browser the CLI's exact 48 kHz PCM bytes, and the detector accepts a marker only when all
-three chirps arrive in order with gaps inside a configured tolerance — so the assumption is
-not that playback is sample-exact, but that whatever the browser and the media pipeline do to
-it is *small and uniform* enough that the gaps still match.
+**Answer:** Yes on the intended phone/browser, to well inside the inter-chirp gap tolerance.
+M10's page hands the browser the CLI's exact 48 kHz PCM bytes, and the detector accepts a
+marker only when all three chirps arrive in order with gaps inside a configured tolerance.
+The answer is not that playback is sample-exact, but that the measured browser/media path was
+small and uniform enough that the gaps matched.
 **Why it matters:** Two mechanisms could break it and they fail differently. **Resampling** to
 a hardware rate that is not 48 kHz scales every gap by a constant factor — a 44.1 kHz device
 stretches a 200 ms gap by about 17 ms, which a fixed tolerance either absorbs or does not.
@@ -1150,12 +1146,10 @@ toward per-chirp matching with an independent gap check — the shape M10 chose 
 hedge against exactly this. Set the tolerance too tight and the marker is undetectable on the
 one device it is played from; too loose and three unrelated transients become a sequence,
 which is the false positive the asymmetric gaps exist to prevent.
-**Evidence:** The bench. Play each candidate repeatedly from the intended phone at the
-intended volume, detect on every DJI track, and compare the measured inter-chirp gaps against
-the canonical ones — the analyzer records detected chirp order and gaps per occurrence, so
-this is reading one analysis rather than running a separate experiment. The discriminator
-between the two mechanisms is whether the gap error is a constant *ratio* (resampling) or
-scattered (scheduling).
+**Evidence:** The bench repeatedly played each candidate from the intended phone at the
+intended volume and detected it on every DJI track. The analyzer's recorded inter-chirp gaps
+showed neither a constant duration ratio nor scheduling disruption; the physical answer below
+records the exact maximum and margin.
 **Needs:** M10's phone/DJI bench · **Blocks:** none · **Status:** **answered** (M10 phone/DJI
 bench, 2026-08-05)
 
@@ -1203,10 +1197,10 @@ track. ADR-0042 therefore retains the structural 1440-sample gap bound, with 141
 observed margin, rather than fitting it down to this one phone. See
 `docs/fixtures/2026-08-05-marker-phone-dji-bench.md`.
 
-What the bench still owes: whether the intended phone's media pipeline perturbs gaps
-*non-uniformly* (scheduling rather than clocking), which no synthetic stretch models and which
-would show up as scattered rather than proportional gap residuals. The analyzer records
-per-occurrence gap errors precisely so that reading one analysis answers it.
+The physical bench answered the remaining nonuniform-scheduling question: the maximum error
+was 29 samples and the residuals were small rather than a disrupted sequence. The analyzer's
+per-occurrence gap errors are retained so a materially different phone/browser path can be
+checked against the same claim.
 
 ## OQ-026 — Does a DJI receiver's timecode counter wrap, and with what period?
 **Assumption:** Yes, at 24 hours — `rasterize.SECONDS_PER_DAY` adds `86400 * sample_rate`

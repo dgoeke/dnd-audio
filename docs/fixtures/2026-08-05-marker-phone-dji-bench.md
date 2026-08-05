@@ -119,6 +119,13 @@ in four groups, all six tracks per play, with no extras, clipping, weak signal, 
 The weakest score was 404 permille, the largest gap error 29 samples, and the expected
 `marker_roles_unassigned` warning remained. Raw hashes still matched afterwards.
 
+The same pass was repeated after the independent code review tightened consecutive-gap
+enforcement and made both candidate and occurrence ceilings genuinely streaming. Detector
+semantics v3 / analysis semantics v2 / analysis schema v3 produced the same 24 occurrences,
+four groups, 404-permille weakest score, 29-sample maximum gap error, and zero runner-up,
+ambiguous, clipped, or weak outcomes. The review repair therefore changed rejection and safety
+boundaries, not the bench-selected result.
+
 False-positive evidence is separate and stronger than this take could provide: the real-DJI
 speech sweep accepted zero sequences at a 100-permille floor. See
 `2026-08-05-marker-false-positive-sweep.md`.

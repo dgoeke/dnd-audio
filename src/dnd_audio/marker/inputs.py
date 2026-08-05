@@ -36,11 +36,13 @@ from dnd_audio.determinism import sha256_file
 from dnd_audio.errors import DndAudioError
 from dnd_audio.inspection import INSPECTION_SEMANTICS_VERSION
 from dnd_audio.inspection.runner import MANIFEST_RELATIVE_PATH
+from dnd_audio.raw_guard import RawSnapshot
 from dnd_audio.timeline import (
     CANONICAL_SAMPLE_RATE,
     TIMELINE_RELATIVE_PATH,
     TIMELINE_SEMANTICS_VERSION,
 )
+from dnd_audio.timeline.origin import selected_sources
 
 __all__ = ["SessionArtifacts", "StaleArtifactError", "read_session_artifacts"]
 
@@ -77,7 +79,9 @@ class SessionArtifacts:
         )
 
 
-def read_session_artifacts(session_dir: Path, config: SessionConfig) -> SessionArtifacts:
+def read_session_artifacts(
+    session_dir: Path, config: SessionConfig, *, current_sources: RawSnapshot
+) -> SessionArtifacts:
     """Load `manifest.json` and `timeline.json`, refusing anything stale.
 
     Raises:
@@ -86,7 +90,8 @@ def read_session_artifacts(session_dir: Path, config: SessionConfig) -> SessionA
             ``timeline_unreadable``,
             ``timeline_stale_config``, ``timeline_stale_manifest``,
             ``timeline_stale_semantics``, ``timeline_stale_numerics``, or
-            ``timeline_unsupported_rate``. Distinct codes rather than one, because
+            ``timeline_unsupported_rate``, or ``manifest_stale_source``. Distinct codes rather
+            than one, because
             "your timeline is stale" sends an operator to re-run `ingest` without telling
             them why it went stale — and a NumPy upgrade and an edited `session.yaml` want
             different reactions.
@@ -129,6 +134,20 @@ def read_session_artifacts(session_dir: Path, config: SessionConfig) -> SessionA
 
     manifest_digest = sha256_file(manifest_path)
     current_config = config_hash(config)
+
+    # The manifest digest proves only that the JSON did not move. Compare every source the
+    # timeline actually reads with the bytes snapshotted at command entry, or a recording
+    # edited after ingest would be analyzed against stale placement metadata.
+    for _, source in selected_sources(manifest):
+        measured = current_sources.get(source.relative_path)
+        _require(
+            measured == (source.sha256, source.size_bytes),
+            code="manifest_stale_source",
+            detail=(
+                f"source {source.relative_path} is missing or no longer matches the "
+                f"size/hash recorded by {MANIFEST_RELATIVE_PATH}"
+            ),
+        )
 
     # Every component, not just the manifest digest. A timeline can agree with its manifest
     # and still have been produced by placement logic two milestones old.

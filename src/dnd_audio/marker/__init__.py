@@ -52,11 +52,11 @@ MARKER_SEMANTICS_VERSION: Final = 1
 
 #: Matched filtering, per-chirp templates, sequence acceptance, and the thresholds that
 #: decide it. Bump when a detection that used to be accepted stops being one, or vice versa.
-DETECTOR_SEMANTICS_VERSION: Final = 2
+DETECTOR_SEMANTICS_VERSION: Final = 3
 
 #: Occurrence grouping, one-to-one cross-track association, role assignment against the
 #: event log, geometry classification, and anchor → `(source, sample)` mapping.
-MARKER_ANALYSIS_SEMANTICS_VERSION: Final = 1
+MARKER_ANALYSIS_SEMANTICS_VERSION: Final = 2
 
 #: The grid the marker is built on and searched at. The session's own working rate: a
 #: marker built at any other rate would need resampling to correlate, and resampling is the

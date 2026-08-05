@@ -14,6 +14,7 @@ the set would look complete. Removing it first makes every interrupted state det
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -34,6 +35,20 @@ from dnd_audio.timeline.pcm import open_pcm
 ALL_SPECS = pytest.mark.parametrize("spec", MARKER_SPECS.values(), ids=list(MARKER_SPECS))
 
 runner = CliRunner()
+
+
+def test_no_generated_marker_artifact_is_tracked() -> None:
+    """The generator is the source; WAV/HTML/manifests are operator-local outputs."""
+    tracked = subprocess.run(
+        ["git", "ls-files"], capture_output=True, text=True, check=True
+    ).stdout.splitlines()
+    assert not [
+        path
+        for path in tracked
+        if path.startswith("bench-markers/")
+        or (path.endswith(".wav") and "dnd-audio-sync-marker-" in path)
+        or (path.endswith(".html") and "dnd-audio-sync-marker-" in path)
+    ]
 
 
 def build(spec: MarkerSpec, destination: Path) -> MarkerManifest:

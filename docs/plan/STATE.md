@@ -7,20 +7,19 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 
 ## Right now
 
-- **Current milestone:** M10 — acoustic sync marker (**in progress**), then H1. The minimal
+- **Current milestone:** H1 — hardware fixture (**not started**). The minimal
   acoustic direction capture is complete enough to guide later event-first work but does not
   close or replace H1. M7b deliberately retains the post-session publication, retention, cache,
   and deletion decisions.
 
-  **M10 is waiting on the operator, mid-milestone, and that is by design.** Phase A — every part
-  that does not need hardware — is complete: `marker build` and `marker analyze` both ship,
-  three candidate waveforms exist, and no `v1` does. The bench comes next
-  (`docs/M10-marker-bench-protocol.md`), and Phase B scores the takes, freezes v1 in
-  **ADR-0042** — which is deliberately `proposed` and empty, so M10 cannot close without it —
-  and propagates the result into H1/H2, the spec, and OQ-025/OQ-029.
+  **M10 is closed.** The intended-phone/six-DJI bench selected cand-b as marker v1; ADR-0042
+  freezes its exact waveform, hash, detector constants, and margins. H1/H2 may use the offline
+  phone player as an alternative to the three-clap pattern. It remains acoustic verification,
+  never timecode replacement or automatic correction.
 - **Branch:** `milestone/M10-acoustic-sync-marker`
-- **Last closed milestone:** M7a — verified private raw archive
-- **Gate status at HEAD:** passes, zero skips (8 checks, 3 005 tests, plus 6 host_smoke); `main` was last verified
+- **Last closed milestone:** M10 — acoustic synchronization marker
+- **Gate status at HEAD:** passes, zero skips (8 checks, 3,111 tests); M10's real-DJI
+  false-positive host smoke also passes 8 tests. `main` was last verified
   the same way at 2 656 tests. The same default suite passes from `.venv-rocm` — **re-sync that
   environment after any dependency change**, which M7a's first attempt there proved by failing
   five ways on two missing packages.
@@ -108,17 +107,19 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
   passing on the previous run's leftover objects. Both now seed their own, and the fix was
   proved by emptying the prefix rather than by re-running on top of it.
 
-  **The acoustic marker is built and waiting for a room.** `dnd-audio marker build` writes one
+  **The acoustic marker is bench-validated and frozen as v1.** `dnd-audio marker build` writes one
   canonical PCM WAV plus a standalone offline phone page embedding those exact bytes, and
   `dnd-audio marker analyze` finds the full chirp sequence at integer-sample positions on every
-  track. It remains jam QA, never timeline authority. Exact digital identity is tested; phone
-  resampling, speaker response, room propagation, volume, and both phone/lav position need the
-  bench in `docs/M10-marker-bench-protocol.md` — roughly 20 minutes of recording, no assistant.
-  A normal session reports differential arrival; only fixed source **and** lav geometry, asserted
-  in the operator's event log, licenses a drift claim (ADR-0040). Until the bench selects v1,
-  `marker build` has no default waveform and refuses, and H1/H2 use claps.
+  track. Cand-b's 800 Hz–6 kHz, 250 ms sweeps won: all four fixed plays reached all six tracks,
+  weakest score 404 permille, 0–1 sample opening repeatability, 29-sample maximum gap error,
+  and no clipping, weak signal, ambiguity, or extra event at approximately 90% phone volume.
+  The canonical WAV SHA-256 is
+  `70355baad6bb72b38e0b606cddbbaa3428c11429bec74cd127aa6f8935ecdf6f`.
+  It remains jam QA, never timeline authority. A normal session reports differential arrival;
+  only fixed source **and** lav geometry, asserted in an event log, licenses a drift claim
+  (ADR-0040). H1/H2 retain claps as the fallback.
 
-  **A measurement worth knowing before the bench:** detection survives about 1000 ppm of
+  **A measurement worth retaining:** detection survives about 1000 ppm of
   playback speed error and fails by 2000 ppm, and what breaks is per-chirp correlation
   detuning rather than the inter-chirp gap tolerance the constant's name suggests. It scales
   with the chirp's time-bandwidth product, so the candidates trade reach against timing
@@ -172,7 +173,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | H1  | Hardware fixture (2 min)   | not started | —         |
 | H2  | Drift soak / first session | not started | —         |
 | M7b | Publishing and reclamation | sketch      | —         |
-| M10 | Acoustic sync marker       | in progress | —         |
+| M10 | Acoustic sync marker       | closed      | —         |
 
 **Closed at** is the milestone's close commit, and it is recorded by a small follow-up
 commit — a commit cannot contain its own hash (the same limit ADR-0003 names for the report).
@@ -338,12 +339,10 @@ writer that cannot lose a stage, and a test suite that is provably offline.
 
 ## Next smallest step
 
-**The M10 bench — six transmitters, a phone, and about twenty minutes in the room.** Nothing in
-software is blocking it and no assistant is needed. Follow
-`docs/M10-marker-bench-protocol.md` exactly; the one step that cannot be recovered afterwards is
-the written event log naming candidate, role, playback order and geometry ID. Then Phase B of
-`docs/plan/milestones/M10-acoustic-sync-marker.md` scores the takes and freezes v1, and H1 is
-next. H1 remains safe with claps whatever the bench decides.
+**Record H1 — six transmitters, three receivers, two human voices, and the exact runbook.**
+Marker v1 is prepared for its start/end landmarks; the three-clap pattern remains the fallback.
+The unrecoverable evidence is still the receiver-display/wall-clock observation, the real
+receiver/channel map, spoken ground truth, power-cycle order, and any phone/lav movement.
 
 **Archive the first real session as soon as it is inspected.** `dnd-audio archive upload
 <session>`, then `dnd-audio archive verify --session-id <id>` — the second is what turns the

@@ -41,7 +41,7 @@ __all__ = [
     "TimecodeComparison",
 ]
 
-MARKER_ANALYSIS_SCHEMA_VERSION: Final = 2
+MARKER_ANALYSIS_SCHEMA_VERSION: Final = 3
 
 Sha256Hex = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
@@ -108,6 +108,7 @@ class AnalysisIdentity(_Artifact):
     marker_wav_sha256: Sha256Hex
 
     #: Schema versions of everything consumed, so a format change is visible here too.
+    manifest_schema_version: int = Field(ge=1)
     timeline_schema_version: int = Field(ge=1)
     event_log_schema_version: int | None = Field(default=None, ge=1)
     #: Digest of the event log's *model*, so reformatting the YAML changes nothing and
@@ -261,7 +262,7 @@ class ArrivalComparison(_Artifact):
 class SyncMarkerAnalysis(_Artifact):
     """The deterministic record of one `marker analyze` run."""
 
-    schema_version: Literal[2] = MARKER_ANALYSIS_SCHEMA_VERSION
+    schema_version: Literal[3] = MARKER_ANALYSIS_SCHEMA_VERSION
     session_id: str = Field(min_length=1)
     identity: AnalysisIdentity
     #: Every accepted occurrence on every track, not only the chosen start/end pair. The
@@ -297,5 +298,9 @@ class SyncMarkerAnalysis(_Artifact):
 
     @property
     def conclusive(self) -> bool:
-        """Whether anything was measured at all. Drives the report's inconclusive note."""
-        return bool(self.groups)
+        """Whether every member of at least one formed group supplied a trusted arrival."""
+        return bool(self.groups) and all(
+            member.outcome is DetectionOutcome.DETECTED
+            for group in self.groups
+            for member in group.members
+        )

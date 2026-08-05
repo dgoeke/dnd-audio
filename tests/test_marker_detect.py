@@ -29,6 +29,7 @@ from dnd_audio.marker import MARKER_SAMPLE_RATE
 from dnd_audio.marker.detect import (
     DetectorThresholds,
     OccurrenceCeilingError,
+    _assemble,
     _is_locally_ambiguous,
     detect_occurrences,
     to_permille,
@@ -335,6 +336,26 @@ class TestRepeatsAndAmbiguity:
         assert all(item.runner_up_permille == 0 for item in occurrences)
         assert all(not item.ambiguous for item in occurrences)
 
+    def test_an_unclaimed_local_reflection_reaches_the_ambiguity_outcome(self) -> None:
+        """The detector, not only the integer helper, must carry a competing peak through.
+
+        Cand-c's short chirps leave a measurable 2,900-sample reflection outside per-chirp
+        NMS but inside sequence NMS. Raising only the separation requirement makes that known
+        alternative ambiguous without changing whether the sequence itself is accepted.
+        """
+        spec = MARKER_SPECS["cand-c"]
+        track = reverberate(place(spec, gain=0.5))
+        reader = ArrayReader(track)
+        occurrences = detect_occurrences(
+            reader,
+            spec,
+            interval=(0, track.size),
+            thresholds=DetectorThresholds(min_runner_up_separation_permille=1000),
+        )
+        assert len(occurrences) == 1
+        assert occurrences[0].runner_up_permille > 0
+        assert occurrences[0].ambiguous is True
+
 
 class TestTimingPerturbation:
     """What OQ-029 asks about: playback that is not quite 48 kHz."""
@@ -455,6 +476,19 @@ class TestScoresAreIntegers:
         with pytest.raises(ValueError, match="could never reject"):
             DetectorThresholds(min_chirp_score_permille=800, min_sequence_score_permille=700)
 
+    def test_each_consecutive_gap_must_itself_be_inside_tolerance(self) -> None:
+        """Opposite anchor-relative errors must not double the actual second gap."""
+        spec = MARKER_SPECS["v1"]
+        settings = DetectorThresholds()
+        starts = [start for start, _ in spec.chirp_intervals()]
+        anchor = 100_000
+        peaks = [
+            [(anchor, 600)],
+            [(anchor + starts[1] - starts[0] - settings.gap_tolerance_samples, 600)],
+            [(anchor + starts[2] - starts[0] + settings.gap_tolerance_samples, 600)],
+        ]
+        assert _assemble(spec, peaks, settings) == []
+
     @pytest.mark.parametrize(
         ("runner_up", "ambiguous"),
         [(0, False), (550, False), (551, True)],
@@ -477,6 +511,7 @@ class TestScoresAreIntegers:
             "clipping_ratio_permille",
             "gap_tolerance_samples",
             "max_occurrences_per_track",
+            "max_peak_candidates_per_chirp",
             "material_arrival_change_samples",
             "min_chirp_score_permille",
             "min_runner_up_separation_permille",
