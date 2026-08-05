@@ -1,0 +1,133 @@
+{
+  "$defs": {
+    "ArchiveManifestEntry": {
+      "additionalProperties": false,
+      "description": "One archived file: where it came from, what it is, and where its bytes are.",
+      "properties": {
+        "compressed_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Compressed Sha256",
+          "type": "string"
+        },
+        "compressed_size_bytes": {
+          "minimum": 0,
+          "title": "Compressed Size Bytes",
+          "type": "integer"
+        },
+        "object_key": {
+          "minLength": 1,
+          "title": "Object Key",
+          "type": "string"
+        },
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "path_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path Text"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        },
+        "track_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Track Id"
+        }
+      },
+      "required": [
+        "path",
+        "size_bytes",
+        "sha256",
+        "compressed_size_bytes",
+        "compressed_sha256",
+        "object_key"
+      ],
+      "title": "ArchiveManifestEntry",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The deterministic commit record for one session's archive.",
+  "properties": {
+    "archive_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Archive Version",
+      "type": "integer"
+    },
+    "codec": {
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "integer"
+          },
+          {
+            "type": "boolean"
+          }
+        ]
+      },
+      "title": "Codec",
+      "type": "object"
+    },
+    "entries": {
+      "items": {
+        "$ref": "#/$defs/ArchiveManifestEntry"
+      },
+      "minItems": 1,
+      "title": "Entries",
+      "type": "array"
+    },
+    "restore_instructions": {
+      "default": "Each entry's object holds one original file compressed as a single standard zstd frame. To restore by hand, download the object at `object_key` and run `zstd -d < OBJECT > FILE`; any zstd 1.4 or later can read it, and the archive's own compression settings do not affect decoding. Verify the result with `sha256sum FILE` against `sha256`, and check its length against `size_bytes`. Recreate the file at the session-relative path in `path`, which is percent-encoded over raw filesystem bytes: every byte outside A-Z a-z 0-9 . _ - is written as %XX with uppercase hex, including the / separators. Decode it by replacing each %XX with that byte and writing the result as a filename; do not decode it as text first, because a filename need not be valid UTF-8. `path_text` is a human-readable copy and is absent when no faithful one exists — never restore from it.",
+      "title": "Restore Instructions",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "session_id": {
+      "minLength": 1,
+      "title": "Session Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id",
+    "codec",
+    "entries"
+  ],
+  "title": "ArchiveManifest",
+  "type": "object"
+}

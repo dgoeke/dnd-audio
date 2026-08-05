@@ -23,6 +23,8 @@ from typing import Final, Literal
 
 from pydantic import BaseModel
 
+from dnd_audio.archive.manifest import ArchiveManifest
+from dnd_audio.archive.report import ArchiveReport
 from dnd_audio.artifacts.activity import ActivityGraph
 from dnd_audio.artifacts.manifest import Manifest
 from dnd_audio.artifacts.records import TranscriptRecords
@@ -52,6 +54,11 @@ def schema_documents() -> dict[str, str]:
         "transcript.schema.json": _document(Transcript, mode="serialization"),
         "transcript-records.schema.json": _document(TranscriptRecords, mode="serialization"),
         "ingest-report.schema.json": _document(IngestReport, mode="serialization"),
+        # M7a's two artifacts. The manifest is the remote commit record and has to be
+        # readable by something that is not this program (ADR-0038); the report is local
+        # and is the only place the manifest's own hash can live (ADR-0003, ADR-0039).
+        "archive-manifest.schema.json": _document(ArchiveManifest, mode="serialization"),
+        "archive-report.schema.json": _document(ArchiveReport, mode="serialization"),
     }
 
 
