@@ -91,16 +91,31 @@ the only place the second and third mechanisms can fail, and it is how M6a's bre
 found — as an unrelated test failing on run order and blaming itself.
 _Owner: M0; the GPU half M6a._
 
-**INV-06 — Session audio never leaves the machine.**
+**INV-06 — Session audio never reaches anything that processes it.**
 Audio is passed to models as local paths or in-memory arrays. No cloud ASR, no
-URL uploads, no telemetry containing audio. `models fetch` is the only command
-permitted to touch the network at all.
-_Owner: M0 (policy), M6b (enforcement in the adapter)._
-_Planned exception (M7a): archival deliberately uploads audio to owner-controlled
-object storage. That is opt-in, never on a processing path, and not the cloud-ASR
-prohibition this invariant exists to prevent. M7a must amend this wording before
-implementation, keep every non-archive command network-denied, and add no publication or
-deletion authority._
+URL uploads to a service, no telemetry containing audio. Exactly **two** commands may
+touch the network, both explicitly invoked by an operator and neither on a processing
+path: `models fetch`, and `archive` (M7a).
+
+**The archive exception, stated narrowly** (M7a, ADR-0035). An explicit `dnd-audio
+archive` subcommand may send byte-exact compressed copies of a session's *immutable
+source files* to the configured owner-controlled private cold-storage bucket, and may
+read them back. That is off-site backup against disk loss. It is not the cloud-ASR
+prohibition this invariant exists to prevent: nothing at the far end processes the audio,
+the destination is the owner's own private bucket rather than a third-party service, and
+no output, transcript, or derived artifact is published by it — publication is M7b's and
+does not exist yet. The exception carries no deletion authority: the application exposes
+no `DeleteObject` operation and calls none, `AbortMultipartUpload` excepted.
+
+**`inspect`, `ingest`, `activity`, `mix`, `transcribe`, `render`, `process` and `doctor`
+stay network-denied**, and that is proved behaviourally rather than promised: each is run
+as a subprocess with a socket-and-client trap on its `PYTHONPATH`, because a subprocess
+has its own address space and escapes the autouse socket fixture INV-05 describes.
+Checking that a client library merely fails to import is weaker and does not count.
+_Owner: M0 (policy), M6b (enforcement in the adapter), M7a (the archive exception and
+the subprocess boundary proof)._
+_INV-01 needs no exception for any of this: M7a never deletes or modifies a source. A
+future narrow local-raw reclamation is M7b's to justify separately._
 
 **INV-07 — Memory stays bounded.**
 Never hold six full-session waveforms in RAM. Long audio is processed in bounded
