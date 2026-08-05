@@ -555,11 +555,27 @@ phase-coherent multichannel cancellation. Sample-clock drift correction is a fut
 enhancement. Add a hook/interface for a future affine time warp, but do not make it
 an MVP dependency.
 
-If a distinctive start/end clap is present, optional cross-correlation may be used
-as synchronization QA. It should report disagreement with timecode, not override
-valid timecode automatically. Measure each track's relative clap lag near both ends
-and warn when the lag changes materially, because a changing lag is evidence of
-sample-clock drift rather than a constant timecode offset.
+If a distinctive start/end acoustic event is present — a clap, or the generated
+synchronization marker produced by `dnd-audio marker build` and detected by
+`dnd-audio marker analyze` — optional cross-correlation may be used as
+synchronization QA. It should report disagreement with timecode, not override valid
+timecode automatically. Measure each track's relative lag near both ends and warn
+when the lag changes materially.
+
+**A changing lag is not by itself evidence of sample-clock drift** (ADR-0040). What
+is measured acoustically is the sum of two independent quantities: where the
+recordings sit on the timeline, and how far the sound travelled to each capsule.
+Six lavs at a table are 0.5–3 m from any one source, so moving the source **or any
+compared lav** between the two measurements changes the acoustic term by
+milliseconds — the same order as the drift being looked for, since measured drift is
+≈1 ppm bounded at ±3 ppm, or 14–43 ms across four hours. A wearer leaning back is
+enough.
+
+So a start-to-end change is always reported as **differential acoustic arrival**. It
+may be called recorder-drift evidence only when the source and every compared
+transmitter/lav are asserted to have stayed fixed between the two occurrences — which
+a fixed-transmitter soak can assert and an ordinary session with people wearing the
+microphones cannot. Neither reading ever applies a correction.
 
 The two-minute hardware fixture validates metadata and synchronization plumbing, not
 multi-hour clock stability. Before relying on the no-drift-correction MVP assumption,
@@ -980,8 +996,12 @@ At minimum, automate these checks:
     `max_new_tokens` invalidates the ASR cache; and a fake length-truncated response
     triggers bounded split/retry and deterministic stitching.
 15. Correlated bleed delayed within the configured lag window is still detected, the
-    peak lag is reported, and a synthetic change in start-versus-end clap lag emits a
-    drift warning without applying an automatic correction.
+    peak lag is reported, and a synthetic change in start-versus-end acoustic lag is
+    reported as a change in differential acoustic arrival, without applying an
+    automatic correction. It emits a **drift** warning only where the source and every
+    compared transmitter/lav are asserted to have stayed fixed between the two
+    measurements; with geometry unasserted or known to have changed, the same
+    measurement is reported and explicitly not attributed to the clocks (ADR-0040).
 
 Test automixer behavior at the gain-envelope level using the deterministic activity
 graph; decoded loudness alone is not evidence of correct channel selection. Assert
@@ -1013,7 +1033,12 @@ Recommended real fixture recording:
 - Each wearer states their transmitter label and speaks alone for several seconds.
 - Include one two-person overlap.
 - Turn one transmitter off, wait several seconds, turn it back on, and record again.
-- Make a distinctive three-clap pattern near the start and end.
+- Make a distinctive three-clap pattern near the start and end. Once the generated
+  synchronization marker has passed its phone/hardware bench, it may be played from
+  one fixed central position instead — same role, detected automatically rather than
+  picked by hand. It supplements the LTC jam and never replaces it: timecode places a
+  transmitter that was switched off and back on, and a sound at the top of the session
+  cannot.
 - Export both `orig` and `edit` files if dual-file mode is enabled.
 
 Document the discovered DJI file naming and metadata in a fixture note, and store
