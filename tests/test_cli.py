@@ -59,6 +59,48 @@ class TestCommandSurface:
         assert result.exit_code == 0
         assert "fetch" in result.output
 
+    def test_the_archive_command_group_is_registered(self) -> None:
+        """M7a's five subcommands, and the group itself on the top-level help.
+
+        This list is the cross-check for `tests/test_archive_isolation.py`, which names
+        every *non*-archive command explicitly so a new one cannot pass its
+        network-boundary proof by construction. A command added here and forgotten there
+        is visible as a difference between the two lists.
+        """
+        assert "archive" in runner.invoke(app, ["--help"]).output
+        result = runner.invoke(app, ["archive", "--help"])
+        assert result.exit_code == 0
+        for name in ("upload", "status", "list", "verify", "restore"):
+            assert name in result.output
+
+    def test_the_archive_group_offers_no_delete_or_publish(self) -> None:
+        """The operator surface matches the authority ADR-0035 grants, and no more.
+
+        M7b owns publication and any reclamation. A subcommand appearing here before that
+        milestone has justified it would be authority arriving without a decision.
+        """
+        # Checked against the *registered command names*, not the help text. The group's
+        # own help says "never publishes or deletes", so a substring search over the output
+        # finds those words and fails for the opposite of the right reason.
+        from dnd_audio.cli import archive_app
+
+        registered = {command.name for command in archive_app.registered_commands}
+        assert registered == {"upload", "status", "list", "verify", "restore"}
+        for forbidden in ("delete", "prune", "publish", "reclaim", "remove"):
+            assert not any(forbidden in str(name) for name in registered)
+
+    def test_an_unconfigured_machine_fails_cleanly_rather_than_crashing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No bucket configured is an ordinary, actionable failure — not a traceback."""
+        for name in list(os.environ):
+            if name.startswith("DND_AUDIO_ARCHIVE_"):
+                monkeypatch.delenv(name, raising=False)
+        result = runner.invoke(app, ["archive", "list"])
+        assert result.exit_code == ExitCode.FATAL
+        assert "invalid_archive_configuration" in result.output
+        assert "DND_AUDIO_ARCHIVE_BUCKET" in result.output
+
     def test_no_command_is_a_stub_any_more(self, session_dir: Path) -> None:
         """Every command the spec names is implemented from M5 on.
 
