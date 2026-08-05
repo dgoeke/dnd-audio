@@ -1257,3 +1257,34 @@ M9 therefore defaults `transcript.leading_ownership_grace_ms` to 20, bounded by 
 padding and the preceding same-track interval (ADR-0033). That is a conservative remedy for
 the measured failure, not an answer about all speakers or rooms. This entry remains **open**
 for H1/H2, and it still blocks changing `activity.vad.pad_ms` without multi-wearer evidence.
+
+## OQ-028 — Does DigitalOcean Spaces paginate object listings, and by which API?
+**Assumption:** Legacy `ListObjects` marker pagination works and is complete;
+`ListObjectsV2` continuation tokens do not. So `dnd-audio archive list` and the manifest
+discovery behind `verify`/`restore` follow `NextMarker`/`IsTruncated` to exhaustion and never
+call the V2 form at all.
+**Why it matters:** A truncated listing treated as complete is the failure mode this whole
+milestone exists to prevent, one level up from a corrupt byte: `list` would report a session
+absent, and a manifest-divergence check reading a partial key set could conclude an upload is
+missing objects it actually has. M7a's charter requires pagination to be followed completely
+and forbids treating a partial listing as complete.
+**Why it is an open question rather than a decision:** the provider's own documentation
+contradicts itself. The [S3 compatibility
+page](https://docs.digitalocean.com/products/spaces/reference/s3-compatibility/) says "Both
+`ListObjects` (legacy) and `ListObjectsV2` are supported", while the [limits
+page](https://docs.digitalocean.com/products/spaces/details/limits/) carries a **Known
+Issues** entry stating verbatim that "The Spaces API does not currently support
+`list-objects-v2` pagination". Both were read on 2026-08-04. Only one of them can be true of
+the endpoint this project writes to, and no amount of faked pages settles it — a deterministic
+fake proves the *caller* follows pagination, not that the *provider* offers it.
+
+M7a resolves the contradiction by using the legacy form outright rather than putting V2
+behind a fallback. A code path that runs only when a provider bug is present is a code path
+nobody exercises, and it would be first exercised during a disaster recovery.
+
+**Evidence:** the generated-bytes host smoke writes several small objects under a throwaway
+prefix, lists them at `MaxKeys=1`, and asserts every key is returned across the pages. Running
+the same drill against the V2 form records what this endpoint actually does with a
+continuation token, which is what would let the legacy choice be revisited.
+**Needs:** the owner's Cold Storage bucket · **Blocks:** nothing — the legacy form is the
+conservative choice and is what ships · **Status:** open
