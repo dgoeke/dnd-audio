@@ -114,6 +114,14 @@ archive_app = typer.Typer(
 )
 app.add_typer(archive_app, name="archive")
 
+marker_app = typer.Typer(
+    help="The acoustic synchronization marker: build one to play, and find it afterwards. "
+    "Verifies the LTC jam and measures differential acoustic arrival; it never places a "
+    "file and never corrects a timeline (ADR-0040).",
+    no_args_is_help=True,
+)
+app.add_typer(marker_app, name="marker")
+
 
 @app.command()
 def process(
@@ -598,31 +606,40 @@ def _sessions_above(destination: Path) -> list[Path]:
     return found
 
 
-def _reject_report_inside_raw(report_path: Path) -> None:
-    """Refuse to write an archive report under any session's sources (INV-01).
+def _reject_path_inside_any_session(label: str, target: Path) -> None:
+    """Refuse to write ``target`` under any session's configured sources (INV-01).
 
-    Driven by the **report path itself** rather than by whether the command was given a
-    session directory. The earlier version guarded this only for `upload` and `status`, so
-    `archive verify --report SESSION/raw/tx-a/DJI_01.WAV` — a remote-only operation, which
-    never has a session directory — replaced an irreplaceable recording with JSON. That is
-    the one thing this whole milestone exists to make impossible, reachable from a
-    documented flag. Found by M7a's second code review.
+    Driven by the **path itself** rather than by whether the command was given a session
+    directory, and that distinction is the whole point. The first version of this guarded
+    only `archive upload` and `status`, so `archive verify --report
+    SESSION/raw/tx-a/DJI_01.WAV` — a remote-only operation, which never has a session
+    directory — replaced an irreplaceable recording with JSON. Found by M7a's second code
+    review.
 
-    Every session above the resolved path is consulted, which covers both the explicit
-    `--report` and the `work -> raw/tx-a` symlink M1's verify phase found: resolving
-    `SESSION/work/archive-upload-report.json` lands inside `SESSION/raw/tx-a`, whose
-    session is still an ancestor.
+    `marker build` is the second command with the same shape: an arbitrary destination and
+    no session argument. It reuses this rather than growing a parallel check, because the
+    lesson of the first occurrence was that the *condition* was wrong, not the code.
+
+    Every session above the resolved path is consulted, which covers both an explicit
+    `--report`/destination and the `work -> raw/tx-a` symlink M1's verify phase found:
+    resolving `SESSION/work/archive-upload-report.json` lands inside `SESSION/raw/tx-a`,
+    whose session is still an ancestor.
+
+    Args:
+        label: What is being written, for the diagnostic. Reaches the operator's terminal.
+        target: Where it would go. Need not exist; resolution is what decides.
 
     Raises:
         DndAudioError: with code ``output_inside_raw``, before the operation runs. Checked
             first rather than last so an expensive `verify` is not paid for and then
-            refused.
+            refused — and, for `marker build`, so that nothing is created or unlinked on a
+            path where the creation would itself be the violation.
     """
     from dnd_audio.config import load_session_config
     from dnd_audio.errors import DiscoveryError
     from dnd_audio.raw_guard import raw_roots, reject_outputs_inside_raw
 
-    for session_dir in _sessions_above(report_path):
+    for session_dir in _sessions_above(target):
         try:
             config = load_session_config(session_dir / "session.yaml")
         except DndAudioError as exc:
@@ -634,14 +651,12 @@ def _reject_report_inside_raw(report_path: Path) -> None:
             # reaches this branch is one containing the report, so refusing blocks nothing
             # unrelated. Found by M7a's third code review, in the fix for the second's P0.
             message = (
-                f"the report would be written inside a session whose session.yaml cannot "
+                f"the {label} would be written inside a session whose session.yaml cannot "
                 f"be read, so its source directories are unknown and nothing may be "
                 f"written under them (INV-01): {exc}"
             )
             raise DiscoveryError(message, code="output_inside_raw") from exc
-        reject_outputs_inside_raw(
-            session_dir, config, raw_roots(config), {"archive report": report_path}
-        )
+        reject_outputs_inside_raw(session_dir, config, raw_roots(config), {label: target})
 
 
 def _run_archive(
@@ -680,7 +695,7 @@ def _run_archive(
             else default_report_dir() / f"archive-{operation.value}-report.json"
         )
     try:
-        _reject_report_inside_raw(report_path)
+        _reject_path_inside_any_session("archive report", report_path)
     except DndAudioError as exc:
         typer.secho(
             f"  no report written: {report_path} would land inside a session's own "
@@ -738,6 +753,71 @@ def _run_archive(
 
     if result.exit_code() is not ExitCode.OK:
         raise typer.Exit(code=result.exit_code())
+
+
+@marker_app.command("build")
+def marker_build(
+    output_directory: Annotated[
+        Path,
+        typer.Argument(
+            file_okay=False,
+            dir_okay=True,
+            help="Where to write the WAV, the standalone page, and the manifest. Created if "
+            "it does not exist.",
+        ),
+    ],
+    marker: Annotated[
+        str | None,
+        typer.Option(
+            "--marker",
+            # Hidden rather than absent: the bench must drive the shipped command through its
+            # real guards — the CLI wiring is where M7a's P0 lived — but this charter's
+            # non-goals exclude a public candidate-management interface, and after v1 is
+            # frozen the discoverable surface is `marker build OUTPUT_DIRECTORY` alone
+            # (ADR-0041). Documented in docs/M10-marker-bench-protocol.md.
+            hidden=True,
+            help="Build a named bench candidate instead of the frozen v1.",
+        ),
+    ] = None,
+) -> None:
+    """Write the marker WAV, the offline phone page, and the manifest.
+
+    Deterministic: the same marker produces byte-identical artifacts every time, and the WAV
+    embedded in the page is the same bytes as the `.wav` beside it rather than a second
+    encoding of the same samples.
+
+    Until the phone/DJI bench selects a waveform there is no `v1`, and this refuses rather
+    than defaulting to a candidate — an operator who recorded Session Zero against an
+    unvalidated marker would have no way to find out (ADR-0042).
+    """
+    from dnd_audio.marker.builder import build_marker
+    from dnd_audio.marker.spec import resolve
+
+    try:
+        spec = resolve(marker)
+    except DndAudioError as exc:
+        typer.secho(f"  error  {exc.code}: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=ExitCode.FATAL) from exc
+
+    # Before `mkdir`, before a byte is written, and before the previous manifest is
+    # unlinked — on this path the unlink would itself be the violation (INV-01, ADR-0021).
+    try:
+        _reject_path_inside_any_session("marker artifacts", output_directory)
+    except DndAudioError as exc:
+        typer.secho(
+            f"  nothing written: {output_directory} resolves inside a session's own "
+            f"sources, and nothing under them may be written to (INV-01)",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=ExitCode.FATAL) from exc
+
+    built = build_marker(spec, output_directory)
+    typer.echo(f"  marker    {built.manifest.marker_name} ({built.manifest.rationale})")
+    typer.echo(f"  duration  {built.manifest.duration_seconds:.3f}s, {spec.total_samples} samples")
+    typer.echo(f"  wav       {built.wav_path}  sha256 {built.manifest.wav.sha256}")
+    typer.echo(f"  page      {built.page_path}")
+    typer.echo(f"  manifest  {built.manifest_path}")
 
 
 @app.command()
