@@ -1115,6 +1115,18 @@ The causal half of this entry is now settled as a decision rather than an assump
 arrival, and fixed-endpoint recorder drift, and amends the spec, which had claimed
 unconditionally in two places that a changing lag *is* evidence of sample-clock drift.
 
+**One constant is off the list, measured 2026-08-05 without a bench.** The detector was run
+over every real DJI recording this project holds — 13.7 minutes, two captures, two voices
+overlapping deliberately, hand claps at both ends of one — and accepted **zero** sequences for
+all three candidates, with the strongest single-chirp correlation anywhere at 186 permille
+against a 550 threshold. The margin is wide enough that the bench may lower the score threshold
+substantially for reach at the farthest seat without reopening the question
+(`docs/fixtures/2026-08-05-marker-false-positive-sweep.md`, repeatable as
+`tests/test_marker_false_positives.py`). This bounds only the *false-positive* side; whether a
+phone-played marker is reliably **found** across a table is the opposite failure direction and
+remains entirely the bench's. Its practical effect is that the bench protocol no longer asks the
+operator to record speech and media, which is what makes a one-person bench feasible.
+
 ## OQ-029 — Does a phone browser's playback of embedded 48 kHz PCM preserve the marker's internal timing?
 **Assumption:** Yes, to well inside the inter-chirp gap tolerance. M10's page hands the
 browser the CLI's exact 48 kHz PCM bytes, and the detector accepts a marker only when all

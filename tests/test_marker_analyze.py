@@ -169,6 +169,53 @@ class TestItFindsWhatWasPlaced:
         assert outcomes["tx-e"] is DetectionOutcome.MISSING
         assert outcomes["tx-f"] is DetectionOutcome.MISSING
 
+    def test_a_marker_at_the_very_end_of_the_recording_is_still_found(self, tmp_path: Path) -> None:
+        """The bench's closing block lands here, so it is not a hypothetical edge.
+
+        An operator who stops recording promptly after the last play leaves the marker's
+        100 ms of trailing silence running past the end of the session. The detector then
+        reads a window that is partly beyond what exists, and the diagnostics pass reads a
+        further whole marker length from the anchor. `TrackReader` answers those with
+        silence rather than raising — a raw `PcmReader` would raise — and this is what
+        proves the composed path uses the one that does.
+        """
+        truth = build_session(canonical_session(), tmp_path / "session")
+        marker = marker_samples(SPEC).astype(np.float32) / 32768.0
+        # Every placement, per track. A set rather than one value because the fixture may
+        # chunk a track, and asserting against only the last chunk's position would let an
+        # unexpected extra detection pass unnoticed.
+        placed: dict[str, set[int]] = {}
+        truncated = 0
+        for chunk in truth.chunks:
+            path = truth.session_dir / chunk.relative_path
+            source = open_pcm(path)
+            raw = path.read_bytes()
+            end = source.data_offset + source.n_samples * 4
+            audio = np.frombuffer(raw[source.data_offset : end], dtype="<f4").copy()
+            # The last chirp ends exactly at the last recorded sample, so all three chirps
+            # are present and only the trailing silence runs past the end. `chirp_intervals`
+            # is absolute within the marker and already includes the lead silence.
+            local = audio.size - SPEC.chirp_intervals()[-1][1]
+            if local < 0:
+                continue
+            usable = min(marker.size, audio.size - local)
+            truncated += marker.size - usable
+            audio[local : local + usable] += marker[:usable] * 0.5
+            path.write_bytes(raw[: source.data_offset] + audio.astype("<f4").tobytes() + raw[end:])
+            placed.setdefault(chunk.track_id, set()).add(
+                chunk.start_sample + local + SPEC.anchor_sample
+            )
+        assert placed, "the fixture placed no marker at all"
+        assert truncated, "nothing ran past the end, so this is testing the ordinary case"
+        run_ingest(truth.session_dir)
+
+        result = run_marker_analyze(truth.session_dir, marker=SPEC.name)
+        assert result.exit_code is ExitCode.OK
+        found = analysis_of(truth.session_dir).occurrences
+        assert found, "a marker at the end of the recording was not found at all"
+        for item in found:
+            assert item.anchor_sample in placed[item.track_id], item.track_id
+
     def test_an_unmatched_detection_is_kept_rather_than_dropped(self, tmp_path: Path) -> None:
         """An arrival no group claimed is evidence about the reference, not noise."""
         truth = build_session(canonical_session(), tmp_path / "session")

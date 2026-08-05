@@ -117,6 +117,16 @@ class DetectorThresholds:
 
     #: A single chirp must reach this to be a candidate peak. Low enough to survive a lav's
     #: band limiting and a room's reverberation, which both cost correlation (OQ-025).
+    #:
+    #: **One side of this is now measured, and there is far more room than 550 suggests.**
+    #: Across 13.7 minutes of real DJI recordings — two voices overlapping on purpose, plus
+    #: hand claps, the broadband transient most likely to be mistaken for a chirp — no
+    #: sequence was accepted by any candidate with this forced as low as **100 permille**,
+    #: and the strongest single chirp anywhere reached only 186. What rejects speech is
+    #: mostly the three-chirp *gap structure*, not this number
+    #: (`docs/fixtures/2026-08-05-marker-false-positive-sweep.md`). So the bench may lower
+    #: this substantially if the farthest lav needs it. Where it must sit to *catch* a real
+    #: playback is the other side, and only the bench can say.
     min_chirp_score_permille: int = 550
     #: The assembled sequence's score — the **weakest** of its chirps, so a sequence is only
     #: as good as its worst link rather than as good as its best.

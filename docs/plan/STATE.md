@@ -20,7 +20,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
   and propagates the result into H1/H2, the spec, and OQ-025/OQ-029.
 - **Branch:** `milestone/M10-acoustic-sync-marker`
 - **Last closed milestone:** M7a — verified private raw archive
-- **Gate status at HEAD:** passes, zero skips (8 checks, 3 004 tests); `main` was last verified
+- **Gate status at HEAD:** passes, zero skips (8 checks, 3 005 tests, plus 6 host_smoke); `main` was last verified
   the same way at 2 656 tests. The same default suite passes from `.venv-rocm` — **re-sync that
   environment after any dependency change**, which M7a's first attempt there proved by failing
   five ways on two missing packages.

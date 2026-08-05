@@ -222,12 +222,19 @@ start all recordings, and use the intended phone/browser:
 3. In a separate diagnostic block, deliberately move the phone to two logged positions and
    replay once at each; prove the analyzer enumerates them but does not call their differing
    lags drift.
-4. Include room tone, speech, and ordinary media without the marker to measure false positives.
+4. ~~Include room tone, speech, and ordinary media without the marker to measure false
+   positives.~~ **Amended 2026-08-05 (A4): measured off-bench, already answered.** The detector
+   was run over every real DJI recording this project holds — 13.7 minutes across two captures,
+   two voices overlapping deliberately, hand claps at both ends of one — and accepted zero
+   sequences for all three candidates, strongest single chirp 186 permille against a 550
+   threshold. More audio and more adversarial material than this step would have produced, at no
+   cost in the room, and dropping it is what makes a one-person bench feasible. See
+   `../../fixtures/2026-08-05-marker-false-positive-sweep.md`.
 5. Keep an independent event log naming candidate, role, approximate time, and geometry ID. Run
-   `inspect`, `ingest`, and the private candidate analyzer; hash raw before and after.
+   `inspect`, `ingest`, and `marker analyze`; hash raw before and after.
 6. Confirm every track detects the fixed-position events, nearest tracks do not clip, farthest
-   tracks remain decisive, false-positive material produces no accepted sequence, and repeated
-   same-position lag is inside the documented tolerance.
+   tracks remain decisive, and repeated same-position lag is inside the documented tolerance.
+   The false-positive half of this confirmation is discharged by step 4's replacement.
 
 Only after this evidence selects one candidate does the ADR name and freeze marker v1; the
 public builder/analyzer and their golden proofs follow. If any intended track fails, retain the
@@ -553,6 +560,33 @@ protocol at `docs/M10-marker-bench-protocol.md` (the charter's `## Bench protoco
 executable). The operator records; `raw/` is hashed before and after; the independent event
 log names candidate, role, approximate time and geometry ID. No assistant is required.
 
+**A4 — the false-positive block is measured off-bench, and the bench shrinks accordingly.**
+Approved by the operator on 2026-08-05, whose constraint was concrete: alone in the house, able
+to place transmitters and press a button, unable to produce ten minutes of conversation and
+media on demand.
+
+The charter's bench step 4 asks for "room tone, speech, and ordinary media without the marker to
+measure false positives". That measurement does not need the bench at all — this host already
+holds 13.7 minutes of real DJI audio across two captures, including two people overlapping
+deliberately and hand claps at both ends, none of which contains a marker. Running the detector
+over it is strictly better evidence than the planned block: more audio, more adversarial, real
+capture chain, and zero minutes in the room. Result: zero accepted sequences for all three
+candidates, strongest single chirp 186 permille against a 550 threshold
+(`../../fixtures/2026-08-05-marker-false-positive-sweep.md`).
+
+So the bench keeps only what needs a room — the acoustic path from a phone speaker to six lavs —
+and drops to **fourteen button presses**: nine in the opening block, three at the close, two
+moved-phone diagnostics. The ten-minute gap between opening and close is unattended, and exists
+only so the closing block is genuinely later. The closing block drops from three plays per
+candidate to one, because repeatability is established by the opening block and the close only
+has to anchor the other end.
+
+**What this does not do.** Not producing a false positive on speech and being reliably found
+across a table are opposite failure directions; a detector that accepted nothing would score
+perfectly on the sweep. Question 1 of the bench — reach at the farthest seat — is untouched and
+is still the question a candidate wins or loses on. The sweep bounds one side of the score
+threshold; the bench sets the other, and ADR-0042 freezes the pair together.
+
 ### Phase B — freeze against the evidence, then close
 
 1. Score every take with `dnd-audio marker analyze` — peak sharpness and ambiguity per track,
@@ -592,7 +626,7 @@ log names candidate, role, approximate time and geometry ID. No assistant is req
 | 1 | Docs agree on what the marker is and is not | ADR-0040/0042, the spec amendment, OQ-025/OQ-029, H1/H2, the runbook; `check_plan.py` in the gate | B |
 | 2 | Byte-stable WAV/HTML/manifest; extracted WAV identical to the CLI WAV | `test_marker_build.py` — two builds byte-identical per candidate; the page's payload decoded and compared to the WAV bytes **and** to the manifest's SHA-256; the payload asserted to occur exactly once | A (per candidate), B (v1) |
 | 3 | The page works offline on the intended phone, one playback at a time, no external resource, no second synthesis | `test_marker_page.py` — the document parsed and **every** URL-bearing attribute asserted absent or a `blob:`/`data:` the page generated, plus a `default-src 'none'` CSP; no oscillator or `Math.sin`; the declarative state-machine table parsed and asserted to admit no play-while-playing transition. That the JS *applies* the table, that `ended` resets the UI, and that the download works are **bench** claims — see the amended criterion 3 | A (static) + bench |
-| 4 | The bench detects every fixed-position marker on all tracks, no clipping near, decisive far, no false sequence on ordinary material | The bench takes, scored through `marker analyze`; **sanitized** measurements, commands, hashes and conclusions recorded in `docs/fixtures/` — never the takes, and no audio committed | bench |
+| 4 | The bench detects every fixed-position marker on all tracks, no clipping near, decisive far, no false sequence on ordinary material | Split, and the halves are answered in different places. **False positives: already done** — `tests/test_marker_false_positives.py` (`host_smoke`) over every real DJI recording on the host, written up in `../../fixtures/2026-08-05-marker-false-positive-sweep.md`. **Reach, clipping and decisiveness:** the bench takes, scored through `marker analyze`; **sanitized** measurements, commands, hashes and conclusions in `docs/fixtures/` — never the takes, and no audio committed | A (negatives) + bench (positives) |
 | 5 | All occurrences in the canonical searched set; one-to-one groups and unmatched detections; exact lags and source coordinates; missing/weak/clipped/ambiguous kept distinct; repeats, a missed event, moved-position diagnostics and overlapping windows cannot silently change the chosen pair | `test_marker_analyze.py` — one class per outcome, each on a fixture built from **independent** ground truth (the generator places the marker at a declared sample; the assertion is that exact integer, never a value the detector produced) | A |
 | 6 | The marker report satisfies INV-13 for complete/inconclusive/failed/skipped/partial; ordinary failures write it atomically and exit correctly; an unsafe resolved path writes nothing under `raw/` | `test_marker_analyze.py::TestTheReport` driven **through the CLI**, including `--report SESSION/raw/tx-a/<a real recording>` **and `marker build SESSION/raw/tx-a`**; in both the file's bytes are asserted unchanged and no directory is created | A |
 | 7 | Synthetic regressions: exact delays, stream seams, gain/EQ, reverberation, noise, clipping, truncation, reversed/partial, duplicate peaks, speech/music negatives, sample-rate/time-scale perturbation; M8's within-quantum offset stays healthy; material fixed-geometry change warns | `test_marker_detect.py`, parametrized over **every** candidate spec | A |
@@ -667,6 +701,14 @@ service worker or PWA; no committed audio binaries; and no browser dependency (A
 - [ ] The bench recording detects every fixed-position marker decisively on all intended DJI
       tracks without clipping the nearest or losing the farthest, and ordinary speech/media
       supplies no accepted false marker sequence.
+      **Amended 2026-08-05** (A4): the second clause is discharged **without the bench**, over
+      more and more adversarial real audio than an in-room block would have supplied —
+      `tests/test_marker_false_positives.py` over every real DJI recording on the host, zero
+      accepted sequences for all three candidates
+      (`../../fixtures/2026-08-05-marker-false-positive-sweep.md`). The first clause is
+      untouched and remains entirely the bench's: not inventing a marker from speech and
+      reliably finding one across a table are opposite failure directions, and a detector that
+      accepted nothing at all would satisfy the second clause perfectly.
 - [ ] `marker analyze` reports all occurrences inside the canonical searched interval set,
       reference-anchored one-to-one groups and unmatched detections, exact integer-sample lags
       and source coordinates, and distinct missing/weak/clipped/ambiguous outcomes. Repeated
