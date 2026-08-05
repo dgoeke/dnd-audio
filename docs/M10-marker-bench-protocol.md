@@ -16,6 +16,47 @@ Nothing is lost by dropping it; the sweep covers more real audio than the block 
 Public evidence must not contain a hostname, username, absolute home-directory path, or audio.
 Never modify anything after it has been copied under a session's `raw/`.
 
+---
+
+## The short version
+
+Everything below this card is reasoning. This is the whole procedure, assuming transmitters and
+receivers are already placed and timecode-jammed.
+
+**Before recording**
+
+1. Three pages on the phone, one per candidate, open in three tabs. Airplane mode on, Bluetooth
+   off.
+2. Play one marker. Set media volume: clearly audible across the table, not unpleasant at arm's
+   length. **Then stop touching the volume.**
+3. Phone in the middle of the table, screen up, screen kept awake. Note which transmitter is
+   nearest it and which is farthest.
+
+**The take — one continuous recording, ~14 minutes**
+
+Leave about five seconds between plays. Say the bold lines out loud; they are the only record of
+what happened.
+
+| | say | do |
+| --- | --- | --- |
+| 1 | **"Opening block."** | `cand-a` ×3, `cand-b` ×3, `cand-c` ×3 |
+| 2 | — | **wait ~10 minutes.** Leave the room. Touch nothing |
+| 3 | **"Closing block, phone has not moved."** | `cand-a` ×1, `cand-b` ×1, `cand-c` ×1 |
+| 4 | **"Diagnostic block, moving the phone now."** | move the phone, say roughly where, `cand-a` ×1 — then move again, say where, `cand-a` ×1 |
+| 5 | — | five seconds of silence, stop recording |
+
+Fourteen plays. If you bump the phone at any point, **say so out loud immediately** — that costs
+nothing and saves the take.
+
+**Afterwards**
+
+6. Copy the originals into `raw/tx-a/` … `raw/tx-f/`, bytes and filenames unchanged.
+7. Tell me which transmitter was nearest the phone and which was farthest.
+
+That is everything. Steps 5–8 below are mine, not yours.
+
+---
+
 ## What this bench decides
 
 Three candidate waveforms exist in the code. **None of them is `v1`, and `marker build` with no
