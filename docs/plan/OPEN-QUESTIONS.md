@@ -1137,11 +1137,45 @@ this is reading one analysis rather than running a separate experiment. The disc
 between the two mechanisms is whether the gap error is a constant *ratio* (resampling) or
 scattered (scheduling).
 **Needs:** M10's phone/DJI bench · **Blocks:** freezing marker v1 (**ADR-0042**); nothing else
-· **Status:** open
+· **Status:** open — **but the synthetic half is measured, and it moved the question**
 
 **Raised by M10's second plan review** (`reviews/M10-plan-20260805-0606.md`), which noted that
 the working plan promised an open-question citation for the gap tolerance and for nothing else,
 while every other detector constant encodes an assumption about the same physical path.
+
+**Measured synthetically 2026-08-05, and the named constant turned out to be the wrong one.**
+Time-stretching each candidate and detecting it (`tests/test_marker_detect.py::TestTimingPerturbation`):
+
+| stretch | cand-a | cand-b | cand-c | anchor error |
+| ---: | --- | --- | --- | --- |
+| 50–200 ppm | found | found | found | ≤ 2 samples |
+| 1 000 ppm | found | found | found | 8–14 samples |
+| 2 000 ppm | lost | lost | found | — |
+| 5 000 ppm | lost | lost | lost | — |
+
+Three things follow, and the third is the useful one:
+
+- **A real clock difference costs nothing.** Two independent crystals sit tens of ppm apart;
+  OQ-006 measured the transmitters' own at ≈1 ppm, bounded ±3. At 200 ppm the anchor is still
+  within two samples, and at 1 000 ppm the ~10-sample drift is an order of magnitude below the
+  1.5–9 ms of acoustic propagation spread this instrument can never resolve anyway (**OQ-025**).
+- **Browser resampling was the wrong worry.** Converting 48 kHz content for a 44.1 kHz device
+  is a *rate* conversion, not a speed change: the sound still lasts as long as it did. Only a
+  genuine clock disagreement stretches the marker, and that is ppm-scale. The 8.8% figure this
+  entry originally reasoned from does not describe anything that happens.
+- **`gap_tolerance_samples` is not what bounds this, despite the name.** At 2 000 ppm — where
+  detection fails — even the longest gap has moved 31 samples, two percent of the 1 440-sample
+  tolerance. What fails first is *per-chirp* correlation, because stretching a chirp detunes it
+  against its own template, and the loss scales with time-bandwidth product. cand-c survives
+  furthest precisely because its chirps are shortest. **So the constant this entry governs is
+  the chirp's duration and bandwidth — a property of the spec, not of the detector** — and that
+  is now what the bench has to weigh, against the opposite pressure that a longer chirp is what
+  reaches the farthest lav.
+
+What the bench still owes: whether the intended phone's media pipeline perturbs gaps
+*non-uniformly* (scheduling rather than clocking), which no synthetic stretch models and which
+would show up as scattered rather than proportional gap residuals. The analyzer records
+per-occurrence gap errors precisely so that reading one analysis answers it.
 
 ## OQ-026 — Does a DJI receiver's timecode counter wrap, and with what period?
 **Assumption:** Yes, at 24 hours — `rasterize.SECONDS_PER_DAY` adds `86400 * sample_rate`
