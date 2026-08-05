@@ -75,6 +75,9 @@ NETWORK_DENIED_COMMANDS = (
     ("process", "{session}", "--fake-models"),
     ("doctor",),
     ("marker", "build", "{output}", "--marker", "cand-a"),
+    # After `ingest` in this list, because it consumes that command's artifacts rather than
+    # producing them — the sweep runs them in order against one session.
+    ("marker", "analyze", "{session}", "--marker", "cand-a"),
 )
 
 

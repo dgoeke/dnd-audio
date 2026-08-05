@@ -17,6 +17,8 @@ the exact input that makes the thing it verifies actually change.
 from __future__ import annotations
 
 import shutil
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +29,7 @@ from dnd_audio.config import SessionConfig
 from dnd_audio.errors import DiscoveryError, ExitCode
 from dnd_audio.fixtures import FixtureTruth
 from dnd_audio.inspection.runner import inspect_outputs
+from dnd_audio.marker.runner import run_marker_analyze
 from dnd_audio.mix.runner import run_mix
 from dnd_audio.orchestrate import run_process
 from dnd_audio.raw_guard import (
@@ -47,6 +50,70 @@ def _scripted(session_dir: Path) -> Any:
     return load_fake_models(session_dir).detector
 
 
+def _corrupt_during_placement(
+    session_dir: Path, monkeypatch: pytest.MonkeyPatch, damage: Callable[[], None]
+) -> None:
+    """Corrupt a source from inside `build_timeline`, which four runners reach."""
+    from dnd_audio.artifacts.manifest import Manifest
+    from dnd_audio.timeline import layout
+
+    original = layout.reject_unusable_sources
+
+    def corrupting(manifest: Manifest) -> None:
+        original(manifest)
+        damage()
+
+    monkeypatch.setattr("dnd_audio.timeline.runner.reject_unusable_sources", corrupting)
+
+
+def _corrupt_during_marker_detection(
+    session_dir: Path, monkeypatch: pytest.MonkeyPatch, damage: Callable[[], None]
+) -> None:
+    """The same window for `marker analyze`, which builds no timeline to hook into.
+
+    It validates the existing artifacts instead of rebuilding them (ADR-0015's exception,
+    see `marker/inputs.py`), so it never reaches `reject_unusable_sources`. The equivalent
+    seam is the detector: after the snapshot, before the verification, while sources are
+    being read.
+    """
+    from dnd_audio.marker import detect
+    from dnd_audio.marker import runner as marker_runner
+
+    original = detect.detect_occurrences
+    fired = False
+
+    def corrupting(*args: Any, **kwargs: Any) -> Any:
+        nonlocal fired
+        result = original(*args, **kwargs)
+        if not fired:
+            fired = True
+            damage()
+        return result
+
+    monkeypatch.setattr(marker_runner, "detect_occurrences", corrupting)
+
+
+@dataclass(frozen=True)
+class Composed:
+    """One composed command, and the two things a shared INV-01 test needs to know.
+
+    `prepare` exists because `marker analyze` consumes `ingest`'s artifacts rather than
+    producing them, and `corrupt` exists because it therefore reaches a different seam. Both
+    are per-command data rather than branches inside the tests, so a new runner is still one
+    entry in one list.
+    """
+
+    run: Callable[[Path], Any]
+    prepare: Callable[[Path], None] = lambda _session: None
+    corrupt: Callable[[Path, pytest.MonkeyPatch, Callable[[], None]], None] = (
+        _corrupt_during_placement
+    )
+
+
+def _ingest_first(session_dir: Path) -> None:
+    assert run_ingest(session_dir).exit_code is ExitCode.OK
+
+
 #: Every command that composes more than one stage, in one place.
 #:
 #: M2, M3 and M4 each wrote an INV-01 regression test naming only the runner that milestone
@@ -54,12 +121,33 @@ def _scripted(session_dir: Path) -> Any:
 #: are enumerated here once and every INV-01 property below is parametrized over them: adding a
 #: runner is then one missing entry in one list, which is visible in review.
 COMPOSED: Any = [
-    pytest.param(lambda d: run_ingest(d), id="ingest"),
-    pytest.param(lambda d: run_activity(d, detector=_scripted(d)), id="activity"),
-    pytest.param(lambda d: run_transcribe(d, fake_models=True), id="transcribe"),
-    pytest.param(lambda d: run_mix(d, detector=_scripted(d)), id="mix"),
-    pytest.param(lambda d: run_process(d, fake_models=True), id="process"),
+    pytest.param(Composed(run=lambda d: run_ingest(d)), id="ingest"),
+    pytest.param(Composed(run=lambda d: run_activity(d, detector=_scripted(d))), id="activity"),
+    pytest.param(Composed(run=lambda d: run_transcribe(d, fake_models=True)), id="transcribe"),
+    pytest.param(Composed(run=lambda d: run_mix(d, detector=_scripted(d))), id="mix"),
+    pytest.param(Composed(run=lambda d: run_process(d, fake_models=True)), id="process"),
+    pytest.param(
+        Composed(
+            run=lambda d: run_marker_analyze(d, marker="cand-a"),
+            prepare=_ingest_first,
+            corrupt=_corrupt_during_marker_detection,
+        ),
+        id="marker-analyze",
+    ),
 ]
+
+
+def _errors(result: Any) -> list[str]:
+    """Every structured error, from whichever report shape this command writes.
+
+    `ingest-report.json` accounts for six stages; `marker-report.json` is one operation at
+    its own command boundary (ADR-0039). Both carry structured errors, and a shared test
+    should read them without caring which shape it got.
+    """
+    stages = getattr(result.report, "stages", None)
+    if stages is None:
+        return [f"{e.code}: {e.message}" for e in result.report.errors]
+    return [f"{e.code}: {e.message}" for stage in stages for e in stage.errors]
 
 
 def a_session(root: Path, *, input_template: str = "raw/{track}") -> Path:
@@ -283,10 +371,11 @@ class TestCleanupNeverWritesIntoRaw:
         self, canonical_fixture: FixtureTruth, command: Any
     ) -> None:
         session_dir = canonical_fixture.session_dir
+        command.prepare(session_dir)
         victim = self._rig(session_dir)
         before = victim.read_bytes()
 
-        result = command(session_dir)
+        result = command.run(session_dir)
 
         assert result.exit_code is ExitCode.FATAL
         assert result.report_written is False
@@ -314,14 +403,13 @@ class TestEveryComposedRunVerifiesItsSources:
             __import__("yaml").safe_load((session_dir / "session.yaml").read_text())
         )
         roots = raw_roots(config)
+        command.prepare(session_dir)
         before = snapshot(session_dir, roots)
         assert before, "the snapshot is empty, so comparing it proves nothing"
 
-        result = command(session_dir)
+        result = command.run(session_dir)
 
-        assert result.exit_code is ExitCode.OK, [
-            f"{e.code}: {e.message}" for s in result.report.stages for e in s.errors
-        ]
+        assert result.exit_code is ExitCode.OK, _errors(result)
         assert snapshot(session_dir, roots) == before
 
     @pytest.mark.parametrize("command", COMPOSED)
@@ -331,26 +419,24 @@ class TestEveryComposedRunVerifiesItsSources:
         """The check has to be able to fail, or it proves nothing.
 
         A source is corrupted from inside the run — after the snapshot and before the
-        verification — which is the only window the invariant is about. The seam is a function
-        every composed runner reaches through `build_timeline`, so one patch drives all of
-        them and none of them can be quietly exempt.
+        verification — which is the only window the invariant is about. Which *seam* that
+        happens at is per-command data rather than one hardcoded function: four runners reach
+        `build_timeline`, and `marker analyze` deliberately does not, because it validates the
+        existing timeline instead of rebuilding it. A shared test that assumed the one seam
+        would have exempted the new runner while still appearing to cover it.
         """
-        from dnd_audio.artifacts.manifest import Manifest
-        from dnd_audio.timeline import layout
+        session_dir = canonical_fixture.session_dir
+        command.prepare(session_dir)
+        victim = session_dir / canonical_fixture.chunks[0].relative_path
 
-        victim = canonical_fixture.session_dir / canonical_fixture.chunks[0].relative_path
-        original = layout.reject_unusable_sources
-
-        def corrupting(manifest: Manifest) -> None:
-            original(manifest)
+        def damage() -> None:
             with victim.open("r+b") as handle:
                 handle.seek(0, 2)
                 handle.write(b"\x00" * 16)
 
-        monkeypatch.setattr("dnd_audio.timeline.runner.reject_unusable_sources", corrupting)
+        command.corrupt(session_dir, monkeypatch, damage)
 
-        result = command(canonical_fixture.session_dir)
+        result = command.run(session_dir)
 
         assert result.exit_code is not ExitCode.OK
-        codes = {e.code for s in result.report.stages for e in s.errors}
-        assert "raw_sources_modified" in codes
+        assert any("raw_sources_modified" in entry for entry in _errors(result))

@@ -26,9 +26,15 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
 import typer
+
+if TYPE_CHECKING:
+    # Imported for the annotation only. The runtime import sits inside `marker_analyze`,
+    # the same shape the archive modules use below: a process that will only ever run
+    # `inspect` should not construct the detector's imports to satisfy a type hint.
+    from dnd_audio.marker.runner import MarkerAnalysisResult
 
 from dnd_audio import __version__
 from dnd_audio.activity.runner import ActivityResult, run_activity
@@ -820,6 +826,57 @@ def marker_build(
     typer.echo(f"  manifest  {built.manifest_path}")
 
 
+@marker_app.command("analyze")
+def marker_analyze(
+    session_dir: SessionDir,
+    marker: Annotated[
+        str | None,
+        typer.Option("--marker", hidden=True, help="Analyze for a named bench candidate."),
+    ] = None,
+    reference_track: Annotated[
+        str | None,
+        typer.Option(
+            "--reference-track",
+            help="Which track anchors every occurrence group. Defaults to the track with the "
+            "most accepted occurrences, tie-broken lexically.",
+        ),
+    ] = None,
+    event_log: Annotated[
+        Path | None,
+        typer.Option(
+            "--event-log",
+            exists=True,
+            dir_okay=False,
+            help="The operator's independent log of what was played and when. Without it, "
+            "roles are assigned only when each default window holds exactly one occurrence, "
+            "and no drift classification is possible.",
+        ),
+    ] = None,
+) -> None:
+    """Find the marker on every track and write the analysis and the report.
+
+    Reads the session's existing `manifest.json` and `timeline.json` and **never rebuilds or
+    rewrites them** — a stale one is refused with a code naming which component disagrees,
+    rather than silently trusted. `ingest` must have run.
+
+    It verifies the jam and measures differential acoustic arrival. It never places a file,
+    never overrides valid timecode, and calls a start-to-end change recorder drift only when
+    the event log asserts that the phone and every compared transmitter stayed fixed
+    (ADR-0040).
+    """
+    from dnd_audio.marker.runner import run_marker_analyze
+
+    result = run_marker_analyze(
+        session_dir,
+        marker=marker,
+        reference_track=reference_track,
+        event_log=event_log,
+    )
+    _summarize_marker(result)
+    if result.exit_code is not ExitCode.OK:
+        raise typer.Exit(code=result.exit_code)
+
+
 @app.command()
 def doctor(
     path: Annotated[
@@ -1089,6 +1146,33 @@ def _summarize_process(result: ProcessResult) -> None:
     for stage in result.report.stages:
         for error in stage.errors:
             typer.secho(f"  error  {error.code}: {error.message}", fg=typer.colors.RED, err=True)
+    _report_line(result.report_written, result.report_path)
+
+
+def _summarize_marker(result: MarkerAnalysisResult) -> None:
+    """Human-readable progress for `marker analyze`. The analysis holds everything."""
+    analysis = result.analysis
+    if analysis is not None:
+        typer.echo(
+            f"  {len(analysis.occurrences)} occurrence(s) across "
+            f"{len(analysis.groups)} group(s), reference {analysis.identity.reference_track}"
+        )
+        for comparison in analysis.arrival:
+            typer.echo(
+                f"  arrival    {comparison.track_id}: {comparison.outcome.value}"
+                + (f" ({comparison.change_ms:+d} ms)" if comparison.change_ms is not None else "")
+            )
+        if result.report.inconclusive:
+            typer.secho(
+                "  inconclusive: the command ran and the evidence settled nothing. That is a "
+                "result about the room, not a failure.",
+                fg=typer.colors.YELLOW,
+            )
+        typer.echo(f"  analysis   {result.analysis_path}")
+    for warning in result.report.warnings:
+        typer.secho(f"  warn  {warning.code}: {warning.message}", fg=typer.colors.YELLOW, err=True)
+    for error in result.report.errors:
+        typer.secho(f"  error  {error.code}: {error.message}", fg=typer.colors.RED, err=True)
     _report_line(result.report_written, result.report_path)
 
 

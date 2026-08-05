@@ -1,0 +1,547 @@
+{
+  "$defs": {
+    "AnalysisIdentity": {
+      "additionalProperties": false,
+      "description": "Everything that can change this analysis, named rather than hashed together.\n\nKept separate from :meth:`digest` deliberately — the `derivative_identity_document`\npattern M2 established. A key that changes for the right reason can still be missing the\ncomponent that matters later, and only a test that reads the components by name can\nnotice that.\n\nThree semantic versions rather than one, because three independent things move the\nresult and a single number would let a change to grouping hide behind a detector bump\n(ADR-0041, second plan review finding 6).",
+      "properties": {
+        "config_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Config Hash",
+          "type": "string"
+        },
+        "detector_semantics_version": {
+          "minimum": 1,
+          "title": "Detector Semantics Version",
+          "type": "integer"
+        },
+        "event_log_schema_version": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Event Log Schema Version"
+        },
+        "event_log_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Event Log Sha256"
+        },
+        "manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Manifest Sha256",
+          "type": "string"
+        },
+        "marker_analysis_semantics_version": {
+          "minimum": 1,
+          "title": "Marker Analysis Semantics Version",
+          "type": "integer"
+        },
+        "marker_name": {
+          "minLength": 1,
+          "title": "Marker Name",
+          "type": "string"
+        },
+        "marker_semantics_version": {
+          "minimum": 1,
+          "title": "Marker Semantics Version",
+          "type": "integer"
+        },
+        "marker_wav_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Marker Wav Sha256",
+          "type": "string"
+        },
+        "numpy_version": {
+          "minLength": 1,
+          "title": "Numpy Version",
+          "type": "string"
+        },
+        "reference_track": {
+          "minLength": 1,
+          "title": "Reference Track",
+          "type": "string"
+        },
+        "scipy_version": {
+          "minLength": 1,
+          "title": "Scipy Version",
+          "type": "string"
+        },
+        "searched_intervals": {
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "type": "array"
+          },
+          "title": "Searched Intervals",
+          "type": "array"
+        },
+        "thresholds": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Thresholds",
+          "type": "object"
+        },
+        "timeline_config_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Timeline Config Hash",
+          "type": "string"
+        },
+        "timeline_schema_version": {
+          "minimum": 1,
+          "title": "Timeline Schema Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "marker_semantics_version",
+        "detector_semantics_version",
+        "marker_analysis_semantics_version",
+        "marker_name",
+        "marker_wav_sha256",
+        "timeline_schema_version",
+        "config_hash",
+        "manifest_sha256",
+        "timeline_config_hash",
+        "reference_track",
+        "numpy_version",
+        "scipy_version"
+      ],
+      "title": "AnalysisIdentity",
+      "type": "object"
+    },
+    "ArrivalComparison": {
+      "additionalProperties": false,
+      "description": "How one track's lag changed between two occurrences, and what that is allowed to mean.",
+      "properties": {
+        "change_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Change Ms"
+        },
+        "change_samples": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Change Samples"
+        },
+        "detail": {
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "end_lag_samples": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "End Lag Samples"
+        },
+        "outcome": {
+          "$ref": "#/$defs/ArrivalOutcome"
+        },
+        "start_lag_samples": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Start Lag Samples"
+        },
+        "track_id": {
+          "minLength": 1,
+          "title": "Track Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "track_id",
+        "outcome",
+        "detail"
+      ],
+      "title": "ArrivalComparison",
+      "type": "object"
+    },
+    "ArrivalOutcome": {
+      "description": "What a start-to-end change in one track's lag is permitted to mean (ADR-0040).",
+      "enum": [
+        "differential_arrival",
+        "clock_drift_evidence",
+        "inconclusive"
+      ],
+      "title": "ArrivalOutcome",
+      "type": "string"
+    },
+    "DetectedOccurrence": {
+      "additionalProperties": false,
+      "description": "One accepted marker sequence on one track, with where it maps to in a source file.",
+      "properties": {
+        "anchor_ms": {
+          "minimum": 0,
+          "title": "Anchor Ms",
+          "type": "integer"
+        },
+        "anchor_sample": {
+          "minimum": 0,
+          "title": "Anchor Sample",
+          "type": "integer"
+        },
+        "clipped": {
+          "default": false,
+          "title": "Clipped",
+          "type": "boolean"
+        },
+        "gap_errors_samples": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Gap Errors Samples",
+          "type": "array"
+        },
+        "runner_up_permille": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Runner Up Permille",
+          "type": "integer"
+        },
+        "score_permille": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Score Permille",
+          "type": "integer"
+        },
+        "source_relative_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Relative Path"
+        },
+        "source_sample": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Sample"
+        },
+        "track_id": {
+          "minLength": 1,
+          "title": "Track Id",
+          "type": "string"
+        },
+        "weak": {
+          "default": false,
+          "title": "Weak",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "track_id",
+        "anchor_sample",
+        "anchor_ms",
+        "score_permille",
+        "runner_up_permille"
+      ],
+      "title": "DetectedOccurrence",
+      "type": "object"
+    },
+    "DetectionOutcome": {
+      "description": "Why a track has, or does not have, a usable arrival for one occurrence.",
+      "enum": [
+        "detected",
+        "missing",
+        "clipped",
+        "weak",
+        "ambiguous"
+      ],
+      "title": "DetectionOutcome",
+      "type": "string"
+    },
+    "GroupMember": {
+      "additionalProperties": false,
+      "description": "One track's participation in a reference-anchored occurrence group.",
+      "properties": {
+        "anchor_sample": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Anchor Sample"
+        },
+        "outcome": {
+          "$ref": "#/$defs/DetectionOutcome"
+        },
+        "relative_lag_samples": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relative Lag Samples"
+        },
+        "score_permille": {
+          "anyOf": [
+            {
+              "maximum": 1000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Score Permille"
+        },
+        "track_id": {
+          "minLength": 1,
+          "title": "Track Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "track_id",
+        "outcome"
+      ],
+      "title": "GroupMember",
+      "type": "object"
+    },
+    "OccurrenceGroup": {
+      "additionalProperties": false,
+      "description": "One acoustic event, as heard on every track that heard it.",
+      "properties": {
+        "geometry_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Geometry Id"
+        },
+        "group_index": {
+          "minimum": 0,
+          "title": "Group Index",
+          "type": "integer"
+        },
+        "members": {
+          "items": {
+            "$ref": "#/$defs/GroupMember"
+          },
+          "title": "Members",
+          "type": "array"
+        },
+        "reference_anchor_sample": {
+          "minimum": 0,
+          "title": "Reference Anchor Sample",
+          "type": "integer"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Role"
+        },
+        "role_source": {
+          "default": "unassigned",
+          "enum": [
+            "event_log",
+            "default_window",
+            "unassigned"
+          ],
+          "title": "Role Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "group_index",
+        "reference_anchor_sample"
+      ],
+      "title": "OccurrenceGroup",
+      "type": "object"
+    },
+    "TimecodeComparison": {
+      "additionalProperties": false,
+      "description": "What the metadata predicted against what the audio shows, for one track.\n\nJam QA, and nothing else: a disagreement is reported, the timeline is not adjusted, and\nvalid timecode is never overridden by a correlation (ADR-0040).",
+      "properties": {
+        "beyond_quantum": {
+          "title": "Beyond Quantum",
+          "type": "boolean"
+        },
+        "disagreement_samples": {
+          "title": "Disagreement Samples",
+          "type": "integer"
+        },
+        "measured_lag_samples": {
+          "title": "Measured Lag Samples",
+          "type": "integer"
+        },
+        "predicted_lag_samples": {
+          "title": "Predicted Lag Samples",
+          "type": "integer"
+        },
+        "quantum_floor_samples": {
+          "exclusiveMinimum": 0,
+          "title": "Quantum Floor Samples",
+          "type": "integer"
+        },
+        "track_id": {
+          "minLength": 1,
+          "title": "Track Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "track_id",
+        "measured_lag_samples",
+        "predicted_lag_samples",
+        "disagreement_samples",
+        "quantum_floor_samples",
+        "beyond_quantum"
+      ],
+      "title": "TimecodeComparison",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The deterministic record of one `marker analyze` run.",
+  "properties": {
+    "arrival": {
+      "items": {
+        "$ref": "#/$defs/ArrivalComparison"
+      },
+      "title": "Arrival",
+      "type": "array"
+    },
+    "groups": {
+      "items": {
+        "$ref": "#/$defs/OccurrenceGroup"
+      },
+      "title": "Groups",
+      "type": "array"
+    },
+    "identity": {
+      "$ref": "#/$defs/AnalysisIdentity"
+    },
+    "notes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Notes",
+      "type": "array"
+    },
+    "occurrences": {
+      "items": {
+        "$ref": "#/$defs/DetectedOccurrence"
+      },
+      "title": "Occurrences",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "session_id": {
+      "minLength": 1,
+      "title": "Session Id",
+      "type": "string"
+    },
+    "timecode": {
+      "items": {
+        "$ref": "#/$defs/TimecodeComparison"
+      },
+      "title": "Timecode",
+      "type": "array"
+    },
+    "unmatched": {
+      "items": {
+        "$ref": "#/$defs/DetectedOccurrence"
+      },
+      "title": "Unmatched",
+      "type": "array"
+    }
+  },
+  "required": [
+    "session_id",
+    "identity"
+  ],
+  "title": "SyncMarkerAnalysis",
+  "type": "object"
+}
