@@ -189,6 +189,11 @@ ban-relative-imports = "all"
 [tool.ruff.lint.per-file-ignores]
 # Tests assert on private helpers and use fixtures that shadow argument names.
 "tests/*" = ["ARG001", "ARG002"]
+# The recording S3 client mirrors boto3's own signatures, and boto3 spells every S3
+# parameter in PascalCase — `Bucket`, `Key`, `UploadId`, `PartNumber`. Renaming them would
+# make the stub stop matching the real call and defeat the point of having it. This is the
+# provider's vocabulary, not a naming decision of ours.
+"tests/test_archive_spaces.py" = ["ARG001", "ARG002", "N803"]
 
 # --- mypy ---------------------------------------------------------------------
 
