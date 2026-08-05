@@ -1311,3 +1311,12 @@ unusable, which the validator's own test caught it doing.
 **Confirmed working end to end** at correct keys afterwards: upload → verify → delete the
 session directory → remote-only restore, plus `list` discovering the session id, plus a forced
 multipart round trip whose ETag is confirmed *not* to be the content digest (ADR-0038).
+
+**The listing evidence was re-established against the final code before close**, and the
+re-run found that the test carrying it was itself unsound: the two pagination tests shared
+bucket state across xdist workers, so the one that lists could run before the one that
+uploads and had been passing on the previous run's leftover objects. Fixed by giving both
+their own seeding fixture, and proved by emptying the prefix first. The provider answer above
+is unchanged — legacy `ListObjects` marker pagination returns every key across several pages
+with `MaxKeys=1`, and the adapter's own `list_keys` agrees — but it is now demonstrated by a
+test that could have failed.

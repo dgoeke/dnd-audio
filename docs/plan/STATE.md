@@ -94,6 +94,14 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
   cost of skipping a phase was two ways to lose the recordings this milestone exists to
   protect. Full account in `docs/plan/reviews/M7a-code-20260804-2109.md`.
 
+  **The host smoke has now been run against the real bucket on the final code** — the one
+  gate criterion whose proof had predated the last round of fixes. 9 passed: upload, `list`,
+  `verify`, delete the session directory, remote-only whole-session restore, track-scoped
+  restore, forced multipart. It failed first, on a defect in the test rather than the
+  archive: two pagination tests shared bucket state across xdist workers and had been
+  passing on the previous run's leftover objects. Both now seed their own, and the fix was
+  proved by emptying the prefix rather than by re-running on top of it.
+
   **The acoustic marker now has a software owner.** M10 builds one canonical PCM WAV and a
   standalone offline phone page that embeds those exact bytes, then detects the full chirp
   sequence at integer-sample positions. It remains jam QA, never timeline authority. Exact

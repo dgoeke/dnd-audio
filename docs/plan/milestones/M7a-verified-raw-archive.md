@@ -274,11 +274,12 @@ small manifest as the commit marker. `status` compares a local session cheaply a
 structurally cannot claim `verified`. `list`, `verify` and `restore` need no local session
 directory at all.
 
-Confirmed against the owner's real Cold Storage bucket on 2026-08-04: a synthetic session
-uploaded and verified, its directory was deleted outright, and every file came back at its
-exact relative path, size and SHA-256 from the session id alone — plus `list` discovering
-that id remotely, a forced multipart round trip, and confirmation that a multipart ETag is
-**not** the content digest.
+Confirmed against the owner's real Cold Storage bucket on 2026-08-04, and **re-confirmed on
+the final code** after the third review's fixes: a synthetic session uploaded and verified,
+its directory was deleted outright, and every file came back at its exact relative path,
+size and SHA-256 from the session id alone — plus `list` discovering that id remotely, a
+forced multipart round trip, and confirmation that a multipart ETag is **not** the content
+digest.
 
 Restore is transactional: the whole tree is staged beside the destination and moved in at the
 end, so a failure leaves the destination untouched and the retry is just a retry.
@@ -310,13 +311,20 @@ See `docs/plan/reviews/M7a-code-20260804-2109.md`.
   **9 passed in 181 s**, then 9 passed again after the `status` reordering, including
   forced multipart and remote-only restore.
 
-  **It has not been run since the third review's fixes**, at the operator's instruction to
-  stop spending real uploads. That matters, because those fixes touch code the smoke is the
-  only executed proof of: `list` now downloads and parses each manifest, `_read_remote_manifest`
-  checks session ownership, the readback drains to EOF, and restore refuses a leftover staging
-  tree. All are covered against the fake. **Run `DND_AUDIO_ARCHIVE_PROFILE=… uv run pytest -m
-  host_smoke tests/test_archive_smoke.py` once before trusting this against a real session** —
-  it is the one completion-gate criterion whose proof predates the final code.
+- **Host smoke re-run at final HEAD** (2026-08-04, at the operator's instruction before
+  closing), which is what the paragraph that used to sit here asked for: the third review's
+  fixes touch code the smoke is the only executed proof of — `list` downloading and parsing
+  each manifest, `_read_remote_manifest` checking session ownership, the readback draining
+  to EOF, restore refusing a leftover staging tree — and its previous proof predated them.
+  **9 passed in 7.6 s.** Upload → `list` → `verify` → delete the session directory →
+  remote-only whole-session restore, plus track-scoped restore, plus forced multipart with
+  its non-content ETag. Both runs' session objects were confirmed present in the bucket
+  afterwards, so the drill really transferred rather than short-circuiting.
+
+  **The first attempt failed, and the defect was in the test.** See the note below on
+  ordering; the pass above is from the fixed test against a genuinely empty prefix.
+
+- `./scripts/gate.sh` after that fix — **8 checks, 2 656 passed, zero skips**, 40.3 s.
 - **Two more mutation checks**, both on the new CLI tests: deleting the report-path INV-01
   guard turns two red, and reverting the protected-roots wiring turns the third red. The
   retry fix was checked the same way — with the handle opened outside the thunk, the stored
@@ -399,6 +407,24 @@ call; a real request sends the body before it can be told `503`, so the retry PU
 at an immutable content-addressed key — and since `_publish` will not overwrite one and there
 is no delete command, a single transient error made a session permanently unarchivable. Any
 thunk a retry loop re-runs must acquire its own resources inside itself.
+
+**A test that shares remote state with another test is ordered by the scheduler, not by
+the file.** `-n 8` is in `addopts`, so the smoke's two pagination tests ran on different
+xdist workers in whichever order came up — and one of them uploaded the five objects the
+other listed. It passed twice anyway, because the keys are fixed and the *previous* run's
+objects were still in the bucket when the listing test went first. Emptying the bucket is
+what finally made it fail, on the very run that existed to re-establish OQ-028's evidence
+against the final code. Both tests now seed their own objects from a fixture, and the fix
+was proved by deleting the five objects and re-running rather than by re-running on top of
+them. A test whose green depends on the residue of its own history is not evidence, and
+remote state makes that failure survive across processes where `tmp_path` would not.
+
+**Each smoke run leaves a whole session archive in the bucket permanently.** The session id
+is derived from `tmp_path`, so every run commits a new one, and M7a deliberately ships no
+delete command — cleanup is a console action or a throwaway script outside this project,
+under the guard that every key starts with the prefix you meant. Four smoke sessions and
+the `smoke/` objects were in the bucket at close, ~1.1 MB of real content against a 128 KiB
+per-object billing floor and a 30-day minimum retention.
 
 **Do not trust a proof you have not tried to break.** Eight proofs were rewritten after the
 plan review and eleven more defects survived into the implementation, most of them tests that

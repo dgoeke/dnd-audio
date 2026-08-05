@@ -139,19 +139,37 @@ class TestTheProviderAcceptsWhatThisProjectSends:
 class TestPaginationOnTheRealEndpoint:
     """OQ-028: the provider's own documentation contradicts itself. This settles it."""
 
-    def test_listing_returns_every_key_across_pages(self, storage: SpacesStorage) -> None:
-        prefix = f"{SMOKE_PREFIX}/pagination"
-        expected = set()
-        for index in range(5):
-            payload = generated(1024, seed=100 + index)
-            key = f"{prefix}/object-{index}.bin"
-            import tempfile
+    @pytest.fixture
+    def paginated(self, storage: SpacesStorage, tmp_path: Path) -> tuple[str, set[str]]:
+        """Seed the objects both tests list, in each test that lists them.
 
-            with tempfile.NamedTemporaryFile() as handle:
-                handle.write(payload)
-                handle.flush()
-                storage.put_object(key, Path(handle.name))
-            expected.add(key)
+        Originally the first test uploaded and the second listed what it had left behind.
+        That is an ordering dependency, and `-n 8` is in `addopts`, so the two ran on
+        different workers in whichever order the scheduler chose. It passed anyway for two
+        runs — because the keys are fixed, so the *previous* run's objects were still
+        sitting in the bucket when the listing test went first. Emptying the bucket is what
+        finally made it fail (2026-08-04). A test that passes on the residue of its own
+        history proves nothing about the code, and this one is the only executed evidence
+        for OQ-028.
+
+        Re-PUTting the same five keys is idempotent and free of consequence: they are in
+        the throwaway `smoke/` prefix, not under the immutable `sessions/` layout where
+        ADR-0038 forbids overwriting an existing object.
+        """
+        prefix = f"{SMOKE_PREFIX}/pagination"
+        keys = set()
+        for index in range(5):
+            source = tmp_path / f"object-{index}.bin"
+            source.write_bytes(generated(1024, seed=100 + index))
+            key = f"{prefix}/object-{index}.bin"
+            storage.put_object(key, source)
+            keys.add(key)
+        return prefix, keys
+
+    def test_listing_returns_every_key_across_pages(
+        self, storage: SpacesStorage, paginated: tuple[str, set[str]]
+    ) -> None:
+        prefix, expected = paginated
 
         # `MaxKeys` is not part of the storage protocol — deliberately, since a caller must
         # never be able to bound a listing — so the client is driven directly here to force
@@ -176,10 +194,12 @@ class TestPaginationOnTheRealEndpoint:
         assert pages > 1, "MaxKeys=1 over five objects must produce several pages"
         assert expected <= found
 
-    def test_the_adapters_own_listing_agrees(self, storage: SpacesStorage) -> None:
+    def test_the_adapters_own_listing_agrees(
+        self, storage: SpacesStorage, paginated: tuple[str, set[str]]
+    ) -> None:
         """The path production actually uses, over the same objects."""
-        prefix = f"{SMOKE_PREFIX}/pagination"
-        assert len(list(storage.list_keys(prefix))) >= 5
+        prefix, expected = paginated
+        assert expected <= set(storage.list_keys(prefix))
 
 
 class TestNoSessionAudioIsInvolved:
