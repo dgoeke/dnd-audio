@@ -15,7 +15,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
   decisions.
 - **Branch:** `main`
 - **Last closed milestone:** M7a — verified private raw archive
-- **Gate status at HEAD:** passes, zero skips (8 checks, 2 640 tests); the same default suite
+- **Gate status at HEAD:** passes, zero skips (8 checks, 2 646 tests); the same default suite
   passes from `.venv-rocm` — **re-sync that environment after any dependency change**, which
   M7a's first attempt there proved by failing five ways on two missing packages.
 - **Blocked on:** **real recordings, and nothing else.** Every remaining open question that
@@ -82,6 +82,17 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
   no delete or publishing command. M7b waits for an accepted real session before deciding
   public delivery, retention, cache reclamation, or the INV-01 exception local deletion would
   require. A four-file zstd trial saved 30.4% and restored every original SHA-256 exactly.
+
+  **M7a was closed once without a verify phase, and the phase found two P0s when it was
+  run.** `archive verify --report` pointed at a recording overwrote it with JSON — the CLI's
+  INV-01 guard was conditioned on having a session directory, which the two remote-only
+  commands never have. And one `503 Slow Down` on a single PUT stored a zero-byte object at
+  an immutable content-addressed key, which nothing may overwrite and no command may delete,
+  making that session permanently unarchivable. Both are fixed, mutation-checked, and now
+  covered by tests that enter through the CLI — **which nothing did before**: the whole of
+  `_run_archive` was untested, including the block the first review's P0 fix lived in. The
+  cost of skipping a phase was two ways to lose the recordings this milestone exists to
+  protect. Full account in `docs/plan/reviews/M7a-code-20260804-2109.md`.
 
   **The acoustic marker now has a software owner.** M10 builds one canonical PCM WAV and a
   standalone offline phone page that embeds those exact bytes, then detects the full chirp

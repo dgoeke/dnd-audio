@@ -297,6 +297,22 @@ end, so a failure leaves the destination untouched and the retry is just a retry
   pre-commit INV-01 verification, the compression-streaming proof, and (by inspection) the
   archive-v1 recipe freeze across levels 8–12.
 
+**Then the verify phase, which had been skipped, was run — and it reopened the milestone.**
+See `docs/plan/reviews/M7a-code-20260804-2109.md`.
+
+- `./scripts/gate.sh` at the reopened HEAD — **8 checks, 2 646 passed, zero skips**, ~42 s.
+  (The number recorded above, 2 640, was never produced by this tree: the close commit's
+  HEAD gives 2 629. That mismatch is what first suggested the final gate run had not been
+  the one at HEAD.)
+- A second `./scripts/codex-review.sh code M7a main`, a fresh-context reviewer agent, and
+  the verifier's own pass — **two P0, six P1/P2, two deferred, one rejected.**
+- Host smoke against the real Cold Storage bucket, re-run during verification —
+  **9 passed in 181 s**, including forced multipart and remote-only restore.
+- **Two more mutation checks**, both on the new CLI tests: deleting the report-path INV-01
+  guard turns two red, and reverting the protected-roots wiring turns the third red. The
+  retry fix was checked the same way — with the handle opened outside the thunk, the stored
+  object is `b''`.
+
 ### Decisions made (→ ADRs)
 
 - **ADR-0035** — the archive network exception, and the provider permission boundary with it.
@@ -315,6 +331,22 @@ no exception: M7a deletes nothing.
 compatibility page and its limits page contradict each other. The answer is that listing
 works — and the finding that mattered was ours, not the provider's. See the notes below.
 
+### Deferred, and why
+
+- **A source replaced at the same path between inspection and archiving is accepted**, and
+  the bounded `inspection` block copied into its manifest entry then describes the old file.
+  `_require_current_manifest` checks only `config_hash`; `_require_nothing_vanished` checks
+  only presence. The archive itself stays correct — the original digest is measured from the
+  bytes actually read, so restoration is exact — and the copied identity is decoration.
+  Closing it means re-hashing every source against the inspection manifest, a second full
+  pass over a session for a decorative field. Worth doing when something else already needs
+  that pass.
+- **`tests/test_archive_memory.py` proves the staged-read boundary against `WatchedStorage`,
+  not `SpacesStorage`.** The real adapter hands boto3 a file handle and the multipart path
+  reads fixed-size chunks — bounded by inspection, and exercised for real by the host smoke —
+  but that specific boundary has no executed proof over production code. The other four
+  boundaries do.
+
 ### Notes for future implementors
 
 **The endpoint must be the regional one, and getting it wrong is silent.** DigitalOcean's
@@ -328,6 +360,25 @@ self-consistently wrong passes every test that asks it about itself.
 
 **The region is correctly present in both the URL and the config.** It is the SigV4 signing
 scope, not an addressing component. Only the bucket was being applied twice.
+
+**Every layer needs a test that enters through its own front door.** Nine test files, 261
+archive tests and complete coverage of the runner did not compensate for the fact that
+*nothing ran a command*: `tests/test_cli.py` reached `archive --help` and an unconfigured
+`archive list`, which exits above everything interesting. So the CLI's INV-01 guard, its
+protected-root wiring and its exit codes were carried by nothing — and a P0 that overwrote a
+source recording sat in that gap. Test the seam you actually ship.
+
+**The habit applies to the fixes too, not only to the code being fixed.** The commit that
+resolved the first code review shipped a test whose docstring says "This drives the actual
+command" above a body that asserts on a helper in isolation — guarding the very P0 the review
+had just found, in the same block where the next P0 was hiding. One review's lesson does not
+carry itself into the commit that acts on it.
+
+**A retry must be able to run twice.** `put_object` opened the body once and retried the
+call; a real request sends the body before it can be told `503`, so the retry PUT zero bytes
+at an immutable content-addressed key — and since `_publish` will not overwrite one and there
+is no delete command, a single transient error made a session permanently unarchivable. Any
+thunk a retry loop re-runs must acquire its own resources inside itself.
 
 **Do not trust a proof you have not tried to break.** Eight proofs were rewritten after the
 plan review and eleven more defects survived into the implementation, most of them tests that

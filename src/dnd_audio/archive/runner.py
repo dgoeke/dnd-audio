@@ -559,19 +559,24 @@ def run_status(session_dir: Path, *, storage: ArchiveStorage) -> ArchiveReport:
     session_id = config.session_id
 
     try:
-        sources = build_source_set(session_dir, config)
         committed = _read_remote_manifest(storage, session_id)
         objects_present = (
             False
             if committed is not None
             else any(True for _ in _iter_prefix(storage, _session_prefix(session_id)))
         )
-        # The source set was inventoried before a network round trip that takes as long as
-        # it takes. Re-checked here for the same reason every other operation re-checks:
-        # comparing the bucket against a directory that moved underneath the comparison
-        # produces an answer about neither. INV-01 is a claim about every exit path, and
-        # `status` was the one operation that never made it. Found by M7a's second review.
-        sources.verify_unchanged(config)
+        # Inventoried **after** the network round trip, which is the ordering that costs
+        # nothing and closes the window. Built first, the comparison was against the
+        # directory as it stood before a download of unknown duration, so a session being
+        # written to during the call could still be reported `committed`.
+        #
+        # The obvious fix — build first and `verify_unchanged` after, as `upload` does —
+        # was rejected: `verify_unchanged` re-walks and re-hashes, and doubling the work
+        # would make the one operation this charter calls *cheap* hash a four-hour session
+        # twice. `status` writes nothing, so it needs no INV-01 exit check; what it needs is
+        # for its answer to be about the present, and reading the directory last is how.
+        # Found by M7a's second code review.
+        sources = build_source_set(session_dir, config)
     except Exception as exc:
         return _failed(ArchiveOperation.STATUS, session_id, exc, started, entries_in_scope=0)
 

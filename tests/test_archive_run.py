@@ -583,22 +583,33 @@ class TestStatus:
         report = run_status(inspected.session_dir, storage=storage)
         assert report.verification is VerificationState.DIVERGENT
 
-    def test_a_source_that_changes_during_the_comparison_is_caught(
+    def test_a_source_that_changes_during_the_comparison_is_noticed(
         self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path
     ) -> None:
-        """`status` was the one operation that never re-checked INV-01.
+        """`status` inventoried the directory before a download of unknown duration.
 
-        It inventoried the sources, then made a network round trip that takes as long as it
-        takes, then reported on a directory that may have moved underneath the comparison —
-        so a session actively being written to could still be reported `committed`. The
-        source is mutated from inside the storage layer, which is where the wait is.
+        So a session being written to during the call was compared as it stood beforehand
+        and could still be reported `committed`. Reading the directory *after* the network
+        closes the window at no cost — where re-verifying afterwards would have made the
+        one operation the charter calls cheap hash the whole session twice.
+
+        The source is mutated from inside the storage layer, which is where the wait is.
         Found by M7a's second code review.
         """
-        run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+        # Written and inspected *before* the only upload, so the committed manifest
+        # genuinely describes this directory. Uploading twice would leave the second one
+        # divergent on the added file and never commit — and the assertion below would then
+        # hold for a reason that has nothing to do with the ordering under test. It did,
+        # until a mutation check said so.
         victim = inspected.session_dir / "raw" / "midflight.txt"
         victim.write_text("before\n", encoding="utf-8")
         run_inspect(inspected.session_dir)
-        run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+        committed = run_upload(inspected.session_dir, storage=storage, lock_dir=lock_dir)
+        assert committed.status is OperationStatus.COMPLETE
+        assert (
+            run_status(inspected.session_dir, storage=storage).verification
+            is VerificationState.COMMITTED
+        ), "the positive control failed: this session must agree with its archive"
 
         class MutatingOnRead:
             """Changes a source while `status` is waiting on the manifest download."""
@@ -620,8 +631,9 @@ class TestStatus:
                 return self.inner.list_keys(prefix)
 
         report = run_status(inspected.session_dir, storage=MutatingOnRead(storage))
-        assert report.status is OperationStatus.FAILED
-        assert report.errors[0].code == "archive_sources_modified"
+        assert report.verification is VerificationState.DIVERGENT, (
+            "status compared against the directory as it stood before the download"
+        )
 
     def test_another_sessions_upload_report_does_not_vouch_for_this_one(
         self, inspected: FixtureTruth, storage: FakeArchiveStorage, lock_dir: Path
