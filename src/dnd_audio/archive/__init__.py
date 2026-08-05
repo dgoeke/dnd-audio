@@ -34,13 +34,29 @@ from __future__ import annotations
 
 from typing import Final
 
+from dnd_audio.errors import DndAudioError
+
 __all__ = [
     "ARCHIVE_MANIFEST_FILENAME",
     "ARCHIVE_OBJECTS_DIRNAME",
     "ARCHIVE_PREFIX",
     "ARCHIVE_VERSION",
     "MAX_OBJECT_KEY_BYTES",
+    "ArchiveError",
 ]
+
+
+class ArchiveError(DndAudioError):
+    """An archive operation cannot proceed, or cannot be trusted.
+
+    Fatal in every case, and deliberately so: this package exists to make one promise —
+    that what it stored restores byte-for-byte — and every failure here is that promise
+    failing to be establishable. There is no degraded mode where an archive is "probably
+    fine", because the whole point is that nobody finds out until the local copy is gone.
+    """
+
+    default_code = "archive_failed"
+
 
 #: Bumped only when the encoding recipe or key layout changes, and then a *new* prefix is
 #: written rather than new payloads at old keys (ADR-0037).
