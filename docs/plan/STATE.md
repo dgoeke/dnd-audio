@@ -134,7 +134,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | M6b | Qwen adapter               | closed      | `07cebdb` |
 | M8  | Real-session readiness     | closed      | `8ad15e3` |
 | M9  | Transcript assembly quality | closed      | `d3e2cbb` |
-| M7a | Verified private raw archive | closed      | (this commit) |
+| M7a | Verified private raw archive | closed      | `69e583c` |
 | H1  | Hardware fixture (2 min)   | not started | —         |
 | H2  | Drift soak / first session | not started | —         |
 | M7b | Publishing and reclamation | sketch      | —         |
