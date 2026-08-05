@@ -248,7 +248,11 @@ def invoke(command: str, session_dir: Path, trap_dir: Path) -> subprocess.Comple
     """Run one CLI command in a child whose network access fails loudly."""
     environment = dict(os.environ)
     environment["PYTHONPATH"] = str(trap_dir)
-    arguments = [sys.executable, "-m", "dnd_audio.cli", command]
+    # `-m dnd_audio`, not `-m dnd_audio.cli`. The latter imports the module, defines
+    # `main`, calls nothing and exits 0 — so the assertions below would run against a
+    # program that never executed. That is exactly how this proof passed unconditionally
+    # in its first draft; `test_the_command_actually_ran` is the guard.
+    arguments = [sys.executable, "-m", "dnd_audio", command]
     if command != "doctor":
         arguments.append(str(session_dir))
     if command in ("transcribe", "process"):
@@ -275,6 +279,23 @@ class TestNoProcessingCommandTouchesTheNetwork:
         assert "NetworkReached" not in combined, (
             f"`dnd-audio {command}` reached the network. Only `models fetch` and "
             f"`archive` may (INV-06, ADR-0035).\n{combined}"
+        )
+
+    @pytest.mark.parametrize("command", NETWORK_DENIED_COMMANDS)
+    def test_the_command_actually_ran(
+        self, command: str, canonical_fixture: FixtureTruth, trap_dir: Path
+    ) -> None:
+        """The guard without which every assertion above is vacuous.
+
+        A subprocess that does nothing produces no output, contains no "NetworkReached",
+        and passes the boundary test perfectly. This one insists each command actually
+        reached its own code — it printed something, or it failed for a reason of its own.
+        """
+        completed = invoke(command, canonical_fixture.session_dir, trap_dir)
+        combined = completed.stdout + completed.stderr
+        assert combined.strip(), (
+            f"`dnd-audio {command}` produced no output at all, which means it did not run. "
+            f"The network assertions in this class would then be checking nothing."
         )
 
     def test_the_trap_can_actually_fire(

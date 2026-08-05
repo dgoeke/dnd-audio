@@ -32,6 +32,11 @@ import typer
 
 from dnd_audio import __version__
 from dnd_audio.activity.runner import ActivityResult, run_activity
+
+# The enum only; `dnd_audio.archive.report` imports no provider code, so registering the
+# subcommands does not pull an S3 SDK into a process that will only ever run `mix`. The
+# archive modules that do are imported inside `_run_archive` (INV-06, ADR-0035).
+from dnd_audio.archive.report import ArchiveOperation
 from dnd_audio.determinism import canonical_json
 from dnd_audio.doctor import CheckStatus, overall_status, run_checks
 from dnd_audio.errors import DndAudioError, ExitCode
@@ -95,10 +100,18 @@ app = typer.Typer(
 )
 
 models_app = typer.Typer(
-    help="Model management. `fetch` is the only command permitted to touch the network.",
+    help="Model management. `fetch` is one of the two commands permitted to touch the "
+    "network; `archive` is the other.",
     no_args_is_help=True,
 )
 app.add_typer(models_app, name="models")
+
+archive_app = typer.Typer(
+    help="Verified off-site backup of a session's raw sources. The only command group "
+    "that sends session audio anywhere, and it never publishes or deletes (INV-06).",
+    no_args_is_help=True,
+)
+app.add_typer(archive_app, name="archive")
 
 
 @app.command()
@@ -467,6 +480,170 @@ def models_plan(
         typer.echo(f"    revision    {row['revision']}")
         typer.echo(f"    target      {row['target']}")
     typer.echo(f"  lock          {lock_path()}")
+
+
+@archive_app.command("upload")
+def archive_upload(session_dir: SessionDir) -> None:
+    """Compress, upload, and verify every raw source; commit the manifest last.
+
+    Requires a current `manifest.json`, so `dnd-audio inspect` runs first. Nothing under
+    the session's sources is written, renamed, or deleted (INV-01), and no output or
+    transcript is published — that is M7b and does not exist yet.
+
+    Every object is downloaded and decompressed again before the manifest goes up, which
+    roughly doubles the network cost and is the entire difference between a backup and a
+    belief (ADR-0038).
+    """
+    _run_archive(ArchiveOperation.UPLOAD, session_dir=session_dir)
+
+
+@archive_app.command("status")
+def archive_status(session_dir: SessionDir) -> None:
+    """Compare a local session against the archive. Cheap, and never authoritative.
+
+    Reports `absent`, `pending`, `committed`, `previously_verified_at_commit` or
+    `divergent`. It structurally cannot report `verified`: only a current full download
+    establishes that, and saying it from provider metadata would be the one lie this
+    design exists to prevent (ADR-0039).
+    """
+    _run_archive(ArchiveOperation.STATUS, session_dir=session_dir)
+
+
+@archive_app.command("list")
+def archive_list() -> None:
+    """Every committed session id, without needing a local session directory.
+
+    What makes the recovery drill possible when nobody remembers what the session was
+    called. Follows pagination to exhaustion; a partial listing is an error, never a
+    shorter answer.
+    """
+    _run_archive(ArchiveOperation.LIST)
+
+
+@archive_app.command("verify")
+def archive_verify(
+    session_id: Annotated[str, typer.Option("--session-id", help="The archived session to check.")],
+    track: Annotated[
+        str | None,
+        typer.Option("--track", help="Check only this track. Omit for the whole session."),
+    ] = None,
+    report: Annotated[
+        Path | None,
+        typer.Option("--report", help="Where to write the operation report."),
+    ] = None,
+) -> None:
+    """Download every selected object and prove it still restores. The real check.
+
+    Needs no local session directory — it is built for the case where there isn't one.
+    Expensive by design: Cold Storage charges for retrieval, and anything cheaper would
+    not be a verification.
+    """
+    _run_archive(ArchiveOperation.VERIFY, session_id=session_id, track=track, report_path=report)
+
+
+@archive_app.command("restore")
+def archive_restore(
+    session_id: Annotated[
+        str, typer.Option("--session-id", help="The archived session to restore.")
+    ],
+    to: Annotated[
+        Path,
+        typer.Option("--to", help="An existing empty directory to rebuild the session in."),
+    ],
+    track: Annotated[
+        str | None,
+        typer.Option("--track", help="Restore only this track. Omit for everything."),
+    ] = None,
+    report: Annotated[
+        Path | None,
+        typer.Option("--report", help="Where to write the operation report."),
+    ] = None,
+) -> None:
+    """Rebuild a session's files from the archive alone, into an empty directory.
+
+    Transactional: the whole tree is staged beside the destination and moved in at the
+    end, so a failure leaves the destination untouched and the retry is just a retry.
+
+    A track scope recovers only files attributed to that track. Nested notes and
+    unassigned audio come back from a whole-session restore, because attributing them to
+    a track would be inventing identity (INV-11).
+    """
+    _run_archive(
+        ArchiveOperation.RESTORE,
+        session_id=session_id,
+        track=track,
+        destination=to,
+        report_path=report,
+    )
+
+
+def _run_archive(
+    operation: ArchiveOperation,
+    *,
+    session_dir: Path | None = None,
+    session_id: str | None = None,
+    track: str | None = None,
+    destination: Path | None = None,
+    report_path: Path | None = None,
+) -> None:
+    """Resolve configuration, build the client, run the operation, write the report.
+
+    One place, because five commands share every step of it and the interesting failure —
+    an unconfigured machine — must produce the same message from all of them.
+    """
+    from dnd_audio.archive.config import ArchiveConfigError, default_report_dir, load_archive_config
+    from dnd_audio.archive.report import write_report
+    from dnd_audio.archive.runner import run_list, run_restore, run_status, run_upload, run_verify
+    from dnd_audio.archive.spaces import build_storage
+
+    try:
+        settings = load_archive_config()
+    except ArchiveConfigError as exc:
+        typer.secho(f"  error  {exc.code}: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=ExitCode.FATAL) from exc
+
+    storage = build_storage(settings)
+    listed: list[str] = []
+
+    if operation is ArchiveOperation.UPLOAD:
+        assert session_dir is not None
+        result = run_upload(session_dir, storage=storage)
+    elif operation is ArchiveOperation.STATUS:
+        assert session_dir is not None
+        result = run_status(session_dir, storage=storage)
+    elif operation is ArchiveOperation.LIST:
+        listed, result = run_list(storage=storage)
+    elif operation is ArchiveOperation.VERIFY:
+        assert session_id is not None
+        result = run_verify(session_id, storage=storage, track_id=track)
+    else:
+        assert session_id is not None
+        assert destination is not None
+        result = run_restore(session_id, destination, storage=storage, track_id=track)
+
+    if report_path is None:
+        report_path = (
+            session_dir / "work" / f"archive-{operation.value}-report.json"
+            if session_dir is not None
+            else default_report_dir() / f"archive-{operation.value}-report.json"
+        )
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    write_report(result, report_path)
+
+    for session in listed:
+        typer.echo(f"  session   {session}")
+    typer.echo(f"  {result.operation.value:<9} {result.status.value}")
+    typer.echo(f"  archive   {result.verification.value}")
+    if result.scope.entries_in_scope:
+        typer.echo(f"  scope     {result.scope.entries_in_scope} entry/entries")
+    for note in result.notes:
+        typer.secho(f"  note      {note}", fg=typer.colors.YELLOW)
+    for error in result.errors:
+        typer.secho(f"  error     {error.code}: {error.message}", fg=typer.colors.RED, err=True)
+    typer.echo(f"  report    {report_path}")
+
+    if result.exit_code() is not ExitCode.OK:
+        raise typer.Exit(code=result.exit_code())
 
 
 @app.command()
