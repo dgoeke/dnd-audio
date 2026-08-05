@@ -153,7 +153,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | M6b | Qwen adapter               | closed      | `07cebdb` |
 | M8  | Real-session readiness     | closed      | `8ad15e3` |
 | M9  | Transcript assembly quality | closed      | `d3e2cbb` |
-| M7a | Verified private raw archive | closed      | `69e583c` |
+| M7a | Verified private raw archive | closed      | `5bc24a3` |
 | H1  | Hardware fixture (2 min)   | not started | —         |
 | H2  | Drift soak / first session | not started | —         |
 | M7b | Publishing and reclamation | sketch      | —         |
@@ -164,6 +164,10 @@ commit — a commit cannot contain its own hash (the same limit ADR-0003 names f
 M0–M3 each wrote theirs by amending instead, so those four SHAs are the pre-amend close commit
 and do not resolve in a fresh clone. Left as they are rather than rewritten history; from M4
 on the column is reachable.
+
+M7a was closed once at `69e583c` without a verify phase, reopened when the phase was run, and
+closed again at the SHA above. The column names the **final** close, so a bisect for the
+boundary lands after the fixes rather than before them.
 
 Status values: `not started` → `in progress` → `verified` → `closed`.
 `blocked` is also valid; say what on. `sketch` means a charter exists to hold the
