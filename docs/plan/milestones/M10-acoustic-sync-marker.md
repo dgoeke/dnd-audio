@@ -230,8 +230,10 @@ start all recordings, and use the intended phone/browser:
    threshold. More audio and more adversarial material than this step would have produced, at no
    cost in the room, and dropping it is what makes a one-person bench feasible. See
    `../../fixtures/2026-08-05-marker-false-positive-sweep.md`.
-5. Keep an independent event log naming candidate, role, approximate time, and geometry ID. Run
-   `inspect`, `ingest`, and `marker analyze`; hash raw before and after.
+5. ~~Keep an independent event log naming candidate, role, approximate time, and geometry ID.~~
+   **Amended 2026-08-05 (A5): the bench records no event log.** What it would supply arrives
+   instead as fixed block order plus spoken slates on the take itself — see the working plan.
+   Run `inspect`, `ingest`, and `marker analyze`; hash raw before and after.
 6. Confirm every track detects the fixed-position events, nearest tracks do not clip, farthest
    tracks remain decisive, and repeated same-position lag is inside the documented tolerance.
    The false-positive half of this confirmation is discharged by step 4's replacement.
@@ -586,6 +588,39 @@ across a table are opposite failure directions; a detector that accepted nothing
 perfectly on the sweep. Question 1 of the bench — reach at the farthest seat — is untouched and
 is still the question a candidate wins or loses on. The sweep bounds one side of the score
 threshold; the bench sets the other, and ADR-0042 freezes the pair together.
+
+**A5 — the bench records no event log.** Approved by the operator on 2026-08-05: they will hand
+over the recording and nothing else.
+
+`--event-log` stays a real, tested feature — it is what a *session* will use — but this bench
+does not need it, and pretending otherwise would have cost the operator a written log for
+nothing. Of the four things it supplies, two are recoverable and two are testimony:
+
+| the log supplies | at this bench |
+| --- | --- |
+| which times to search | the whole take: `--start-window-s`/`--end-window-s` wide open |
+| which waveform was played | the occurrence itself — three candidates in one take were checked and cross-detected zero times |
+| which play is the start and which the end | **the fixed block order**, which the protocol pins |
+| that the phone did not move between them | **a spoken slate**, in the operator's voice, on all six tracks |
+
+The last is the only irreducible one, and ADR-0040 is explicit that nothing in the audio can
+establish it. Moving it from a YAML field to a sentence on the recording does not weaken it —
+it is timestamped by construction, captured six times over, and cannot be misremembered a day
+later. A written log filled in from memory afterwards would have been the weaker artifact.
+
+**The cost, stated exactly.** Without a log `_assign_roles` cannot name a start/end pair (its
+fallback needs exactly one occurrence per default window; three plays per block means it will
+not fire), so no `differential_arrival` or `clock_drift_evidence` classification is emitted. It
+warns, enumerates everything, and exits zero. That comparison is arithmetic over two groups'
+per-track lags and gets done by hand against the block structure — the classification is a label
+on a subtraction, not a measurement that is lost. Everything the bench exists to measure —
+per-track scores, clipping, weak-signal flags, exact integer lags, source coordinates, and the
+timecode cross-check, which accepts an unlabelled first group — is untouched.
+
+**Verified rather than assumed:** a bench-shaped session (three candidates, nine opening plays,
+three closing, two moved) was analyzed with no log. Every detection mapped to a planted position
+exactly, no candidate detected another's waveform, and the runs exited zero with a warning
+naming precisely what was unlabelled and why.
 
 ### Phase B — freeze against the evidence, then close
 

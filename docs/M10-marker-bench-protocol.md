@@ -83,15 +83,9 @@ and phone positions as much as waveforms.
 - Six DJI transmitters, labelled durably `tx-a` … `tx-f`, and their receivers.
 - The intended phone, and the browser you actually plan to use in a session.
 - Something to hold the phone in one repeatable place — the middle of the table, screen up.
-- A stopwatch, or the phone's own clock. Approximate times are enough; see
-  [The event log](#the-event-log).
-- A paper or text log. Its columns are fixed:
 
-  | # | candidate | role | geometry | stopwatch | note |
-  | --- | --- | --- | --- | --- | --- |
-  | 1 | `cand-a` | `start` | `g1` | 0:35 | |
-
-That is the whole list. No second person, no media, no script.
+That is the whole list. No second person, no media, no script, **no written log and no
+stopwatch** — see [Why there is no event log](#why-there-is-no-event-log).
 
 ## Step 1 — build the three candidates
 
@@ -173,37 +167,37 @@ on the jam being perfect, but they do depend on `ingest` placing the six tracks 
 100 ms of each other; unjammed files placed seconds apart would show up as *undetected* rather
 than as a placement problem, which is exactly the wrong diagnosis to hand yourself.
 
-Give this arrangement the geometry ID **`g1`** in the log. A geometry ID is a written assertion
-that nothing moved: two events sharing one are a claim that the phone and every transmitter were
-in the same places for both. Nothing in the audio can establish that, which is why it is the
-operator's signature and not an inference. Without it the analysis reports differential acoustic
-arrival and refuses to call anything drift — the correct outcome, not a limitation.
+**Once everything is placed, do not touch any of it until Block 4.** That — the claim that the
+phone and all six transmitters were in the same places for the opening and closing blocks — is
+the one thing about this bench that no recording and no analysis can establish on its own. It is
+the operator's assertion, and here it is made by saying so on the take. Without it, a start-to-
+end change is differential acoustic arrival and nothing stronger, which is the correct outcome
+rather than a limitation.
 
 ## Step 4 — the take
 
-Start every transmitter, confirm every recording indicator, and start the stopwatch. **One
-continuous take.** Leave several seconds of silence between every play so occurrences never
-overlap.
+Start every transmitter and confirm every recording indicator. **One continuous take.** Leave
+several seconds of silence between every play so occurrences never overlap.
 
-### Block 1 — opening, geometry `g1` — nine plays
+**The order of the blocks is the record.** Nothing needs writing down, but the sequence below
+has to be followed as written, because the analysis afterwards reads the structure rather than
+a log.
 
-Say the block aloud so the audio carries its own slate: *"Opening block, geometry one."*
+### Block 1 — opening — nine plays
 
-Then, tab by tab, logging each play as you go:
+Say the block aloud so the audio carries its own slate: *"Opening block."*
 
-| order | candidate | role | geometry |
-| --- | --- | --- | --- |
-| 1–3 | `cand-a` × 3 | `start` on the first, `diagnostic` on the other two | `g1` |
-| 4–6 | `cand-b` × 3 | `start` on the first, `diagnostic` on the other two | `g1` |
-| 7–9 | `cand-c` × 3 | `start` on the first, `diagnostic` on the other two | `g1` |
+Then, tab by tab:
+
+| | | |
+| --- | --- | --- |
+| plays 1–3 | `cand-a`, three times | |
+| plays 4–6 | `cand-b`, three times | |
+| plays 7–9 | `cand-c`, three times | |
 
 **This block is the bench.** Everything after it is a bonus that costs almost nothing. Three
 plays of each is what makes same-position repeatability measurable, and repeatability is what
 tells us whether a later change means anything.
-
-Only one of the three carries the `start` role, because a start/end pair is a comparison between
-two occurrences and a log with three starts cannot say which. The other two are still fully
-analyzed — `diagnostic` means *deliberately outside the pair*, not *ignored*.
 
 ### Block 2 — leave it running
 
@@ -215,14 +209,14 @@ to select a candidate; ten gives a usable drift figure as well, since the ≈1 p
 measured (**OQ-006**) accumulates to about 29 samples over ten minutes and the detector reports
 integer samples. Longer is better and costs only patience.
 
-### Block 3 — closing, geometry `g1` — three plays
+### Block 3 — closing — three plays
 
 **The phone has not moved and must not have been rotated, picked up, or nudged.** If it was, say
-so in the log and give this block a new geometry ID — an unlogged move is the one mistake that
-silently corrupts the measurement this bench exists to make.
+so out loud on the recording — an unrecorded move is the one mistake that silently corrupts the
+measurement this bench exists to make, and it is the single thing here that no amount of
+analysis can recover afterwards.
 
-Say: *"Closing block, geometry one."* Then **one** play of each candidate, same order, role
-`end`, geometry `g1`.
+Say: *"Closing block, phone has not moved."* Then **one** play of each candidate, same order.
 
 One is enough here: the opening block already established repeatability, and this block only has
 to anchor the other end of the comparison.
@@ -230,17 +224,20 @@ to anchor the other end of the comparison.
 ### Block 4 — the moved-phone diagnostic — two plays
 
 **This block comes last, and the ordering is not negotiable.** Moving the phone before the
-closing block would put a real geometry change inside the start/end pair, and the analyzer would
-have no way to know.
+closing block would put a real geometry change inside the start-to-end comparison, and nothing
+downstream could tell.
 
-Say: *"Diagnostic block."* Then:
+Say: *"Diagnostic block, moving the phone now."* Then:
 
-1. Move the phone somewhere clearly different — one end of the table, or off to a side. Note
-   roughly where. Geometry ID **`g2`**. Play `cand-a` once, role `diagnostic`.
-2. Move it again, somewhere else. Geometry ID **`g3`**. Play `cand-a` once, role `diagnostic`.
+1. Move the phone somewhere clearly different — one end of the table, or off to a side. Say
+   roughly where, out loud. Play `cand-a` once.
+2. Move it again, somewhere else. Say where. Play `cand-a` once.
 
 One candidate is enough: this proves the analyzer *enumerates* a differing lag without calling
 it drift, which is a claim about software, not about the waveform.
+
+Saying it aloud rather than writing it down is the whole trick: **the slate is on the recording,
+on all six tracks, timestamped by construction, and impossible to lose.**
 
 ### Stop
 
@@ -272,87 +269,81 @@ Write a `session.yaml` beside `raw/` in the usual shape (the
 [H1 runbook](H1-two-person-recording-runbook.md) has a complete example; six tracks, the real
 receiver/channel map, and the timecode section matching the receivers).
 
-## The event log
+## Why there is no event log
 
-One YAML file, separate from `session.yaml` on purpose: a new configuration field would change
-`config_hash`, which invalidates every cache downstream of it, including gigabytes of ASR
-(ADR-0016). Setting a search window must not cost that.
+`marker analyze` accepts an optional `--event-log`: a YAML file naming what was played, when,
+in what order, and under which asserted geometry. **This bench does not write one**, and that is
+a deliberate trade rather than a corner cut.
 
-```yaml
-schema_version: 1
-session_id: "YYYY-MM-DD-marker-bench"
-events:
-  - {role: start,      marker_name: cand-a, start_ms:    20000, end_ms:    50000, playback_order: 0, geometry_id: g1}
-  - {role: diagnostic, marker_name: cand-a, start_ms:    28000, end_ms:    58000, playback_order: 1, geometry_id: g1}
-  - {role: diagnostic, marker_name: cand-a, start_ms:    36000, end_ms:    66000, playback_order: 2, geometry_id: g1}
-  - {role: start,      marker_name: cand-b, start_ms:    44000, end_ms:    74000, playback_order: 3, geometry_id: g1}
-  # ... one entry per logged play, fourteen in all ...
-  - {role: end,        marker_name: cand-a, start_ms:   700000, end_ms:   730000, playback_order: 9,  geometry_id: g1}
-  - {role: diagnostic, marker_name: cand-a, start_ms:  1000000, end_ms:  1030000, playback_order: 12, geometry_id: g2}
-  - {role: diagnostic, marker_name: cand-a, start_ms:  1060000, end_ms:  1090000, playback_order: 13, geometry_id: g3}
-```
+What the log would supply, and where it comes from instead:
 
-Rules the loader enforces, so a mistake is a refusal rather than a wrong number:
+| the log would say | without it |
+| --- | --- |
+| which times to search | search the whole take — `--start-window-s`/`--end-window-s` wide open |
+| which waveform was played | the occurrence itself; each detector finds only its own marker |
+| which play was the start and which the end | **the block order**, which the protocol fixes and the spoken slates mark |
+| that the phone did not move between them | **the spoken slate**, in your own voice, on all six tracks |
 
-- **`start_ms` and `end_ms` are integer milliseconds on the session timeline**, half-open, and
-  generous. They are a search window, not a measurement — being 20 seconds early costs nothing.
-- `playback_order` is distinct across the whole log and is what breaks a tie if two events could
-  claim the same occurrence.
-- At most one `start` and one `end` per geometry: two events marked `start` that do *not* share a
-  `geometry_id` are refused at load, because they cannot both anchor the same comparison. Extras
-  are `diagnostic`.
-- `geometry_id` absent means *unknown*, which is not the same as *unchanged*, and never licenses
-  a drift claim.
-- `marker_name` is checked against the marker being analyzed, so a take recorded with one
-  candidate cannot be scored as another.
+So the two things no audio can establish — the pairing and the geometry assertion — are still
+operator testimony. They just arrive as a sentence said out loud onto the recording instead of a
+YAML file typed afterwards, which is more reliable rather than less: it is timestamped by
+construction, captured six times over, and cannot be reconstructed wrongly from memory a day
+later.
 
-### Getting the times right without a synchronized clock
+**What it costs.** Run without a log, `marker analyze` will not name a start/end pair — its
+fallback rule needs exactly one occurrence in each default window, and three plays per block
+means it will not fire. So it emits no `differential_arrival` or `clock_drift_evidence`
+classification. That comparison is arithmetic over two groups' per-track lags, and it gets done
+by hand against the block structure; the classification is a label on a subtraction, not a
+measurement that is lost.
 
-Session time zero is where the *earliest* source starts, which is not where your stopwatch
-started. Rather than guess, do it in two passes:
+**What it does not cost.** Everything the bench actually exists to measure is untouched: every
+occurrence on every track, per-track scores, clipping and weak-signal flags, exact integer
+relative lags within each group, source coordinates, and the timecode cross-check — which uses
+the first group whether or not it carries a role. Analysis runs clean and exits zero.
 
-**Pass 1 — find the occurrences.** Analyze with no event log and windows wide enough to cover
-the take:
+If a later real session wants the automatic drift classification, that is the moment to write a
+log. A bench that selects a waveform does not need one.
+
+## Step 6 — analyze
 
 ```bash
 dnd-audio inspect  <session>
 dnd-audio ingest   <session>
-dnd-audio marker analyze <session> --marker cand-a \
-  --start-window-s 1200 --end-window-s 1200
+dnd-audio marker analyze <session> --marker cand-a --start-window-s 1200 --end-window-s 1200
+dnd-audio marker analyze <session> --marker cand-b --start-window-s 1200 --end-window-s 1200
+dnd-audio marker analyze <session> --marker cand-c --start-window-s 1200 --end-window-s 1200
 ```
 
-`work/sync-marker-analysis.json` lists every occurrence with an `anchor_ms` — which is all this
-pass is for. Without a log the analysis falls back to naming a start and an end only if each
-default window holds *exactly one* occurrence; three plays per block means it will not, so the
-groups come back unlabelled. It classifies nothing as drift either way, since that needs a
-geometry ID. Both are the expected outcome of this pass rather than failures, and it exits zero.
+The windows are clamped to half the session each, so those two numbers mean "search all of it".
 
-**Pass 2 — write the log against them.** Match the Nth occurrence to the Nth line of your paper
-log, take a window of roughly ±15 s around each `anchor_ms`, and fill in the roles and geometry
-IDs **from the paper log**. Then:
+Each run overwrites `work/sync-marker-analysis.json` and `output/marker-report.json`, so **copy
+each candidate's pair aside before running the next**:
 
 ```bash
-dnd-audio marker analyze <session> --marker cand-a --event-log marker-events.yaml
-dnd-audio marker analyze <session> --marker cand-b --event-log marker-events.yaml
-dnd-audio marker analyze <session> --marker cand-c --event-log marker-events.yaml
+cp work/sync-marker-analysis.json  ../marker-cand-a-analysis.json
+cp output/marker-report.json       ../marker-cand-a-report.json
 ```
 
-Taking the *times* from the first pass is not circular — the roles, the ordering, and the
-geometry all come from what you wrote down at capture time, and none of them can be inferred
-from audio. **If the counts disagree** — nine plays logged, seven occurrences found — that is a
-finding. Record it. Do not adjust the log to match.
+Each run also prints a `marker_roles_unassigned` warning naming how many occurrences it found
+and why it labelled none of them. That is the expected outcome without a log, not a problem.
 
-Each run overwrites `work/sync-marker-analysis.json` and `output/marker-report.json`, so copy
-each candidate's pair somewhere before running the next.
+`occurrences` is a flat list of `(track, play)` pairs, so on six continuously recording
+transmitters expect **6 × 4 = 24** for `cand-b` and `cand-c` (three opening plays, one closing)
+and **6 × 6 = 36** for `cand-a` (two more from Block 4). Fewer means some track did not hear
+some play, which is exactly the measurement — read `groups[].members[].outcome` to see which.
 
-## Step 6 — before you pack up
+**Anything you did not play is a finding.** Each detector matches only its own waveform — three
+candidates in one take were checked and produced zero cross-detections — so an occurrence at a
+time you were silent means something. Write down what you got; do not reconcile it.
+## Step 7 — before you pack up
 
-Run pass 1 above for one candidate while the transmitters are still in place. It takes seconds.
+Run Step 6 for **one** candidate while the transmitters are still in place. It takes seconds.
 Read `work/sync-marker-analysis.json` and check:
 
 | look at | what it should say | if it does not |
 | --- | --- | --- |
-| `occurrences` | one entry per track per play, at the times you logged | if a track is absent everywhere, its recording, its placement, or the volume step is wrong |
+| `occurrences` | one entry per track per play — six tracks × six plays for `cand-a` | if a track is absent everywhere, its recording, its placement, or the volume step is wrong |
 | `occurrences[].clipped` | `false`, especially on the nearest transmitter | lower the media volume one step and redo Blocks 1 and 3 |
 | `occurrences[].weak` | `false`, especially on the farthest | raise it one step and redo Blocks 1 and 3 |
 | `occurrences[].score_permille` | above 600 on every track | a low value at the farthest seat is **not** necessarily a candidate failing — see the false-positive headroom above — but it is worth knowing while the room is still set up |
@@ -368,30 +359,35 @@ which means the sound is not reaching that lav at all. That is a design finding 
 narrower chirp buys processing gain) rather than a retake. Say so and stop; do not improvise a
 waveform in the room.
 
-## Step 7 — hand over
+## Step 8 — hand over
 
 Leave on the project machine:
 
 - the session directory, with `raw/` untouched;
 - `marker-bench-raw.before` and `.after`;
-- the event log;
 - each candidate's `sync-marker-analysis.json` and `marker-report.json`;
-- the paper log, transcribed;
 - the phone model, browser and version, and the media-volume step;
 - the three WAV SHA-256 values from Step 1;
-- a sketch or note of the table layout, and which transmitter was nearest and farthest.
+- which transmitter ended up nearest the phone and which farthest.
 
-The scoring, the candidate selection, and ADR-0042 follow from those. Sanitized measurements,
-commands, hashes and conclusions get written up under `docs/fixtures/` — **never the takes, and
-no audio in the repository**.
+That last line is the only thing here that is not already on disk or on the recording, and it is
+what turns "`tx-d` scored lowest" into "the farthest seat scored lowest". A rough sketch of the
+table is better still.
+
+Everything else — what was played, in what order, and whether the phone moved — is in the audio,
+in your own voice. The scoring, the candidate selection, and ADR-0042 follow from those.
+Sanitized measurements, commands, hashes and conclusions get written up under `docs/fixtures/` —
+**never the takes, and no audio in the repository**.
 
 ## What not to do
 
 - **Do not improvise a waveform.** If all three candidates fail, that is the finding, and the
   three-clap procedure in the H1/H2 runbooks is what a real session falls back to.
 - **Do not move the phone between the opening and closing blocks.** It is the single mistake
-  that produces a confident wrong number instead of an honest inconclusive one.
-- **Do not change the media volume mid-take.** Note it once, leave it.
+  that produces a confident wrong number instead of an honest inconclusive one — and with no
+  written log, the spoken slate is the only thing that would reveal it. If it happens, say so
+  out loud immediately; a recorded "I just bumped the phone" costs nothing and saves the take.
+- **Do not change the media volume mid-take.** Set it once, say the step aloud, leave it.
 - **Do not edit anything under `raw/`** — not to trim the silence, not to rename a file to
   something tidier.
 - **Do not treat a missing marker as a software failure.** A quiet room, a transmitter that

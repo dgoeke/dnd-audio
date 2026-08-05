@@ -1,0 +1,58 @@
+{
+  "anchor_sample": 4800,
+  "bits_per_sample": 16,
+  "channels": 1,
+  "chirps": [
+    {
+      "end_hz": 6000,
+      "end_sample": 16800,
+      "fade_samples": 480,
+      "start_hz": 800,
+      "start_sample": 4800
+    },
+    {
+      "end_hz": 6000,
+      "end_sample": 38400,
+      "fade_samples": 480,
+      "start_hz": 800,
+      "start_sample": 26400
+    },
+    {
+      "end_hz": 6000,
+      "end_sample": 65760,
+      "fade_samples": 480,
+      "start_hz": 800,
+      "start_sample": 53760
+    }
+  ],
+  "gap_intervals": [
+    [
+      16800,
+      26400
+    ],
+    [
+      38400,
+      53760
+    ]
+  ],
+  "lead_silence_samples": 4800,
+  "marker_name": "cand-b",
+  "marker_semantics_version": 1,
+  "page": {
+    "filename": "dnd-audio-sync-marker-cand-b.html",
+    "sha256": "02723b093c26ed8f6ddd82886762fdaf2720807ca52226a06fc24bcb57953f6f",
+    "size_bytes": 194698
+  },
+  "peak_amplitude": 16384,
+  "rationale": "Narrower band, longer sweeps. A phone speaker radiates little below about 700 Hz and a lav capsule rolls off at the top, so this trades bandwidth for time-bandwidth product: more matched-filter processing gain in the band the hardware actually passes. The candidate to beat at the farthest seat.",
+  "sample_format": "pcm_s16le",
+  "sample_rate": 48000,
+  "schema_version": 1,
+  "total_samples": 70560,
+  "trail_silence_samples": 4800,
+  "wav": {
+    "filename": "dnd-audio-sync-marker-cand-b.wav",
+    "sha256": "70355baad6bb72b38e0b606cddbbaa3428c11429bec74cd127aa6f8935ecdf6f",
+    "size_bytes": 141164
+  }
+}
