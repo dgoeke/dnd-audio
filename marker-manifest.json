@@ -1,0 +1,58 @@
+{
+  "anchor_sample": 4800,
+  "bits_per_sample": 16,
+  "channels": 1,
+  "chirps": [
+    {
+      "end_hz": 6000,
+      "end_sample": 16800,
+      "fade_samples": 480,
+      "start_hz": 800,
+      "start_sample": 4800
+    },
+    {
+      "end_hz": 6000,
+      "end_sample": 38400,
+      "fade_samples": 480,
+      "start_hz": 800,
+      "start_sample": 26400
+    },
+    {
+      "end_hz": 6000,
+      "end_sample": 65760,
+      "fade_samples": 480,
+      "start_hz": 800,
+      "start_sample": 53760
+    }
+  ],
+  "gap_intervals": [
+    [
+      16800,
+      26400
+    ],
+    [
+      38400,
+      53760
+    ]
+  ],
+  "lead_silence_samples": 4800,
+  "marker_name": "v1",
+  "marker_semantics_version": 1,
+  "page": {
+    "filename": "dnd-audio-sync-marker-v1.html",
+    "sha256": "3470fe19361606ed37dcf04fc5cde98e44059d4c939f065e3a39167e6eeb9ab3",
+    "size_bytes": 194595
+  },
+  "peak_amplitude": 16384,
+  "rationale": "The frozen production marker selected by the physical phone/DJI bench. It copies cand-b's longer, narrower-band recipe, which had the strongest worst-seat score and sample-stable repeated arrival (ADR-0042).",
+  "sample_format": "pcm_s16le",
+  "sample_rate": 48000,
+  "schema_version": 1,
+  "total_samples": 70560,
+  "trail_silence_samples": 4800,
+  "wav": {
+    "filename": "dnd-audio-sync-marker-v1.wav",
+    "sha256": "70355baad6bb72b38e0b606cddbbaa3428c11429bec74cd127aa6f8935ecdf6f",
+    "size_bytes": 141164
+  }
+}
