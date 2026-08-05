@@ -173,7 +173,7 @@ every milestone. Keep it short — detail belongs in milestone closeouts and ADR
 | H1  | Hardware fixture (2 min)   | not started | —         |
 | H2  | Drift soak / first session | not started | —         |
 | M7b | Publishing and reclamation | sketch      | —         |
-| M10 | Acoustic sync marker       | closed      | —         |
+| M10 | Acoustic sync marker       | closed      | `38a18c9` |
 
 **Closed at** is the milestone's close commit, and it is recorded by a small follow-up
 commit — a commit cannot contain its own hash (the same limit ADR-0003 names for the report).
