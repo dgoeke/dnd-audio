@@ -52,6 +52,7 @@ __all__ = [
     "WindowReader",
     "detect_occurrences",
     "to_permille",
+    "to_permille_array",
 ]
 
 #: The score domain. One part in a thousand is finer than any acoustic distinction this
@@ -100,6 +101,30 @@ def to_permille(value: float) -> int:
         return 0
     scaled = value * PERMILLE
     return math.floor(scaled + 0.5) if scaled >= 0 else -math.floor(-scaled + 0.5)
+
+
+def to_permille_array(values: npt.NDArray[np.float64]) -> npt.NDArray[np.int64]:
+    """:func:`to_permille` over a whole correlation score array.
+
+    The scalar above remains the statement of the rule; this is the same rule applied without
+    a Python call per element. It exists because :func:`_peaks` quantizes *every valid start
+    position* — 48,000 per second of audio, per chirp, per block — and a per-element loop
+    there cost more than the FFT that produced the scores.
+
+    Signed ``int64``, not :mod:`dnd_audio.activity`'s ``uint16``: that quantizer takes a
+    pre-scaled ratio and clamps to ``[0, PERMILLE]``, whereas this one scales by
+    :data:`PERMILLE` itself, keeps the sign a correlation can legitimately carry, and hands
+    :func:`_peaks` an array it then writes ``-1`` into as its suppression sentinel.
+
+    ``floor(|x| + 0.5)`` with the sign restored, rather than ``rint``: NumPy rounds halves to
+    even, and away-from-zero on the half is the whole reason :func:`to_permille` is written
+    the way it is.
+    """
+    scaled = np.asarray(values, dtype=np.float64) * PERMILLE
+    magnitude = np.floor(np.abs(scaled) + 0.5)
+    # Non-finite scores collapse to 0, exactly as the scalar's `isfinite` guard does. `where`
+    # picks the zero after the fact, so the inf/NaN that flowed through `floor` never lands.
+    return np.where(np.isfinite(scaled), np.copysign(magnitude, scaled), 0.0).astype(np.int64)
 
 
 def _is_locally_ambiguous(score: int, runner_up: int, minimum_separation: int) -> bool:
@@ -324,9 +349,8 @@ def _peaks(
     """
     if scores.size == 0:
         return []
-    permille = np.array([to_permille(float(value)) for value in scores], dtype=np.int64)
     found: list[tuple[int, int]] = []
-    remaining = permille.copy()
+    remaining = to_permille_array(scores)
     while True:
         index = int(np.argmax(remaining))
         best = int(remaining[index])

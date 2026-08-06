@@ -408,6 +408,29 @@ default everywhere: on one fast unit file `-n 8` costs 0.7 s where `-n auto` cos
 1.8 s. Hence 8 rather than `auto` — the whole speedup at a quarter of the fixed cost,
 against mildly oversubscribing a 4-core machine.
 
+**Re-measured 2026-08-05, and the number stayed at 8.** M10 roughly doubled the suite's
+cost — 2399 tests in 37 s before M7a, 2658 in 43 s after it, 3116 in **103 s** once M10's
+marker tests landed, with total CPU going 809 s → 887 s → 1927 s. M10's new tests averaged
+**2.3 CPU-seconds each against the suite's 0.34**. At that point the worker curve genuinely
+tilted — 8 → 103 s but 24 → 75 s — which looks like an argument for raising the count. It
+was not; it was an argument for a cheaper suite, and raising the count would have hidden
+the cause. Two fixes, neither changing any output:
+
+- `marker.detect._peaks` quantized correlation scores through a Python call per sample —
+  48 000 per second of audio, per chirp, per block — which cost more than the FFT that
+  produced them. It now uses `marker.detect.to_permille_array`, proven elementwise-identical
+  to the scalar `to_permille` (ties, sign, NaN, ±inf) in `tests/test_marker_detect.py`.
+  `_peaks` got ~5× faster and `run_marker_analyze` ~3.5×, with
+  `work/sync-marker-analysis.json` byte-identical across the change.
+- `tests/test_marker_analyze.py` rebuilt and re-ingested the canonical session for each of
+  its thirty-odd tests at 0.45 s a time. It now builds each session shape once per module
+  and copies it per test, which keeps the isolation the rebuild was buying.
+
+Suite back to **56 s** for 3118 tests, gate to **57 s** from 104 s. With the real cost gone
+the curve is flat again — 8 → 56 s, 16 → 53-58 s, 24 → 60 s, against 202 s serial — so the
+original reasoning holds and the number did not move. **If this curve ever tilts toward more
+workers again, look for a hot path first.**
+
 **Real DJI support is validated at production breadth.** The sample probe, jam verification,
 minimal acoustic capture, and marker bench collectively cover real metadata and PCM formats,
 two-person speech and deliberate overlap, all six transmitters, all three jammed receivers,

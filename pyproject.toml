@@ -262,11 +262,22 @@ testpaths = ["tests"]
 #
 # Eight, not `auto`. The suite's speedup ceiling is not core count — the pipeline stages
 # already thread internally, so on the 32-core target host the curve is flat from about 8
-# workers up (8, 12, 16 and 32 all land within noise at 31–37 s, against 120 s serial).
+# workers up (re-measured 2026-08-05: 8 → 56 s, 16 → 53-58 s, 24 → 60 s, against 202 s
+# serial — sixteen is inside the noise and twenty-four is worse).
 # What is *not* flat is worker startup, which every invocation pays: on one fast unit file
 # `-n 8` costs 0.7 s where `-n auto` costs 1.8 s, and a tight edit-test loop pays that
 # dozens of times. Eight buys the whole speedup at a quarter of the fixed cost. It
 # oversubscribes a 4-core machine mildly, which is the accepted trade.
+#
+# That re-measurement is worth keeping, because for a while it did *not* look flat. M10
+# roughly doubled the suite, and at 3116 tests it read 8 → 103 s but 24 → 75 s, which looks
+# like an argument for more workers. It was not. It was an argument for a cheaper suite: the
+# marker detector was quantizing correlation scores through a Python call per sample, so its
+# tests were single-threaded numpy work that more processes could spread but nothing could
+# make cheap. Vectorizing that (`marker.detect.to_permille_array`) and building
+# `test_marker_analyze.py`'s ingested session once instead of per test took the suite back
+# under a minute, and the ceiling came back to eight. If this curve ever tilts toward more
+# workers again, look for a hot path before raising the number.
 #
 # `-n 0` on the command line overrides this and runs in-process. Reach for it under a
 # debugger or with `-s`: xdist captures worker output and swallows both.

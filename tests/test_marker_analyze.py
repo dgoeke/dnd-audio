@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import shutil
 from pathlib import Path
 from typing import Final
 
@@ -94,21 +95,58 @@ def inject(truth: FixtureTruth, placements: list[int], *, gain: float = 0.5) -> 
         path.write_bytes(raw[: source.data_offset] + audio.astype("<f4").tobytes() + raw[end:])
 
 
+@pytest.fixture(scope="module")
+def _ingested_templates(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+    """Each session shape built and ingested **once**, to be copied per test.
+
+    Building the canonical fixture, injecting, and ingesting it costs about 0.45 s, and this
+    module asks for it in more than thirty tests. Nothing about that work varies per test —
+    it is the same six transmitters, the same injected samples, the same ingest — so it is
+    done here and each test below takes a copy.
+
+    A *copy*, not a share: `marker analyze` writes its artifacts into the session directory,
+    and tests here assert on what a run left behind. Sharing one directory would make each
+    test's answer depend on which tests ran before it. The copy restores the isolation the
+    old per-test fixture got by rebuilding, at roughly a fortieth of the cost.
+
+    Copying is sound because an ingested session is relocatable: no artifact under it records
+    an absolute path, only paths relative to the session root. :func:`_copy_of` asserts that
+    the copy is byte-identical, so a future artifact that *did* embed one would fail here
+    rather than silently make these fixtures wrong.
+    """
+    root = tmp_path_factory.mktemp("marker-templates")
+    templates: dict[str, Path] = {}
+    for name, placements in (("marked", [FIRST]), ("unmarked", []), ("two", [FIRST, SECOND])):
+        truth = build_session(canonical_session(), root / name)
+        if placements:
+            inject(truth, placements)
+        assert run_ingest(truth.session_dir).exit_code is ExitCode.OK
+        templates[name] = truth.session_dir
+    return templates
+
+
+def _copy_of(template: Path, destination: Path) -> Path:
+    """A private, byte-identical copy of an ingested session template."""
+    shutil.copytree(template, destination)
+    originals = sorted(path for path in template.rglob("*") if path.is_file())
+    copies = sorted(path for path in destination.rglob("*") if path.is_file())
+    assert [path.relative_to(template) for path in originals] == [
+        path.relative_to(destination) for path in copies
+    ]
+    assert all(a.read_bytes() == b.read_bytes() for a, b in zip(originals, copies, strict=True))
+    return destination
+
+
 @pytest.fixture
-def marked_session(tmp_path: Path) -> Path:
+def marked_session(_ingested_templates: dict[str, Path], tmp_path: Path) -> Path:
     """A canonical session carrying the marker at :data:`FIRST`, ingested and ready."""
-    truth = build_session(canonical_session(), tmp_path / "session")
-    inject(truth, [FIRST])
-    assert run_ingest(truth.session_dir).exit_code is ExitCode.OK
-    return truth.session_dir
+    return _copy_of(_ingested_templates["marked"], tmp_path / "session")
 
 
 @pytest.fixture
-def unmarked_session(tmp_path: Path) -> Path:
+def unmarked_session(_ingested_templates: dict[str, Path], tmp_path: Path) -> Path:
     """The canonical session, with no marker in it at all."""
-    truth = build_session(canonical_session(), tmp_path / "session")
-    assert run_ingest(truth.session_dir).exit_code is ExitCode.OK
-    return truth.session_dir
+    return _copy_of(_ingested_templates["unmarked"], tmp_path / "session")
 
 
 def analysis_of(session_dir: Path) -> SyncMarkerAnalysis:
@@ -561,11 +599,8 @@ class TestTheEventLog:
         return path
 
     @pytest.fixture
-    def two_marker_session(self, tmp_path: Path) -> Path:
-        truth = build_session(canonical_session(), tmp_path / "session")
-        inject(truth, [FIRST, SECOND])
-        run_ingest(truth.session_dir)
-        return truth.session_dir
+    def two_marker_session(self, _ingested_templates: dict[str, Path], tmp_path: Path) -> Path:
+        return _copy_of(_ingested_templates["two"], tmp_path / "session")
 
     def test_roles_come_from_the_log(self, two_marker_session: Path, tmp_path: Path) -> None:
         log = self.write_log(tmp_path / "events.yaml", geometry="table-1", session_id="2026-08-15")

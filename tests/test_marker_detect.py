@@ -33,6 +33,7 @@ from dnd_audio.marker.detect import (
     _is_locally_ambiguous,
     detect_occurrences,
     to_permille,
+    to_permille_array,
 )
 from dnd_audio.marker.spec import MARKER_SPECS, MarkerSpec
 from dnd_audio.marker.synth import marker_samples
@@ -460,6 +461,39 @@ class TestScoresAreIntegers:
     def test_a_non_finite_score_becomes_zero_rather_than_propagating(self) -> None:
         assert to_permille(float("nan")) == 0
         assert to_permille(float("inf")) == 0
+
+    def test_the_array_quantizer_agrees_with_the_scalar_everywhere(self) -> None:
+        """The detector quantizes per array; the scalar above is still what the rule *means*.
+
+        `_peaks` cannot afford a Python call per start position, so it uses
+        :func:`to_permille_array`. That is only legitimate while the two agree exactly — a
+        single disagreeing element would move a peak, and every threshold downstream is an
+        integer comparison against this output. Asserted on the cases that distinguish the
+        two plausible roundings, then swept.
+        """
+        exact = np.array(
+            [
+                *[0.0, -0.0, 1.0, -1.0, 0.0005, -0.0005, 0.0015, -0.0015, 0.0004, 0.9995],
+                *[float("nan"), float("inf"), float("-inf")],
+            ],
+            dtype=np.float64,
+        )
+        assert to_permille_array(exact).tolist() == [to_permille(float(v)) for v in exact]
+
+        # Halves land on exact binary fractions only by construction, so sweep them directly
+        # rather than hoping a uniform draw produces one.
+        halves = (np.arange(-2_000, 2_001, dtype=np.float64) + 0.5) / 1_000
+        assert to_permille_array(halves).tolist() == [to_permille(float(v)) for v in halves]
+
+        swept = np.random.default_rng(20260805).uniform(-1.0, 1.0, 50_000)
+        assert to_permille_array(swept).tolist() == [to_permille(float(v)) for v in swept]
+
+    def test_the_array_quantizer_does_not_alias_the_scores_it_was_given(self) -> None:
+        """`_peaks` writes its suppression sentinel into the returned array."""
+        scores = np.full(8, 0.5, dtype=np.float64)
+        quantized = to_permille_array(scores)
+        quantized[:] = -1
+        assert scores.tolist() == [0.5] * 8
 
     @ALL_SPECS
     def test_every_reported_score_is_an_integer_in_range(self, spec: MarkerSpec) -> None:
